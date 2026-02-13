@@ -1,4 +1,5 @@
 import json
+import random
 import time
 from collections.abc import Sequence
 from threading import Lock
@@ -209,3 +210,77 @@ def filter_cards_for_deckbuilding(
             deduped[key] = card
 
     return list(deduped.values())
+
+
+def _pick_many(cards: list[dict], count: int) -> list[dict]:
+    if count <= 0:
+        return []
+    if len(cards) >= count:
+        return random.sample(cards, count)
+    return [random.choice(cards) for _ in range(count)]
+
+
+def simulate_sealed_draft(
+    cards: Sequence[dict],
+    *,
+    set_codes: Sequence[str],
+    pack_count: int,
+) -> dict:
+    filtered_cards = filter_cards_for_deckbuilding(cards, set_codes=set_codes)
+
+    leaders = [card for card in filtered_cards if card["type"].lower() == "leader"]
+    bases = [card for card in filtered_cards if card["type"].lower() == "base"]
+    non_leader_base = [
+        card
+        for card in filtered_cards
+        if card["type"].lower() not in {"leader", "base"}
+    ]
+    commons = [card for card in non_leader_base if card["rarity"].lower() == "common"]
+    uncommons = [card for card in non_leader_base if card["rarity"].lower() == "uncommon"]
+    rare_or_legendary = [
+        card for card in non_leader_base if card["rarity"].lower() in {"rare", "legendary"}
+    ]
+
+    if not leaders or not bases or not non_leader_base or not commons or not uncommons or not rare_or_legendary:
+        raise ValueError("Not enough card data to simulate sealed draft packs")
+
+    packs: list[dict] = []
+    chosen_leaders: list[dict] = []
+    chosen_bases: list[dict] = []
+    pool: list[dict] = []
+
+    for index in range(1, pack_count + 1):
+        pack_commons = _pick_many(commons, 9)
+        pack_uncommons = _pick_many(uncommons, 3)
+        pack_rare = random.choice(rare_or_legendary)
+        pack_leader = random.choice(leaders)
+        pack_base = random.choice(bases)
+        pack_wildcard = random.choice(non_leader_base)
+
+        chosen_leaders.append(pack_leader)
+        chosen_bases.append(pack_base)
+        pool.extend(pack_commons)
+        pool.extend(pack_uncommons)
+        pool.append(pack_rare)
+        pool.append(pack_wildcard)
+
+        packs.append(
+            {
+                "pack_index": index,
+                "commons": pack_commons,
+                "uncommons": pack_uncommons,
+                "rare_or_legendary": pack_rare,
+                "leader": pack_leader,
+                "base": pack_base,
+                "wildcard": pack_wildcard,
+            }
+        )
+
+    return {
+        "set_codes": [code.lower() for code in set_codes],
+        "pack_count": pack_count,
+        "leaders": chosen_leaders,
+        "bases": chosen_bases,
+        "packs": packs,
+        "non_leader_base_pool": pool,
+    }

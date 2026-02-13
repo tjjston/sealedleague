@@ -1,6 +1,5 @@
 import {
   ActionIcon,
-  Badge,
   Button,
   Card,
   Grid,
@@ -49,17 +48,17 @@ type CardItem = {
   name: string;
   number: string;
   type: string;
+  rarity: string;
   cost: number | null;
   aspects: string[];
   traits: string[];
   keywords: string[];
   arenas: string[];
   rules_text: string;
-  unique: boolean;
   image_url?: string | null;
 };
 
-type DeckGraphView = 'cost' | 'type' | 'out_aspect' | 'synergy' | 'arena';
+type DeckGraphView = 'cost' | 'type' | 'rarity' | 'out_aspect' | 'synergy' | 'arena';
 
 function countCards(deck: Record<string, number>) {
   return Object.values(deck).reduce((sum, count) => sum + count, 0);
@@ -196,6 +195,7 @@ export default function DeckbuilderPage({
   const [aspectQuery, setAspectQuery] = useState('');
   const [costQuery, setCostQuery] = useState<number | ''>('');
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
+  const [rarityFilter, setRarityFilter] = useState<string | null>(null);
   const [setFilter, setSetFilter] = useState<string | null>(null);
   const [arenaFilter, setArenaFilter] = useState<string | null>(null);
 
@@ -225,6 +225,14 @@ export default function DeckbuilderPage({
       [...new Set(allCards.map((card: CardItem) => card.set_code).filter((value) => value != null && value !== ''))]
         .sort()
         .map((value) => ({ value, label: value.toUpperCase() })),
+    [allCards]
+  );
+
+  const rarityOptions = useMemo(
+    () =>
+      [...new Set(allCards.map((card: CardItem) => card.rarity).filter((value) => value != null && value !== ''))]
+        .sort()
+        .map((value) => ({ value, label: value })),
     [allCards]
   );
 
@@ -293,9 +301,10 @@ export default function DeckbuilderPage({
         const traits = (card.traits ?? []).map((value) => value.toLowerCase());
         const keywords = (card.keywords ?? []).map((value) => value.toLowerCase());
         const arenas = (card.arenas ?? []).map((value) => value.toLowerCase());
+        const rarity = (card.rarity ?? '').toLowerCase();
 
         if (normalizedQuery !== '') {
-          const haystack = `${name} ${rules} ${type} ${aspects.join(' ')} ${traits.join(' ')} ${keywords.join(' ')} ${arenas.join(' ')}`;
+          const haystack = `${name} ${rules} ${type} ${rarity} ${aspects.join(' ')} ${traits.join(' ')} ${keywords.join(' ')} ${arenas.join(' ')}`;
           if (!haystack.includes(normalizedQuery)) return false;
         }
         if (normalizedName !== '' && !name.includes(normalizedName)) return false;
@@ -311,6 +320,7 @@ export default function DeckbuilderPage({
         }
         if (costQuery !== '' && card.cost !== Number(costQuery)) return false;
         if (typeFilter != null && card.type !== typeFilter) return false;
+        if (rarityFilter != null && card.rarity !== rarityFilter) return false;
         if (setFilter != null && card.set_code !== setFilter) return false;
         if (arenaFilter != null && !(card.arenas ?? []).includes(arenaFilter)) return false;
         if (onlyCardsInPool && (cardPoolMap[card.card_id] ?? 0) <= 0) return false;
@@ -338,6 +348,7 @@ export default function DeckbuilderPage({
     aspectQuery,
     costQuery,
     typeFilter,
+    rarityFilter,
     setFilter,
     arenaFilter,
     onlyCardsInPool,
@@ -461,6 +472,7 @@ export default function DeckbuilderPage({
       deckEntries.map((x) => [String(x.card?.cost ?? '-'), x.row.qty])
     );
     const byType = aggregateCountMap(deckEntries.map((x) => [x.card?.type ?? 'Unknown', x.row.qty]));
+    const byRarity = aggregateCountMap(deckEntries.map((x) => [x.card?.rarity ?? 'Unknown', x.row.qty]));
     const byArena = aggregateCountMap(
       deckEntries.flatMap((x) => {
         const arenas = x.card?.arenas ?? [];
@@ -493,6 +505,7 @@ export default function DeckbuilderPage({
       totalQty,
       byCost: toSortedRows(byCost),
       byType: toSortedRows(byType),
+      byRarity: toSortedRows(byRarity),
       byArena: toSortedRows(byArena),
       bySynergy: toSortedRows(keywordTrait).slice(0, 20),
       outAspectRows: [
@@ -507,6 +520,8 @@ export default function DeckbuilderPage({
     graphContent = <GraphBars data={deckMetrics.byCost} total={deckMetrics.totalQty} />;
   } else if (graphView === 'type') {
     graphContent = <GraphBars data={deckMetrics.byType} total={deckMetrics.totalQty} />;
+  } else if (graphView === 'rarity') {
+    graphContent = <GraphBars data={deckMetrics.byRarity} total={deckMetrics.totalQty} />;
   } else if (graphView === 'out_aspect') {
     graphContent = <GraphBars data={deckMetrics.outAspectRows} total={deckMetrics.totalQty} />;
   } else if (graphView === 'synergy') {
@@ -523,6 +538,7 @@ export default function DeckbuilderPage({
       total_cards: deckMetrics.totalQty,
       by_cost: deckMetrics.byCost,
       by_type: deckMetrics.byType,
+      by_rarity: deckMetrics.byRarity,
       aspect_fit: deckMetrics.outAspectRows,
       synergy: deckMetrics.bySynergy,
       by_arena: deckMetrics.byArena,
@@ -636,6 +652,13 @@ export default function DeckbuilderPage({
                     onChange={setTypeFilter}
                     clearable
                   />
+                  <Select
+                    label="Rarity"
+                    data={rarityOptions}
+                    value={rarityFilter}
+                    onChange={setRarityFilter}
+                    clearable
+                  />
                   <Select label="Set" data={setOptions} value={setFilter} onChange={setSetFilter} clearable />
                 </Group>
                 <Group>
@@ -663,6 +686,7 @@ export default function DeckbuilderPage({
                         {showCardImage && <Table.Th>Image</Table.Th>}
                         <Table.Th>Name</Table.Th>
                         <Table.Th>Type</Table.Th>
+                        <Table.Th>Rarity</Table.Th>
                         <Table.Th>Cost</Table.Th>
                         <Table.Th>Aspects</Table.Th>
                         <Table.Th>Arena</Table.Th>
@@ -695,11 +719,11 @@ export default function DeckbuilderPage({
                                   <Text size="xs" c="dimmed">
                                     {card.card_id}
                                   </Text>
-                                  {card.unique && <Badge size="xs">Unique</Badge>}
                                 </Group>
                               </Stack>
                             </Table.Td>
                             <Table.Td>{card.type}</Table.Td>
+                            <Table.Td>{card.rarity || '-'}</Table.Td>
                             <Table.Td>{card.cost ?? '-'}</Table.Td>
                             <Table.Td>{(card.aspects ?? []).join(', ') || '-'}</Table.Td>
                             <Table.Td>{(card.arenas ?? []).join(', ') || '-'}</Table.Td>
@@ -760,10 +784,10 @@ export default function DeckbuilderPage({
                   data={leaderOptions}
                 />
                 {leaderCard?.image_url != null && (
-                  <Image src={leaderCard.image_url} h={180} fit="contain" radius="sm" />
+                  <Image src={leaderCard.image_url} h={130} fit="contain" radius="sm" />
                 )}
                 <Select searchable label="Base" value={baseCardId} onChange={setBaseCardId} data={baseOptions} />
-                {baseCard?.image_url != null && <Image src={baseCard.image_url} h={180} fit="contain" radius="sm" />}
+                {baseCard?.image_url != null && <Image src={baseCard.image_url} h={130} fit="contain" radius="sm" />}
                 <Group justify="space-between">
                   <Text>Mainboard ({countCards(mainboard)})</Text>
                   <Text size="sm" c="dimmed">
@@ -938,6 +962,7 @@ export default function DeckbuilderPage({
                   data={[
                     { value: 'cost', label: 'By Cost' },
                     { value: 'type', label: 'By Type' },
+                    { value: 'rarity', label: 'By Rarity' },
                     { value: 'out_aspect', label: 'Aspect Fit' },
                     { value: 'synergy', label: 'Synergy' },
                     { value: 'arena', label: 'By Arena' },

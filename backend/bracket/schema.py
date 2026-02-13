@@ -55,6 +55,15 @@ seasons = Table(
     Column("tournament_id", BigInteger, ForeignKey("tournaments.id"), index=True, nullable=False),
 )
 
+season_tournaments = Table(
+    "season_tournaments",
+    metadata,
+    Column("id", BigInteger, primary_key=True, index=True, autoincrement=True),
+    Column("season_id", BigInteger, ForeignKey("seasons.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("tournament_id", BigInteger, ForeignKey("tournaments.id", ondelete="CASCADE"), index=True, nullable=False),
+    UniqueConstraint("season_id", "tournament_id"),
+)
+
 season_memberships = Table(
     "season_memberships",
     metadata,
@@ -117,6 +126,20 @@ decks = Table(
     Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
     Column("updated", DateTimeTZ, nullable=False, server_default=func.now()),
     UniqueConstraint("season_id", "user_id", "name"),
+)
+
+tournament_applications = Table(
+    "tournament_applications",
+    metadata,
+    Column("id", BigInteger, primary_key=True, index=True, autoincrement=True),
+    Column("tournament_id", BigInteger, ForeignKey("tournaments.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("season_id", BigInteger, ForeignKey("seasons.id", ondelete="SET NULL"), index=True, nullable=True),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("deck_id", BigInteger, ForeignKey("decks.id", ondelete="SET NULL"), index=True, nullable=True),
+    Column("status", String, nullable=False, server_default="SUBMITTED"),
+    Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
+    Column("updated", DateTimeTZ, nullable=False, server_default=func.now()),
+    UniqueConstraint("tournament_id", "user_id"),
 )
 
 stages = Table(

@@ -1,11 +1,12 @@
-import { Badge, Button, Card, Group, Select, Stack, Table, Text, Title } from '@mantine/core';
+import { Badge, Button, Card, Group, Select, Stack, Table, Text, Title, FileInput } from '@mantine/core';
 import { useEffect, useState } from 'react';
+import { showNotification } from '@mantine/notifications';
 
 import { getTournamentIdFromRouter } from '@components/utils/util';
 import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
-import { getLeagueAdminUsers, getLeagueSeasonStandings, getTournaments } from '@services/adapter';
-import { exportSeasonStandingsCsv } from '@services/league';
+import { getLeagueAdminUsers, getLeagueSeasonHistory, getTournaments } from '@services/adapter';
+import { exportSeasonStandingsCsv, importSeasonStandingsCsv } from '@services/league';
 
 export default function SeasonStandingsPage({
   standalone = false,
@@ -29,10 +30,66 @@ export default function SeasonStandingsPage({
     ? Number(selectedTournamentId ?? tournaments[0]?.id ?? 0)
     : tournamentData.id;
 
-  const swrStandingsResponse = getLeagueSeasonStandings(activeTournamentId);
+  const swrStandingsResponse = getLeagueSeasonHistory(activeTournamentId);
   const swrAdminUsersResponse = getLeagueAdminUsers(activeTournamentId);
   const isAdmin = swrAdminUsersResponse.data != null;
-  const rows = swrStandingsResponse.data?.data ?? [];
+  const seasons = swrStandingsResponse.data?.data?.seasons ?? [];
+  const cumulativeRows = swrStandingsResponse.data?.data?.cumulative ?? [];
+  const [importFile, setImportFile] = useState<File | null>(null);
+
+  function StandingsTable({ rows }: { rows: any[] }) {
+    return (
+      <Table stickyHeader>
+        <Table.Thead>
+          <Table.Tr>
+            <Table.Th>#</Table.Th>
+            <Table.Th>Player</Table.Th>
+            <Table.Th>Points</Table.Th>
+            <Table.Th>Wins</Table.Th>
+            <Table.Th>Placements</Table.Th>
+            <Table.Th>Packs</Table.Th>
+            <Table.Th>Privileges</Table.Th>
+            <Table.Th>Accolades</Table.Th>
+          </Table.Tr>
+        </Table.Thead>
+        <Table.Tbody>
+          {rows.map((row: any, index: number) => (
+            <Table.Tr key={`${row.user_id}-${index}`}>
+              <Table.Td>{index + 1}</Table.Td>
+              <Table.Td>
+                <Stack gap={0}>
+                  <Text fw={600}>{row.user_name}</Text>
+                  <Text size="xs" c="dimmed">
+                    {row.user_email}
+                  </Text>
+                </Stack>
+              </Table.Td>
+              <Table.Td>{row.points}</Table.Td>
+              <Table.Td>{row.tournament_wins ?? 0}</Table.Td>
+              <Table.Td>{row.tournament_placements ?? 0}</Table.Td>
+              <Table.Td>{row.prize_packs ?? 0}</Table.Td>
+              <Table.Td>
+                <Group gap={6}>
+                  {row.role != null && <Badge variant="light">{row.role}</Badge>}
+                  {row.can_manage_points && <Badge color="teal">Points</Badge>}
+                  {row.can_manage_tournaments && <Badge color="indigo">Tournaments</Badge>}
+                </Group>
+              </Table.Td>
+              <Table.Td>
+                <Group gap={6}>
+                  {(row.accolades ?? []).map((accolade: string) => (
+                    <Badge key={`${row.user_id}-${accolade}`} color="yellow" variant="light">
+                      {accolade}
+                    </Badge>
+                  ))}
+                </Group>
+              </Table.Td>
+            </Table.Tr>
+          ))}
+        </Table.Tbody>
+      </Table>
+    );
+  }
   const content = (
     <Stack>
         <Title>Season Standings</Title>
@@ -54,73 +111,60 @@ export default function SeasonStandingsPage({
                 style={{ minWidth: 320 }}
               />
               {isAdmin && (
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    const response = await exportSeasonStandingsCsv(activeTournamentId);
-                    // @ts-ignore
-                    const csv = response?.data;
-                    if (csv == null) return;
-                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-                    const url = window.URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.href = url;
-                    link.download = `season-standings-${activeTournamentId}.csv`;
-                    link.click();
-                    window.URL.revokeObjectURL(url);
-                  }}
-                >
-                  Export CSV
-                </Button>
+                <Group>
+                  <Button
+                    variant="outline"
+                    onClick={async () => {
+                      const response = await exportSeasonStandingsCsv(activeTournamentId);
+                      // @ts-ignore
+                      const csv = response?.data;
+                      if (csv == null) return;
+                      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                      const url = window.URL.createObjectURL(blob);
+                      const link = document.createElement('a');
+                      link.href = url;
+                      link.download = `season-standings-${activeTournamentId}.csv`;
+                      link.click();
+                      window.URL.revokeObjectURL(url);
+                    }}
+                  >
+                    Export CSV
+                  </Button>
+                  <FileInput
+                    value={importFile}
+                    onChange={setImportFile}
+                    placeholder="Import standings CSV"
+                    accept=".csv,text/csv"
+                  />
+                  <Button
+                    onClick={async () => {
+                      if (importFile == null) return;
+                      await importSeasonStandingsCsv(activeTournamentId, importFile);
+                      await swrStandingsResponse.mutate();
+                      setImportFile(null);
+                      showNotification({ color: 'green', title: 'Standings CSV imported', message: '' });
+                    }}
+                  >
+                    Import CSV
+                  </Button>
+                </Group>
               )}
             </Group>
           </Card>
         )}
         <Card withBorder>
-          <Table stickyHeader>
-            <Table.Thead>
-              <Table.Tr>
-                <Table.Th>#</Table.Th>
-                <Table.Th>Player</Table.Th>
-                <Table.Th>Points</Table.Th>
-                <Table.Th>Privileges</Table.Th>
-                <Table.Th>Accolades</Table.Th>
-              </Table.Tr>
-            </Table.Thead>
-            <Table.Tbody>
-              {rows.map((row: any, index: number) => (
-                <Table.Tr key={row.user_id}>
-                  <Table.Td>{index + 1}</Table.Td>
-                  <Table.Td>
-                    <Stack gap={0}>
-                      <Text fw={600}>{row.user_name}</Text>
-                      <Text size="xs" c="dimmed">
-                        {row.user_email}
-                      </Text>
-                    </Stack>
-                  </Table.Td>
-                  <Table.Td>{row.points}</Table.Td>
-                  <Table.Td>
-                    <Group gap={6}>
-                      {row.role != null && <Badge variant="light">{row.role}</Badge>}
-                      {row.can_manage_points && <Badge color="teal">Points</Badge>}
-                      {row.can_manage_tournaments && <Badge color="indigo">Tournaments</Badge>}
-                    </Group>
-                  </Table.Td>
-                  <Table.Td>
-                    <Group gap={6}>
-                      {(row.accolades ?? []).map((accolade: string) => (
-                        <Badge key={`${row.user_id}-${accolade}`} color="yellow" variant="light">
-                          {accolade}
-                        </Badge>
-                      ))}
-                    </Group>
-                  </Table.Td>
-                </Table.Tr>
-              ))}
-            </Table.Tbody>
-          </Table>
+          <Title order={4} mb="sm">Cumulative Across All Seasons</Title>
+          <StandingsTable rows={cumulativeRows} />
         </Card>
+        {seasons.map((season: any) => (
+          <Card withBorder key={season.season_id}>
+            <Group justify="space-between" mb="sm">
+              <Title order={4}>{season.season_name}</Title>
+              {season.is_active && <Badge color="green">Active</Badge>}
+            </Group>
+            <StandingsTable rows={season.standings ?? []} />
+          </Card>
+        ))}
     </Stack>
   );
 

@@ -10,7 +10,7 @@ from bracket.config import config
 from bracket.database import database
 from bracket.logic.planning.matches import update_start_times_of_matches
 from bracket.logic.subscriptions import check_requirement
-from bracket.logic.tournaments import get_tournament_logo_path
+from bracket.logic.tournaments import get_tournament_logo_path, sql_delete_tournament_completely
 from bracket.models.db.ranking import RankingCreateBody
 from bracket.models.db.tournament import (
     Tournament,
@@ -28,14 +28,9 @@ from bracket.routes.auth import (
 from bracket.routes.models import SuccessResponse, TournamentResponse, TournamentsResponse
 from bracket.routes.util import disallow_archived_tournament
 from bracket.schema import tournaments
-from bracket.sql.rankings import (
-    get_all_rankings_in_tournament,
-    sql_create_ranking,
-    sql_delete_ranking,
-)
+from bracket.sql.rankings import sql_create_ranking
 from bracket.sql.tournaments import (
     sql_create_tournament,
-    sql_delete_tournament,
     sql_get_tournament,
     sql_get_tournament_by_endpoint_name,
     sql_get_tournaments,
@@ -123,9 +118,6 @@ async def update_tournament_by_id(
 async def delete_tournament(
     tournament_id: TournamentId, _: UserPublic = Depends(user_authenticated_for_tournament)
 ) -> SuccessResponse:
-    for ranking in await get_all_rankings_in_tournament(tournament_id):
-        await sql_delete_ranking(tournament_id, ranking.id)
-
     with check_foreign_key_violation(
         {
             ForeignKey.stages_tournament_id_fkey,
@@ -134,7 +126,7 @@ async def delete_tournament(
             ForeignKey.courts_tournament_id_fkey,
         }
     ):
-        await sql_delete_tournament(tournament_id)
+        await sql_delete_tournament_completely(tournament_id)
 
     return SuccessResponse()
 

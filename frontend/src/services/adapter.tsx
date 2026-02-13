@@ -306,11 +306,40 @@ export function getLeagueSeasonStandings(tournament_id: number | null): SWRRespo
   return useSWR(`tournaments/${tournament_id}/league/season_standings`, fetcher);
 }
 
+export function getLeagueSeasonHistory(tournament_id: number | null): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  return useSWR(`tournaments/${tournament_id}/league/season_history`, fetcher);
+}
+
 export function getLeagueAdminUsers(tournament_id: number | null): SWRResponse<any> {
   if (tournament_id == null || tournament_id <= 0) {
     return useSWR(null, fetcher);
   }
   return useSWR(`tournaments/${tournament_id}/league/admin/users`, fetcher);
+}
+
+export function getLeagueAdminSeasons(tournament_id: number | null): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  return useSWR(`tournaments/${tournament_id}/league/admin/seasons`, fetcher);
+}
+
+export function getTournamentApplications(
+  tournament_id: number | null,
+  admin: boolean = false
+): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  return useSWR(
+    admin
+      ? `tournaments/${tournament_id}/league/admin/applications`
+      : `tournaments/${tournament_id}/league/applications/me`,
+    fetcher
+  );
 }
 
 export function getUpcomingMatches(

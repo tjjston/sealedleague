@@ -7,12 +7,15 @@ from bracket.models.db.match import Match, SuggestedMatch
 from bracket.models.db.player import Player
 from bracket.models.db.ranking import Ranking
 from bracket.models.league import (
+    LeagueSeasonAdminView,
     LeagueAdminUserView,
     LeagueCardPoolEntryView,
     LeagueDeckView,
+    LeagueSeasonHistoryView,
+    LeagueTournamentApplicationView,
     LeagueStandingsRow,
 )
-from bracket.models.league_cards import LeagueSearchCards
+from bracket.models.league_cards import LeagueDraftSimulation, LeagueSearchCards
 from bracket.models.db.stage_item_inputs import (
     StageItemInputOptionFinal,
     StageItemInputOptionTentative,
@@ -141,5 +144,21 @@ class LeagueSeasonStandingsResponse(DataResponse[list[LeagueStandingsRow]]):
     pass
 
 
+class LeagueSeasonHistoryResponse(DataResponse[LeagueSeasonHistoryView]):
+    pass
+
+
 class LeagueAdminUsersResponse(DataResponse[list[LeagueAdminUserView]]):
+    pass
+
+
+class LeagueDraftSimulationResponse(DataResponse[LeagueDraftSimulation]):
+    pass
+
+
+class LeagueAdminSeasonsResponse(DataResponse[list[LeagueSeasonAdminView]]):
+    pass
+
+
+class LeagueTournamentApplicationsResponse(DataResponse[list[LeagueTournamentApplicationView]]):
     pass

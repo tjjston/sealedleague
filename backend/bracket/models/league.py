@@ -10,6 +10,7 @@ from bracket.utils.id_types import DeckId, TournamentId, UserId
 class LeagueDeckUpsertBody(BaseModel):
     user_id: UserId | None = None
     tournament_id: TournamentId | None = None
+    season_id: int | None = None
     name: str
     leader: str
     base: str
@@ -55,6 +56,7 @@ class LeagueDeckImportSwuDbBody(BaseModel):
 
 class LeagueParticipantSubmissionBody(BaseModel):
     participant_name: str | None = None
+    season_id: int | None = None
     deck_name: str
     leader: str
     base: str
@@ -150,10 +152,25 @@ class LeagueStandingsRow(BaseModel):
     user_name: str
     user_email: str
     points: float = 0
+    tournament_wins: int = 0
+    tournament_placements: int = 0
+    prize_packs: int = 0
     accolades: list[str] = Field(default_factory=list)
     role: SeasonMembershipRole | None = None
     can_manage_points: bool = False
     can_manage_tournaments: bool = False
+
+
+class LeagueSeasonStandingsView(BaseModel):
+    season_id: int
+    season_name: str
+    is_active: bool
+    standings: list[LeagueStandingsRow] = Field(default_factory=list)
+
+
+class LeagueSeasonHistoryView(BaseModel):
+    seasons: list[LeagueSeasonStandingsView] = Field(default_factory=list)
+    cumulative: list[LeagueStandingsRow] = Field(default_factory=list)
 
 
 class LeagueAdminUserView(BaseModel):
@@ -164,3 +181,44 @@ class LeagueAdminUserView(BaseModel):
     role: SeasonMembershipRole | None = None
     can_manage_points: bool = False
     can_manage_tournaments: bool = False
+
+
+class LeagueSeasonCreateBody(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    is_active: bool = False
+    tournament_ids: list[TournamentId] = Field(default_factory=list)
+
+
+class LeagueSeasonUpdateBody(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    is_active: bool | None = None
+    tournament_ids: list[TournamentId] | None = None
+
+
+class LeagueSeasonAdminView(BaseModel):
+    season_id: int
+    name: str
+    is_active: bool
+    tournament_ids: list[TournamentId] = Field(default_factory=list)
+
+
+class LeagueSeasonPointAdjustmentBody(BaseModel):
+    points_delta: float
+    reason: str | None = None
+
+
+class LeagueTournamentApplicationBody(BaseModel):
+    season_id: int | None = None
+    deck_id: DeckId | None = None
+    participant_name: str | None = None
+    leader_image_url: str | None = None
+
+
+class LeagueTournamentApplicationView(BaseModel):
+    user_id: UserId
+    user_name: str
+    user_email: str
+    tournament_id: TournamentId
+    season_id: int | None = None
+    deck_id: DeckId | None = None
+    status: str

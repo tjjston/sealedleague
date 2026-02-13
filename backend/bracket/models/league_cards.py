@@ -24,3 +24,27 @@ class LeagueSearchCard(BaseModel):
 class LeagueSearchCards(BaseModel):
     count: int
     cards: list[LeagueSearchCard]
+
+
+class LeagueDraftSimulationBody(BaseModel):
+    set_codes: list[str] = Field(default_factory=list)
+    pack_count: int = Field(default=6, ge=1, le=36)
+
+
+class LeagueDraftPack(BaseModel):
+    pack_index: int
+    commons: list[LeagueSearchCard] = Field(default_factory=list)
+    uncommons: list[LeagueSearchCard] = Field(default_factory=list)
+    rare_or_legendary: LeagueSearchCard
+    leader: LeagueSearchCard
+    base: LeagueSearchCard
+    wildcard: LeagueSearchCard
+
+
+class LeagueDraftSimulation(BaseModel):
+    set_codes: list[str] = Field(default_factory=list)
+    pack_count: int
+    leaders: list[LeagueSearchCard] = Field(default_factory=list)
+    bases: list[LeagueSearchCard] = Field(default_factory=list)
+    packs: list[LeagueDraftPack] = Field(default_factory=list)
+    non_leader_base_pool: list[LeagueSearchCard] = Field(default_factory=list)

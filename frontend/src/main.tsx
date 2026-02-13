@@ -23,6 +23,7 @@ import LoginPage from './pages/login';
 import LogoutPage from './pages/logout';
 import PasswordResetPage from './pages/password_reset';
 import LeagueDeckbuilderEntryPage from './pages/league/deckbuilder';
+import SealedDraftSimulationPage from './pages/league/sealed_draft';
 import LeagueSeasonStandingsEntryPage from './pages/league/season_standings';
 import DashboardSchedulePage from './pages/tournaments/[id]/dashboard';
 import DashboardNotFoundPage from './pages/tournaments/[id]/dashboard/dashboard_404';
@@ -90,6 +91,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/password-reset" element={<PasswordResetPage />} />
               <Route path="/create-account" element={<CreateAccountPage />} />
               <Route path="/league/deckbuilder" element={<LeagueDeckbuilderEntryPage />} />
+              <Route path="/league/sealed-draft" element={<SealedDraftSimulationPage />} />
               <Route path="/league/season-standings" element={<LeagueSeasonStandingsEntryPage />} />
 
               <Route path="/tournaments">

@@ -6,14 +6,20 @@ from starlette import status
 
 from bracket.config import config
 from bracket.models.db.user import UserPublic
-from bracket.models.league_cards import LeagueSearchCard, LeagueSearchCards
-from bracket.routes.auth import user_authenticated_for_tournament
-from bracket.routes.models import LeagueCardsResponse
+from bracket.models.league_cards import (
+    LeagueDraftSimulation,
+    LeagueDraftSimulationBody,
+    LeagueSearchCard,
+    LeagueSearchCards,
+)
+from bracket.routes.auth import user_authenticated, user_authenticated_for_tournament
+from bracket.routes.models import LeagueCardsResponse, LeagueDraftSimulationResponse
 from bracket.utils.id_types import TournamentId
 from bracket.utils.league_cards import (
     DEFAULT_SWU_SET_CODES,
     fetch_swu_cards_cached,
     filter_cards_for_deckbuilding,
+    simulate_sealed_draft,
 )
 
 router = APIRouter(prefix=config.api_prefix)
@@ -77,3 +83,54 @@ async def search_league_cards(
     return LeagueCardsResponse(
         data=LeagueSearchCards(count=len(filtered_cards), cards=paginated_cards)
     )
+
+
+@router.post(
+    "/tournaments/{tournament_id}/league/draft/simulate",
+    response_model=LeagueDraftSimulationResponse,
+)
+async def simulate_draft(
+    tournament_id: TournamentId,
+    body: LeagueDraftSimulationBody,
+    _: UserPublic = Depends(user_authenticated_for_tournament),
+) -> LeagueDraftSimulationResponse:
+    set_codes = body.set_codes if body.set_codes else list(DEFAULT_SWU_SET_CODES)
+    try:
+        raw_cards = await asyncio.to_thread(fetch_swu_cards_cached, set_codes)
+    except (URLError, HTTPError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not fetch SWU card catalog: {exc}",
+        ) from exc
+
+    try:
+        simulation = simulate_sealed_draft(raw_cards, set_codes=set_codes, pack_count=body.pack_count)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return LeagueDraftSimulationResponse(data=LeagueDraftSimulation.model_validate(simulation))
+
+
+@router.post(
+    "/league/draft/simulate",
+    response_model=LeagueDraftSimulationResponse,
+)
+async def simulate_draft_global(
+    body: LeagueDraftSimulationBody,
+    _: UserPublic = Depends(user_authenticated),
+) -> LeagueDraftSimulationResponse:
+    set_codes = body.set_codes if body.set_codes else list(DEFAULT_SWU_SET_CODES)
+    try:
+        raw_cards = await asyncio.to_thread(fetch_swu_cards_cached, set_codes)
+    except (URLError, HTTPError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Could not fetch SWU card catalog: {exc}",
+        ) from exc
+
+    try:
+        simulation = simulate_sealed_draft(raw_cards, set_codes=set_codes, pack_count=body.pack_count)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    return LeagueDraftSimulationResponse(data=LeagueDraftSimulation.model_validate(simulation))

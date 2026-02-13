@@ -17,6 +17,7 @@ export async function saveDeck(
     name: string;
     leader: string;
     base: string;
+    season_id?: number;
     tournament_id?: number;
     leader_image_url?: string;
     mainboard: Record<string, number>;
@@ -61,6 +62,7 @@ export async function submitLeagueEntry(
   tournament_id: number,
   body: {
     participant_name?: string;
+    season_id?: number;
     deck_name: string;
     leader: string;
     base: string;
@@ -74,6 +76,20 @@ export async function submitLeagueEntry(
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function submitTournamentApplication(
+  tournament_id: number,
+  body: {
+    season_id?: number;
+    deck_id?: number;
+    participant_name?: string;
+    leader_image_url?: string;
+  }
+) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/league/apply`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function updateSeasonPrivileges(
   tournament_id: number,
   user_id: number,
@@ -81,10 +97,60 @@ export async function updateSeasonPrivileges(
     role: 'PLAYER' | 'ADMIN';
     can_manage_points: boolean;
     can_manage_tournaments: boolean;
-  }
+  },
+  season_id?: number
+) {
+  const suffix = season_id == null ? '' : `?season_id=${season_id}`;
+  return createAxios()
+    .put(`tournaments/${tournament_id}/league/admin/users/${user_id}/season_privileges${suffix}`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function getLeagueAdminSeasons(tournament_id: number) {
+  return createAxios()
+    .get(`tournaments/${tournament_id}/league/admin/seasons`)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function createLeagueSeason(
+  tournament_id: number,
+  body: { name: string; is_active: boolean; tournament_ids: number[] }
 ) {
   return createAxios()
-    .put(`tournaments/${tournament_id}/league/admin/users/${user_id}/season_privileges`, body)
+    .post(`tournaments/${tournament_id}/league/admin/seasons`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function updateLeagueSeason(
+  tournament_id: number,
+  season_id: number,
+  body: { name?: string; is_active?: boolean; tournament_ids?: number[] }
+) {
+  return createAxios()
+    .put(`tournaments/${tournament_id}/league/admin/seasons/${season_id}`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function deleteLeagueSeason(tournament_id: number, season_id: number) {
+  return createAxios()
+    .delete(`tournaments/${tournament_id}/league/admin/seasons/${season_id}`)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function adjustSeasonUserPoints(
+  tournament_id: number,
+  season_id: number,
+  user_id: number,
+  body: { points_delta: number; reason?: string }
+) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/league/admin/seasons/${season_id}/users/${user_id}/points`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function getTournamentApplications(tournament_id: number) {
+  return createAxios()
+    .get(`tournaments/${tournament_id}/league/admin/applications`)
     .catch((response: any) => handleRequestError(response));
 }
 
@@ -134,5 +200,19 @@ export async function exportSeasonStandingsCsv(tournament_id: number) {
     .get(`tournaments/${tournament_id}/league/admin/export/season_standings.csv`, {
       responseType: 'text',
     })
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function importSeasonStandingsCsv(tournament_id: number, file: File) {
+  const body = new FormData();
+  body.append('file', file);
+  return createAxios()
+    .post(`tournaments/${tournament_id}/league/admin/import/standings.csv`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function simulateSealedDraft(body: { set_codes: string[]; pack_count: number }) {
+  return createAxios()
+    .post('league/draft/simulate', body)
     .catch((response: any) => handleRequestError(response));
 }

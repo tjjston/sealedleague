@@ -13,8 +13,10 @@ services:
       - postgres
     environment:
       ENVIRONMENT: DEVELOPMENT
+      GUNICORN_CMD_ARGS: --log-level warning
       CORS_ORIGINS: http://localhost:8400
       PG_DSN: postgresql://sealedleague_dev:sealedleague_dev@postgres:5432/sealedleague_dev
+      JWT_SECRET: sealedleague-local-dev-secret-0123456789abcdef
       ADMIN_EMAIL: admin@sealedleague.local
       ADMIN_PASSWORD: change-me-now
       ALLOW_USER_REGISTRATION: true

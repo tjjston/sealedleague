@@ -3,13 +3,19 @@ import json
 
 from bracket.database import database
 from bracket.models.db.league import Season
+from bracket.models.db.player import PlayerBody
+from bracket.models.db.team import TeamInsertable
 from bracket.models.league import (
     LeagueAdminUserView,
+    LeagueSeasonAdminView,
     LeagueCardPoolEntryView,
     LeagueDeckView,
     LeagueSeasonPrivilegesUpdateBody,
+    LeagueTournamentApplicationView,
     LeagueStandingsRow,
 )
+from bracket.sql.players import get_player_by_name, insert_player
+from bracket.schema import teams
 from bracket.utils.id_types import DeckId, TournamentId, UserId
 from bracket.utils.types import assert_some
 
@@ -18,7 +24,15 @@ async def get_or_create_active_season(tournament_id: TournamentId) -> Season:
     existing_query = """
         SELECT *
         FROM seasons
-        WHERE tournament_id = :tournament_id AND is_active = TRUE
+        WHERE is_active = TRUE
+          AND (
+            tournament_id = :tournament_id
+            OR id IN (
+                SELECT season_id
+                FROM season_tournaments
+                WHERE tournament_id = :tournament_id
+            )
+          )
         ORDER BY created DESC
         LIMIT 1
     """
@@ -26,7 +40,16 @@ async def get_or_create_active_season(tournament_id: TournamentId) -> Season:
     if existing is not None:
         return Season.model_validate(dict(existing._mapping))
 
-    count_query = "SELECT COUNT(*) AS count FROM seasons WHERE tournament_id = :tournament_id"
+    count_query = """
+        SELECT COUNT(*) AS count
+        FROM seasons
+        WHERE tournament_id = :tournament_id
+           OR id IN (
+                SELECT season_id
+                FROM season_tournaments
+                WHERE tournament_id = :tournament_id
+           )
+    """
     count_result = await database.fetch_one(count_query, values={"tournament_id": tournament_id})
     season_number = int(assert_some(count_result)._mapping["count"]) + 1
 
@@ -44,10 +67,144 @@ async def get_or_create_active_season(tournament_id: TournamentId) -> Season:
             "created": created,
         },
     )
-    return Season.model_validate(dict(assert_some(inserted)._mapping))
+    season = Season.model_validate(dict(assert_some(inserted)._mapping))
+    await set_season_tournaments(season.id, [tournament_id])
+    return season
 
 
-async def get_league_standings(tournament_id: TournamentId, season_id: int) -> list[LeagueStandingsRow]:
+async def get_seasons_for_tournament(tournament_id: TournamentId) -> list[Season]:
+    query = """
+        SELECT DISTINCT s.*
+        FROM seasons
+        LEFT JOIN season_tournaments st ON st.season_id = s.id
+        WHERE s.tournament_id = :tournament_id
+           OR st.tournament_id = :tournament_id
+        ORDER BY created ASC
+    """
+    rows = await database.fetch_all(query=query, values={"tournament_id": tournament_id})
+    return [Season.model_validate(dict(row._mapping)) for row in rows]
+
+
+async def get_or_create_season_by_name(tournament_id: TournamentId, season_name: str) -> Season:
+    normalized_name = season_name.strip()
+    if normalized_name == "":
+        return await get_or_create_active_season(tournament_id)
+
+    query = """
+        SELECT DISTINCT s.*
+        FROM seasons s
+        LEFT JOIN season_tournaments st ON st.season_id = s.id
+        WHERE (s.tournament_id = :tournament_id OR st.tournament_id = :tournament_id)
+          AND lower(name) = lower(:season_name)
+        ORDER BY created DESC
+        LIMIT 1
+    """
+    row = await database.fetch_one(
+        query=query,
+        values={"tournament_id": tournament_id, "season_name": normalized_name},
+    )
+    if row is not None:
+        return Season.model_validate(dict(row._mapping))
+
+    insert_query = """
+        INSERT INTO seasons (tournament_id, name, created, is_active)
+        VALUES (:tournament_id, :name, :created, FALSE)
+        RETURNING *
+    """
+    inserted = await database.fetch_one(
+        query=insert_query,
+        values={
+            "tournament_id": tournament_id,
+            "name": normalized_name,
+            "created": datetime_utc.now(),
+        },
+    )
+    season = Season.model_validate(dict(assert_some(inserted)._mapping))
+    await set_season_tournaments(season.id, [tournament_id])
+    return season
+
+
+def season_ids_subquery() -> str:
+    return """
+        SELECT season_id
+        FROM season_tournaments
+        WHERE tournament_id = :tournament_id
+        UNION
+        SELECT id
+        FROM seasons
+        WHERE tournament_id = :tournament_id
+    """
+
+
+async def get_tournament_ids_for_season(season_id: int) -> list[TournamentId]:
+    query = """
+        SELECT DISTINCT tournament_id
+        FROM (
+            SELECT tournament_id FROM season_tournaments WHERE season_id = :season_id
+            UNION
+            SELECT tournament_id FROM seasons WHERE id = :season_id
+        ) mapped
+        ORDER BY tournament_id
+    """
+    rows = await database.fetch_all(query=query, values={"season_id": season_id})
+    return [TournamentId(int(row._mapping["tournament_id"])) for row in rows]
+
+
+async def set_season_tournaments(season_id: int, tournament_ids: list[TournamentId]) -> None:
+    unique_tournament_ids: list[TournamentId] = []
+    seen: set[int] = set()
+    for tournament_id in tournament_ids:
+        if int(tournament_id) in seen:
+            continue
+        seen.add(int(tournament_id))
+        unique_tournament_ids.append(tournament_id)
+
+    if len(unique_tournament_ids) < 1:
+        owner = await database.fetch_one(
+            "SELECT tournament_id FROM seasons WHERE id = :season_id",
+            values={"season_id": season_id},
+        )
+        if owner is not None:
+            unique_tournament_ids = [TournamentId(int(owner._mapping["tournament_id"]))]
+
+    async with database.transaction():
+        await database.execute(
+            "DELETE FROM season_tournaments WHERE season_id = :season_id",
+            values={"season_id": season_id},
+        )
+        for tournament_id in unique_tournament_ids:
+            await database.execute(
+                """
+                INSERT INTO season_tournaments (season_id, tournament_id)
+                VALUES (:season_id, :tournament_id)
+                ON CONFLICT (season_id, tournament_id) DO NOTHING
+                """,
+                values={"season_id": season_id, "tournament_id": int(tournament_id)},
+            )
+
+
+async def get_league_standings(
+    tournament_id: TournamentId, season_id: int | None
+) -> list[LeagueStandingsRow]:
+    season_filter = (
+        "AND spl.season_id = :season_id"
+        if season_id is not None
+        else f"AND spl.season_id IN ({season_ids_subquery()})"
+    )
+    membership_filter = (
+        "AND sm.season_id = :season_id"
+        if season_id is not None
+        else f"""
+            AND sm.season_id = (
+                SELECT id
+                FROM seasons
+                WHERE is_active = TRUE
+                  AND id IN ({season_ids_subquery()})
+                ORDER BY created DESC
+                LIMIT 1
+            )
+        """
+    )
     query = """
         WITH tournament_users AS (
             SELECT DISTINCT u.id, u.name, u.email
@@ -74,16 +231,43 @@ async def get_league_standings(tournament_id: TournamentId, season_id: int) -> l
                 FILTER (WHERE spl.reason LIKE 'ACCOLADE:%'),
                 ARRAY[]::TEXT[]
             ) AS accolades,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN spl.reason LIKE 'TOURNAMENT_WIN:%' THEN COALESCE(NULLIF(split_part(spl.reason, ':', 2), ''), '0')::INT
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS tournament_wins,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN spl.reason LIKE 'TOURNAMENT_PLACEMENT:%' THEN COALESCE(NULLIF(split_part(spl.reason, ':', 2), ''), '0')::INT
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS tournament_placements,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN spl.reason LIKE 'PRIZE_PACKS:%' THEN COALESCE(NULLIF(split_part(spl.reason, ':', 2), ''), '0')::INT
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS prize_packs,
             sm.role,
             COALESCE(sm.can_manage_points, FALSE) AS can_manage_points,
             COALESCE(sm.can_manage_tournaments, FALSE) AS can_manage_tournaments
         FROM tournament_users tu
         LEFT JOIN season_memberships sm
             ON sm.user_id = tu.id
-            AND sm.season_id = :season_id
+            {membership_filter}
         LEFT JOIN season_points_ledger spl
             ON spl.user_id = tu.id
-            AND spl.season_id = :season_id
+            {season_filter}
         GROUP BY
             tu.id,
             tu.name,
@@ -92,10 +276,16 @@ async def get_league_standings(tournament_id: TournamentId, season_id: int) -> l
             sm.can_manage_points,
             sm.can_manage_tournaments
         ORDER BY points DESC, tu.name ASC
-    """
+    """.format(
+        membership_filter=membership_filter,
+        season_filter=season_filter,
+    )
+    values: dict[str, int] = {"tournament_id": tournament_id}
+    if season_id is not None:
+        values["season_id"] = season_id
     result = await database.fetch_all(
         query=query,
-        values={"tournament_id": tournament_id, "season_id": season_id},
+        values=values,
     )
     return [
         LeagueStandingsRow.model_validate(
@@ -320,71 +510,116 @@ async def upsert_deck(
     sideboard: dict[str, int],
 ) -> LeagueDeckView:
     now = datetime_utc.now()
-    query = """
-        WITH upserted AS (
-            INSERT INTO decks (
-                season_id,
-                user_id,
-                tournament_id,
-                name,
-                leader,
-                base,
-                mainboard,
-                sideboard,
-                created,
-                updated
-            )
-            VALUES (
-                :season_id,
-                :user_id,
-                :tournament_id,
-                :name,
-                :leader,
-                :base,
-                :mainboard,
-                :sideboard,
-                :created,
-                :updated
-            )
-            ON CONFLICT (season_id, user_id, name)
-            DO UPDATE SET
-                tournament_id = EXCLUDED.tournament_id,
-                leader = EXCLUDED.leader,
-                base = EXCLUDED.base,
-                mainboard = EXCLUDED.mainboard,
-                sideboard = EXCLUDED.sideboard,
-                updated = EXCLUDED.updated
-            RETURNING *
+    async with database.transaction():
+        existing = await database.fetch_one(
+            """
+            SELECT id
+            FROM decks
+            WHERE season_id = :season_id
+              AND user_id = :user_id
+            ORDER BY updated DESC
+            LIMIT 1
+            """,
+            values={"season_id": season_id, "user_id": user_id},
         )
+        if existing is None:
+            row = await database.fetch_one(
+                """
+                INSERT INTO decks (
+                    season_id,
+                    user_id,
+                    tournament_id,
+                    name,
+                    leader,
+                    base,
+                    mainboard,
+                    sideboard,
+                    created,
+                    updated
+                )
+                VALUES (
+                    :season_id,
+                    :user_id,
+                    :tournament_id,
+                    :name,
+                    :leader,
+                    :base,
+                    :mainboard,
+                    :sideboard,
+                    :created,
+                    :updated
+                )
+                RETURNING id
+                """,
+                values={
+                    "season_id": season_id,
+                    "user_id": user_id,
+                    "tournament_id": tournament_id,
+                    "name": name,
+                    "leader": leader,
+                    "base": base,
+                    "mainboard": json.dumps(mainboard),
+                    "sideboard": json.dumps(sideboard),
+                    "created": now,
+                    "updated": now,
+                },
+            )
+            deck_id = int(assert_some(row)._mapping["id"])
+        else:
+            deck_id = int(existing._mapping["id"])
+            await database.execute(
+                """
+                UPDATE decks
+                SET
+                    tournament_id = :tournament_id,
+                    name = :name,
+                    leader = :leader,
+                    base = :base,
+                    mainboard = :mainboard,
+                    sideboard = :sideboard,
+                    updated = :updated
+                WHERE id = :deck_id
+                """,
+                values={
+                    "deck_id": deck_id,
+                    "tournament_id": tournament_id,
+                    "name": name,
+                    "leader": leader,
+                    "base": base,
+                    "mainboard": json.dumps(mainboard),
+                    "sideboard": json.dumps(sideboard),
+                    "updated": now,
+                },
+            )
+            await database.execute(
+                """
+                DELETE FROM decks
+                WHERE season_id = :season_id
+                  AND user_id = :user_id
+                  AND id != :deck_id
+                """,
+                values={"season_id": season_id, "user_id": user_id, "deck_id": deck_id},
+            )
+
+    row = await database.fetch_one(
+        """
         SELECT
-            udeck.id,
-            udeck.season_id,
-            udeck.user_id,
+            d.id,
+            d.season_id,
+            d.user_id,
             u.name AS user_name,
             u.email AS user_email,
-            udeck.tournament_id,
-            udeck.name,
-            udeck.leader,
-            udeck.base,
-            udeck.mainboard,
-            udeck.sideboard
-        FROM upserted udeck
-        JOIN users u ON u.id = udeck.user_id
-    """
-    row = await database.fetch_one(
-        query=query,
-        values={
-            "season_id": season_id,
-            "user_id": user_id,
-            "tournament_id": tournament_id,
-            "name": name,
-            "leader": leader,
-            "base": base,
-            "mainboard": json.dumps(mainboard),
-            "sideboard": json.dumps(sideboard),
-            "created": now,
-            "updated": now,
-        },
+            d.tournament_id,
+            d.name,
+            d.leader,
+            d.base,
+            d.mainboard,
+            d.sideboard
+        FROM decks d
+        JOIN users u ON u.id = d.user_id
+        WHERE d.id = :deck_id
+        """,
+        values={"deck_id": deck_id},
     )
     return LeagueDeckView.model_validate(dict(assert_some(row)._mapping))
 
@@ -494,9 +729,264 @@ async def delete_deck(deck_id: DeckId) -> None:
     await database.execute(query=query, values={"deck_id": deck_id})
 
 
+async def create_season(
+    owner_tournament_id: TournamentId,
+    name: str,
+    is_active: bool,
+    tournament_ids: list[TournamentId],
+) -> Season:
+    now = datetime_utc.now()
+    async with database.transaction():
+        if is_active:
+            await database.execute(
+                """
+                UPDATE seasons
+                SET is_active = FALSE
+                WHERE id IN ({season_ids_subquery})
+                """.format(season_ids_subquery=season_ids_subquery()),
+                values={"tournament_id": owner_tournament_id},
+            )
+
+        row = await database.fetch_one(
+            """
+            INSERT INTO seasons (tournament_id, name, created, is_active)
+            VALUES (:tournament_id, :name, :created, :is_active)
+            RETURNING *
+            """,
+            values={
+                "tournament_id": owner_tournament_id,
+                "name": name.strip(),
+                "created": now,
+                "is_active": is_active,
+            },
+        )
+        season = Season.model_validate(dict(assert_some(row)._mapping))
+        await set_season_tournaments(
+            season.id,
+            tournament_ids if len(tournament_ids) > 0 else [owner_tournament_id],
+        )
+        return season
+
+
+async def get_season_by_id(season_id: int) -> Season | None:
+    row = await database.fetch_one(
+        "SELECT * FROM seasons WHERE id = :season_id",
+        values={"season_id": season_id},
+    )
+    if row is None:
+        return None
+    return Season.model_validate(dict(row._mapping))
+
+
+async def update_season(
+    tournament_id: TournamentId,
+    season_id: int,
+    name: str | None,
+    is_active: bool | None,
+    tournament_ids: list[TournamentId] | None,
+) -> Season | None:
+    season = await get_season_by_id(season_id)
+    if season is None:
+        return None
+
+    now_name = season.name if name is None else name.strip()
+    now_active = season.is_active if is_active is None else is_active
+
+    async with database.transaction():
+        if now_active:
+            await database.execute(
+                """
+                UPDATE seasons
+                SET is_active = FALSE
+                WHERE id IN ({season_ids_subquery})
+                """.format(season_ids_subquery=season_ids_subquery()),
+                values={"tournament_id": tournament_id},
+            )
+        await database.execute(
+            """
+            UPDATE seasons
+            SET name = :name, is_active = :is_active
+            WHERE id = :season_id
+            """,
+            values={"season_id": season_id, "name": now_name, "is_active": now_active},
+        )
+        if tournament_ids is not None:
+            await set_season_tournaments(season_id, tournament_ids)
+
+    return await get_season_by_id(season_id)
+
+
+async def delete_season(season_id: int) -> None:
+    await database.execute("DELETE FROM seasons WHERE id = :season_id", values={"season_id": season_id})
+
+
+async def list_admin_seasons_for_tournament(tournament_id: TournamentId) -> list[LeagueSeasonAdminView]:
+    seasons = await get_seasons_for_tournament(tournament_id)
+    views: list[LeagueSeasonAdminView] = []
+    for season in seasons:
+        views.append(
+            LeagueSeasonAdminView(
+                season_id=season.id,
+                name=season.name,
+                is_active=season.is_active,
+                tournament_ids=await get_tournament_ids_for_season(season.id),
+            )
+        )
+    return views
+
+
+async def ensure_user_registered_as_participant(
+    tournament_id: TournamentId,
+    user_id: UserId,
+    participant_name: str,
+    leader_image_url: str | None = None,
+) -> None:
+    player = await get_player_by_name(participant_name, tournament_id)
+    if player is None:
+        await insert_player(PlayerBody(name=participant_name, active=True), tournament_id)
+        player = await get_player_by_name(participant_name, tournament_id)
+
+    if player is None:
+        return
+
+    team_row = await database.fetch_one(
+        """
+        SELECT id
+        FROM teams
+        WHERE tournament_id = :tournament_id
+          AND lower(name) = lower(:name)
+        LIMIT 1
+        """,
+        values={"tournament_id": tournament_id, "name": participant_name},
+    )
+    if team_row is None:
+        team_id = await database.execute(
+            query=teams.insert(),
+            values=TeamInsertable(
+                created=datetime_utc.now(),
+                name=participant_name,
+                tournament_id=tournament_id,
+                active=True,
+            ).model_dump(),
+        )
+        if leader_image_url is not None and leader_image_url.strip() != "":
+            await database.execute(
+                "UPDATE teams SET logo_path = :logo_path WHERE id = :team_id",
+                values={"logo_path": leader_image_url.strip(), "team_id": team_id},
+            )
+    else:
+        team_id = int(team_row._mapping["id"])
+        if leader_image_url is not None and leader_image_url.strip() != "":
+            await database.execute(
+                "UPDATE teams SET logo_path = :logo_path WHERE id = :team_id",
+                values={"logo_path": leader_image_url.strip(), "team_id": team_id},
+            )
+
+    await database.execute(
+        """
+        INSERT INTO players_x_teams (team_id, player_id)
+        VALUES (:team_id, :player_id)
+        ON CONFLICT DO NOTHING
+        """,
+        values={"team_id": team_id, "player_id": int(player.id)},
+    )
+
+
+async def upsert_tournament_application(
+    tournament_id: TournamentId,
+    user_id: UserId,
+    season_id: int | None,
+    deck_id: DeckId | None,
+) -> None:
+    await database.execute(
+        """
+        INSERT INTO tournament_applications (
+            tournament_id, season_id, user_id, deck_id, status, created, updated
+        )
+        VALUES (
+            :tournament_id, :season_id, :user_id, :deck_id, 'SUBMITTED', :created, :updated
+        )
+        ON CONFLICT (tournament_id, user_id)
+        DO UPDATE SET
+            season_id = EXCLUDED.season_id,
+            deck_id = EXCLUDED.deck_id,
+            status = 'SUBMITTED',
+            updated = EXCLUDED.updated
+        """,
+        values={
+            "tournament_id": tournament_id,
+            "season_id": season_id,
+            "user_id": user_id,
+            "deck_id": deck_id,
+            "created": datetime_utc.now(),
+            "updated": datetime_utc.now(),
+        },
+    )
+
+
+async def get_tournament_applications(
+    tournament_id: TournamentId,
+    user_id: UserId | None = None,
+) -> list[LeagueTournamentApplicationView]:
+    user_filter = "AND ta.user_id = :user_id" if user_id is not None else ""
+    values: dict[str, int] = {"tournament_id": tournament_id}
+    if user_id is not None:
+        values["user_id"] = int(user_id)
+    rows = await database.fetch_all(
+        f"""
+        SELECT
+            ta.user_id,
+            u.name AS user_name,
+            u.email AS user_email,
+            ta.tournament_id,
+            ta.season_id,
+            ta.deck_id,
+            ta.status
+        FROM tournament_applications ta
+        JOIN users u ON u.id = ta.user_id
+        WHERE ta.tournament_id = :tournament_id
+        {user_filter}
+        ORDER BY ta.updated DESC, u.name ASC
+        """,
+        values=values,
+    )
+    return [LeagueTournamentApplicationView.model_validate(dict(row._mapping)) for row in rows]
+
+
+async def user_is_league_admin(tournament_id: TournamentId, user_id: UserId) -> bool:
+    row = await database.fetch_one(
+        """
+        SELECT sm.role, sm.can_manage_tournaments
+        FROM season_memberships sm
+        JOIN seasons s ON s.id = sm.season_id
+        WHERE sm.user_id = :user_id
+          AND (
+            s.tournament_id = :tournament_id
+            OR s.id IN (
+                SELECT season_id
+                FROM season_tournaments
+                WHERE tournament_id = :tournament_id
+            )
+          )
+          AND s.is_active = TRUE
+        ORDER BY s.created DESC
+        LIMIT 1
+        """,
+        values={"tournament_id": tournament_id, "user_id": user_id},
+    )
+    if row is None:
+        return False
+    return row._mapping["role"] == "ADMIN" or bool(row._mapping["can_manage_tournaments"])
+
+
 async def delete_league_data_for_tournament(tournament_id: TournamentId) -> None:
     query = """
         DELETE FROM seasons
         WHERE tournament_id = :tournament_id
+           OR id IN (
+                SELECT season_id
+                FROM season_tournaments
+                WHERE tournament_id = :tournament_id
+           )
     """
     await database.execute(query=query, values={"tournament_id": tournament_id})

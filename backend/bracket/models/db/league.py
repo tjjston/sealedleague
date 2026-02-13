@@ -6,6 +6,8 @@ from bracket.models.db.shared import BaseModelORM
 from bracket.utils.id_types import (
     CardPoolEntryId,
     DeckId,
+    SeasonTournamentId,
+    TournamentApplicationId,
     SeasonId,
     SeasonMembershipId,
     SeasonPointsLedgerId,
@@ -44,6 +46,15 @@ class SeasonMembershipInsertable(BaseModelORM):
 
 class SeasonMembership(SeasonMembershipInsertable):
     id: SeasonMembershipId
+
+
+class SeasonTournamentInsertable(BaseModelORM):
+    season_id: SeasonId
+    tournament_id: TournamentId
+
+
+class SeasonTournament(SeasonTournamentInsertable):
+    id: SeasonTournamentId
 
 
 class SeasonPointsLedgerInsertable(BaseModelORM):
@@ -87,3 +98,17 @@ class DeckInsertable(BaseModelORM):
 
 class Deck(DeckInsertable):
     id: DeckId
+
+
+class TournamentApplicationInsertable(BaseModelORM):
+    tournament_id: TournamentId
+    season_id: SeasonId | None = None
+    user_id: UserId
+    deck_id: DeckId | None = None
+    status: str
+    created: datetime_utc
+    updated: datetime_utc
+
+
+class TournamentApplication(TournamentApplicationInsertable):
+    id: TournamentApplicationId

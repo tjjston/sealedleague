@@ -4,6 +4,7 @@ import {
   Card,
   Checkbox,
   Group,
+  MultiSelect,
   Select,
   Stack,
   Table,
@@ -17,28 +18,41 @@ import { showNotification } from '@mantine/notifications';
 
 import { getTournamentIdFromRouter } from '@components/utils/util';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
-import { getLeagueAdminUsers, getLeagueDecks } from '@services/adapter';
+import { getLeagueAdminSeasons, getLeagueAdminUsers, getLeagueDecks, getTournaments } from '@services/adapter';
 import { updateUserAccountType } from '@services/user';
 import {
+  adjustSeasonUserPoints,
   awardAccolade,
+  createLeagueSeason,
+  deleteLeagueSeason,
   deleteDeck,
   exportStandingsTemplate,
   exportTournamentFormatTemplate,
   importStandingsTemplate,
   importTournamentFormatTemplate,
+  updateLeagueSeason,
   updateSeasonPrivileges,
 } from '@services/league';
 
 export default function LeagueAdminPage() {
   const { tournamentData } = getTournamentIdFromRouter();
   const swrUsersResponse = getLeagueAdminUsers(tournamentData.id);
+  const swrSeasonsResponse = getLeagueAdminSeasons(tournamentData.id);
+  const swrTournamentsResponse = getTournaments('OPEN');
   const swrDecksResponse = getLeagueDecks(tournamentData.id);
   const users = swrUsersResponse.data?.data ?? [];
+  const seasons = swrSeasonsResponse.data?.data ?? [];
+  const tournaments = swrTournamentsResponse.data?.data ?? [];
   const decks = swrDecksResponse.data?.data ?? [];
 
   const [accolades, setAccolades] = useState<Record<string, string>>({});
   const [standingsTemplateJson, setStandingsTemplateJson] = useState('');
   const [tournamentTemplateJson, setTournamentTemplateJson] = useState('');
+  const [seasonName, setSeasonName] = useState('');
+  const [seasonTournamentIds, setSeasonTournamentIds] = useState<string[]>([]);
+  const [seasonForPoints, setSeasonForPoints] = useState<string | null>(null);
+  const [pointsDeltaByUser, setPointsDeltaByUser] = useState<Record<string, string>>({});
+  const [pointsReasonByUser, setPointsReasonByUser] = useState<Record<string, string>>({});
 
   return (
     <TournamentLayout tournament_id={tournamentData.id}>
@@ -127,6 +141,90 @@ export default function LeagueAdminPage() {
 
         <Card withBorder>
           <Title order={4} mb="sm">
+            Seasons
+          </Title>
+          <Stack>
+            <Group>
+              <TextInput
+                label="Season Name"
+                value={seasonName}
+                onChange={(event) => setSeasonName(event.currentTarget.value)}
+              />
+              <MultiSelect
+                label="Linked Tournaments"
+                value={seasonTournamentIds}
+                onChange={setSeasonTournamentIds}
+                data={tournaments.map((t: any) => ({ value: String(t.id), label: t.name }))}
+                style={{ minWidth: 320 }}
+              />
+              <Button
+                onClick={async () => {
+                  if (seasonName.trim() === '') return;
+                  await createLeagueSeason(tournamentData.id, {
+                    name: seasonName.trim(),
+                    is_active: false,
+                    tournament_ids: seasonTournamentIds.map((id) => Number(id)),
+                  });
+                  setSeasonName('');
+                  await swrSeasonsResponse.mutate();
+                }}
+              >
+                Create Season
+              </Button>
+            </Group>
+
+            <Table>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Name</Table.Th>
+                  <Table.Th>Active</Table.Th>
+                  <Table.Th>Tournaments</Table.Th>
+                  <Table.Th></Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {seasons.map((season: any) => (
+                  <Table.Tr key={season.season_id}>
+                    <Table.Td>{season.name}</Table.Td>
+                    <Table.Td>{season.is_active ? 'Yes' : 'No'}</Table.Td>
+                    <Table.Td>{(season.tournament_ids ?? []).join(', ') || '-'}</Table.Td>
+                    <Table.Td>
+                      <Group>
+                        {!season.is_active && (
+                          <Button
+                            size="xs"
+                            variant="light"
+                            onClick={async () => {
+                              await updateLeagueSeason(tournamentData.id, season.season_id, {
+                                is_active: true,
+                              });
+                              await swrSeasonsResponse.mutate();
+                            }}
+                          >
+                            Set Active
+                          </Button>
+                        )}
+                        <ActionIcon
+                          variant="subtle"
+                          color="red"
+                          onClick={async () => {
+                            await deleteLeagueSeason(tournamentData.id, season.season_id);
+                            await swrSeasonsResponse.mutate();
+                          }}
+                        >
+                          <IconTrash size={15} />
+                        </ActionIcon>
+                      </Group>
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Stack>
+        </Card>
+
+        <Card withBorder>
+          <Title order={4} mb="sm">
             User Privileges
           </Title>
           <Table>
@@ -172,7 +270,7 @@ export default function LeagueAdminPage() {
                           role,
                           can_manage_points: Boolean(user.can_manage_points),
                           can_manage_tournaments: Boolean(user.can_manage_tournaments),
-                        });
+                        }, seasonForPoints != null ? Number(seasonForPoints) : undefined);
                         await swrUsersResponse.mutate();
                       }}
                     />
@@ -187,7 +285,7 @@ export default function LeagueAdminPage() {
                             role: (user.role ?? 'PLAYER') as 'PLAYER' | 'ADMIN',
                             can_manage_points: event.currentTarget.checked,
                             can_manage_tournaments: Boolean(user.can_manage_tournaments),
-                          });
+                          }, seasonForPoints != null ? Number(seasonForPoints) : undefined);
                           await swrUsersResponse.mutate();
                         }}
                       />
@@ -199,7 +297,7 @@ export default function LeagueAdminPage() {
                             role: (user.role ?? 'PLAYER') as 'PLAYER' | 'ADMIN',
                             can_manage_points: Boolean(user.can_manage_points),
                             can_manage_tournaments: event.currentTarget.checked,
-                          });
+                          }, seasonForPoints != null ? Number(seasonForPoints) : undefined);
                           await swrUsersResponse.mutate();
                         }}
                       />
@@ -227,12 +325,57 @@ export default function LeagueAdminPage() {
                       >
                         Award
                       </Button>
+                      <TextInput
+                        placeholder="Points delta"
+                        value={pointsDeltaByUser[String(user.user_id)] ?? ''}
+                        onChange={(event) =>
+                          setPointsDeltaByUser((prev) => ({
+                            ...prev,
+                            [String(user.user_id)]: event.currentTarget.value,
+                          }))
+                        }
+                      />
+                      <TextInput
+                        placeholder="Reason"
+                        value={pointsReasonByUser[String(user.user_id)] ?? ''}
+                        onChange={(event) =>
+                          setPointsReasonByUser((prev) => ({
+                            ...prev,
+                            [String(user.user_id)]: event.currentTarget.value,
+                          }))
+                        }
+                      />
+                      <Button
+                        variant="light"
+                        onClick={async () => {
+                          if (seasonForPoints == null) return;
+                          const delta = Number(pointsDeltaByUser[String(user.user_id)] ?? '0');
+                          if (!Number.isFinite(delta) || delta === 0) return;
+                          await adjustSeasonUserPoints(
+                            tournamentData.id,
+                            Number(seasonForPoints),
+                            user.user_id,
+                            { points_delta: delta, reason: pointsReasonByUser[String(user.user_id)] ?? '' }
+                          );
+                          setPointsDeltaByUser((prev) => ({ ...prev, [String(user.user_id)]: '' }));
+                          setPointsReasonByUser((prev) => ({ ...prev, [String(user.user_id)]: '' }));
+                        }}
+                      >
+                        Adjust Points
+                      </Button>
                     </Group>
                   </Table.Td>
                 </Table.Tr>
               ))}
             </Table.Tbody>
           </Table>
+          <Select
+            label="Season Context For Privileges / Points"
+            value={seasonForPoints}
+            onChange={setSeasonForPoints}
+            data={seasons.map((s: any) => ({ value: String(s.season_id), label: s.name }))}
+            mt="sm"
+          />
         </Card>
 
         <Card withBorder>
