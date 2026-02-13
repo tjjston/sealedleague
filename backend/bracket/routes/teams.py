@@ -44,6 +44,7 @@ from bracket.sql.teams import (
     get_teams_with_members,
     sql_delete_team,
 )
+from bracket.sql.users import get_users_for_tournament
 from bracket.sql.validation import check_foreign_keys_belong_to_tournament
 from bracket.utils.db import fetch_one_parsed
 from bracket.utils.errors import ForeignKey, check_foreign_key_violation
@@ -242,4 +243,35 @@ async def create_multiple_teams(
                 player_body = PlayerBody(name=player, active=team_body.active)
                 await insert_player(player_body, tournament_id)
 
+    return SuccessResponse()
+
+
+@router.post("/tournaments/{tournament_id}/teams/import_users", response_model=SuccessResponse)
+async def import_users_as_teams(
+    tournament_id: TournamentId,
+    user: UserPublic = Depends(user_authenticated_for_tournament),
+    _: Tournament = Depends(disallow_archived_tournament),
+) -> SuccessResponse:
+    users = await get_users_for_tournament(tournament_id)
+    existing_teams = await get_teams_with_members(tournament_id)
+    existing_team_names = {team.name.lower() for team in existing_teams}
+    existing_players = await get_all_players_in_tournament(tournament_id)
+    existing_player_names = {player.name.lower() for player in existing_players}
+
+    new_names = [u.name for u in users if u.name.lower() not in existing_team_names]
+    check_requirement(existing_teams, user, "max_teams", additions=len(new_names))
+    check_requirement(existing_players, user, "max_players", additions=len(new_names))
+
+    for user_name in new_names:
+        if user_name.lower() not in existing_player_names:
+            await insert_player(PlayerBody(name=user_name, active=True), tournament_id)
+        await database.execute(
+            query=teams.insert(),
+            values=TeamInsertable(
+                name=user_name,
+                active=True,
+                created=datetime_utc.now(),
+                tournament_id=tournament_id,
+            ).model_dump(),
+        )
     return SuccessResponse()

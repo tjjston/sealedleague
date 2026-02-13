@@ -120,11 +120,9 @@ async def update_team_stats(
 
 async def sql_delete_team(tournament_id: TournamentId, team_id: TeamId) -> None:
     query = "DELETE FROM teams WHERE id = :team_id AND tournament_id = :tournament_id"
-    await database.fetch_one(
-        query=query, values={"team_id": team_id, "tournament_id": tournament_id}
-    )
+    await database.execute(query=query, values={"team_id": team_id, "tournament_id": tournament_id})
 
 
 async def sql_delete_teams_of_tournament(tournament_id: TournamentId) -> None:
     query = "DELETE FROM teams WHERE tournament_id = :tournament_id"
-    await database.fetch_one(query=query, values={"tournament_id": tournament_id})
+    await database.execute(query=query, values={"tournament_id": tournament_id})

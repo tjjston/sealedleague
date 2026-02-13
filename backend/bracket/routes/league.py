@@ -1,4 +1,8 @@
+import csv
+import io
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from starlette.responses import Response
 from starlette import status
 
 from bracket.config import config
@@ -6,6 +10,7 @@ from bracket.models.db.user import UserPublic
 from bracket.models.league import (
     LeagueAwardAccoladeBody,
     LeagueDeckImportSwuDbBody,
+    LeagueParticipantSubmissionBody,
     LeagueCardPoolUpdateBody,
     LeagueDeckUpsertBody,
     LeaguePointsImportBody,
@@ -36,7 +41,10 @@ from bracket.sql.league import (
     upsert_deck,
     upsert_season_membership,
 )
+from bracket.models.db.player import PlayerBody
+from bracket.sql.players import get_player_by_name, insert_player
 from bracket.utils.id_types import DeckId, TournamentId, UserId
+from bracket.utils.logging import logger
 from bracket.sql.tournaments import sql_get_tournament, sql_update_tournament
 from bracket.models.db.tournament import TournamentUpdateBody
 
@@ -154,11 +162,56 @@ async def post_deck(
         body.sideboard,
     )
     if body.leader_image_url is not None:
-        await set_team_logo_for_user_in_tournament(
-            tournament_id=tournament_id,
-            user_id=target_user_id,
-            logo_path=body.leader_image_url,
-        )
+        try:
+            await set_team_logo_for_user_in_tournament(
+                tournament_id=tournament_id,
+                user_id=target_user_id,
+                logo_path=body.leader_image_url,
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to sync team logo from deck save: {exc}")
+    return LeagueDeckResponse(data=deck)
+
+
+@router.post(
+    "/tournaments/{tournament_id}/league/submit_entry",
+    response_model=LeagueDeckResponse,
+)
+async def submit_league_entry(
+    tournament_id: TournamentId,
+    body: LeagueParticipantSubmissionBody,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+) -> LeagueDeckResponse:
+    participant_name = (
+        body.participant_name.strip() if body.participant_name is not None else user_public.name.strip()
+    )
+    if participant_name == "":
+        participant_name = user_public.name
+
+    existing_player = await get_player_by_name(participant_name, tournament_id)
+    if existing_player is None:
+        await insert_player(PlayerBody(name=participant_name, active=True), tournament_id)
+
+    season = await get_or_create_active_season(tournament_id)
+    deck = await upsert_deck(
+        season.id,
+        user_public.id,
+        tournament_id,
+        body.deck_name,
+        body.leader,
+        body.base,
+        body.mainboard,
+        body.sideboard,
+    )
+    if body.leader_image_url is not None:
+        try:
+            await set_team_logo_for_user_in_tournament(
+                tournament_id=tournament_id,
+                user_id=user_public.id,
+                logo_path=body.leader_image_url,
+            )
+        except Exception as exc:
+            logger.warning(f"Failed to sync team logo from participant submission: {exc}")
     return LeagueDeckResponse(data=deck)
 
 
@@ -311,6 +364,54 @@ async def export_standings_template(
     }
 
 
+@router.get("/tournaments/{tournament_id}/league/admin/export/season_standings.csv")
+async def export_standings_csv(
+    tournament_id: TournamentId,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+) -> Response:
+    if not user_is_admin(user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+
+    season = await get_or_create_active_season(tournament_id)
+    standings = await get_league_standings(tournament_id, season.id)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(
+        [
+            "rank",
+            "user_name",
+            "user_email",
+            "points",
+            "role",
+            "can_manage_points",
+            "can_manage_tournaments",
+            "accolades",
+        ]
+    )
+    for index, row in enumerate(standings, start=1):
+        writer.writerow(
+            [
+                index,
+                row.user_name,
+                row.user_email,
+                row.points,
+                row.role.value if row.role is not None else "",
+                row.can_manage_points,
+                row.can_manage_tournaments,
+                " | ".join(row.accolades),
+            ]
+        )
+
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="season-standings-{tournament_id}.csv"'
+        },
+    )
+
+
 @router.post("/tournaments/{tournament_id}/league/admin/import/standings", response_model=SuccessResponse)
 async def import_standings_template(
     tournament_id: TournamentId,
@@ -362,4 +463,3 @@ async def import_tournament_format(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
     await sql_update_tournament(tournament_id, body)
     return SuccessResponse()
-

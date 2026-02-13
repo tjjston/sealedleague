@@ -1,4 +1,4 @@
-import { Grid, Select, Title } from '@mantine/core';
+import { Button, Grid, Group, Select, Title } from '@mantine/core';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -10,6 +10,7 @@ import { FullTeamWithPlayers, StageItemWithRounds } from '@openapi';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
 import { getStages, getTeamsPaginated } from '@services/adapter';
 import { getStageItemList, getStageItemTeamIdsLookup } from '@services/lookups';
+import { importUsersAsTeams } from '@services/team';
 
 function StageItemSelect({
   groupStageItems,
@@ -76,10 +77,21 @@ export default function TeamsPage() {
               />
             </Grid.Col>
             <Grid.Col span="auto">
-              <TeamCreateModal
-                swrTeamsResponse={swrTeamsResponse}
-                tournament_id={tournamentData.id}
-              />
+              <Group>
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    await importUsersAsTeams(tournamentData.id);
+                    await swrTeamsResponse.mutate();
+                  }}
+                >
+                  Import Users
+                </Button>
+                <TeamCreateModal
+                  swrTeamsResponse={swrTeamsResponse}
+                  tournament_id={tournamentData.id}
+                />
+              </Group>
             </Grid.Col>
           </Grid>
         </Grid.Col>

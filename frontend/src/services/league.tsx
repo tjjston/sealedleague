@@ -57,6 +57,23 @@ export async function deleteDeck(tournament_id: number, deck_id: number) {
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function submitLeagueEntry(
+  tournament_id: number,
+  body: {
+    participant_name?: string;
+    deck_name: string;
+    leader: string;
+    base: string;
+    leader_image_url?: string;
+    mainboard: Record<string, number>;
+    sideboard: Record<string, number>;
+  }
+) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/league/submit_entry`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function updateSeasonPrivileges(
   tournament_id: number,
   user_id: number,
@@ -109,5 +126,13 @@ export async function exportTournamentFormatTemplate(tournament_id: number) {
 export async function importTournamentFormatTemplate(tournament_id: number, body: any) {
   return createAxios()
     .post(`tournaments/${tournament_id}/league/admin/import/tournament_format`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function exportSeasonStandingsCsv(tournament_id: number) {
+  return createAxios()
+    .get(`tournaments/${tournament_id}/league/admin/export/season_standings.csv`, {
+      responseType: 'text',
+    })
     .catch((response: any) => handleRequestError(response));
 }

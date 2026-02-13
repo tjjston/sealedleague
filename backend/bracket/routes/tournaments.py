@@ -43,6 +43,9 @@ from bracket.sql.tournaments import (
     sql_update_tournament_status,
 )
 from bracket.sql.users import get_user_access_to_club, get_which_clubs_has_user_access_to
+from bracket.sql.users import get_users_for_club
+from bracket.sql.players import insert_player
+from bracket.models.db.player import PlayerBody
 from bracket.utils.errors import (
     ForeignKey,
     UniqueIndex,
@@ -173,12 +176,22 @@ async def create_tournament(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    club_users = await get_users_for_club(tournament_to_insert.club_id)
+    check_requirement([], user, "max_players", additions=len(club_users))
+
     async with database.transaction():
         with check_unique_constraint_violation({UniqueIndex.ix_tournaments_dashboard_endpoint}):
             tournament_id = await sql_create_tournament(tournament_to_insert)
 
         ranking = RankingCreateBody()
         await sql_create_ranking(tournament_id, ranking, position=0)
+
+        # Prepopulate tournament entrants from users in the same club.
+        for club_user in club_users:
+            player_name = club_user.name.strip()
+            if player_name == "":
+                continue
+            await insert_player(PlayerBody(name=player_name, active=True), tournament_id)
 
     return SuccessResponse()
 

@@ -29,7 +29,7 @@ export function handleRequestError(response: AxiosError) {
     showNotification({
       color: 'red',
       title: 'An error occurred',
-      message: 'Internal server error',
+      message: 'Cannot reach the API server. Check container health and API URL.',
       autoClose: 10000,
     });
     return;
@@ -55,7 +55,15 @@ export function handleRequestError(response: AxiosError) {
       message,
       autoClose: 10000,
     });
+    return;
   }
+
+  showNotification({
+    color: 'red',
+    title: 'An error occurred',
+    message: response.message,
+    autoClose: 10000,
+  });
 }
 
 export function requestSucceeded(result: AxiosResponse | AxiosError) {
@@ -230,7 +238,7 @@ export function getUsersAdmin(): SWRResponse<any> {
 }
 
 export function getLeagueCards(
-  tournament_id: number,
+  tournament_id: number | null,
   filters: {
     query?: string;
     name?: string;
@@ -248,6 +256,9 @@ export function getLeagueCards(
     offset?: number;
   }
 ): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
   const params = new URLSearchParams();
   if (filters.query != null && filters.query !== '') params.set('query', filters.query);
   if (filters.name != null && filters.name !== '') params.set('name', filters.name);
@@ -267,23 +278,38 @@ export function getLeagueCards(
 }
 
 export function getLeagueCardPool(
-  tournament_id: number,
+  tournament_id: number | null,
   user_id?: number | null
 ): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
   const suffix = user_id == null ? '' : `?user_id=${user_id}`;
   return useSWR(`tournaments/${tournament_id}/league/card_pool${suffix}`, fetcher);
 }
 
-export function getLeagueDecks(tournament_id: number, user_id?: number | null): SWRResponse<any> {
+export function getLeagueDecks(
+  tournament_id: number | null,
+  user_id?: number | null
+): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
   const suffix = user_id == null ? '' : `?user_id=${user_id}`;
   return useSWR(`tournaments/${tournament_id}/league/decks${suffix}`, fetcher);
 }
 
-export function getLeagueSeasonStandings(tournament_id: number): SWRResponse<any> {
+export function getLeagueSeasonStandings(tournament_id: number | null): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
   return useSWR(`tournaments/${tournament_id}/league/season_standings`, fetcher);
 }
 
-export function getLeagueAdminUsers(tournament_id: number): SWRResponse<any> {
+export function getLeagueAdminUsers(tournament_id: number | null): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
   return useSWR(`tournaments/${tournament_id}/league/admin/users`, fetcher);
 }
 

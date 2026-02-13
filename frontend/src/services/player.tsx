@@ -12,6 +12,12 @@ export async function createMultiplePlayers(tournament_id: number, names: string
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function importUsersAsPlayers(tournament_id: number) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/players/import_users`)
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function deletePlayer(tournament_id: number, player_id: number) {
   return createAxios()
     .delete(`tournaments/${tournament_id}/players/${player_id}`)

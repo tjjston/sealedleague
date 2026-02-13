@@ -21,6 +21,12 @@ export async function createTeams(tournament_id: number, names: string, active: 
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function importUsersAsTeams(tournament_id: number) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/teams/import_users`)
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function deleteTeam(tournament_id: number, team_id: number) {
   await createAxios()
     .delete(`tournaments/${tournament_id}/teams/${team_id}`)

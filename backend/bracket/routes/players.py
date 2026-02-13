@@ -21,6 +21,7 @@ from bracket.sql.players import (
     insert_player,
     sql_delete_player,
 )
+from bracket.sql.users import get_users_for_tournament
 from bracket.utils.db import fetch_one_parsed
 from bracket.utils.id_types import PlayerId, TournamentId
 from bracket.utils.pagination import PaginationPlayers
@@ -111,4 +112,21 @@ async def create_multiple_players(
     for player_name in player_names:
         await insert_player(PlayerBody(name=player_name, active=player_body.active), tournament_id)
 
+    return SuccessResponse()
+
+
+@router.post("/tournaments/{tournament_id}/players/import_users", response_model=SuccessResponse)
+async def import_users_as_players(
+    tournament_id: TournamentId,
+    user: UserPublic = Depends(user_authenticated_for_tournament),
+    _: Tournament = Depends(disallow_archived_tournament),
+) -> SuccessResponse:
+    existing_players = await get_all_players_in_tournament(tournament_id)
+    existing_names = {player.name.lower() for player in existing_players}
+    users = await get_users_for_tournament(tournament_id)
+    new_user_names = [u.name for u in users if u.name.lower() not in existing_names]
+    check_requirement(existing_players, user, "max_players", additions=len(new_user_names))
+
+    for player_name in new_user_names:
+        await insert_player(PlayerBody(name=player_name, active=True), tournament_id)
     return SuccessResponse()

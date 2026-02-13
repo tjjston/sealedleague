@@ -1,4 +1,4 @@
-import { Grid, Title } from '@mantine/core';
+import { Button, Grid, Group, Title } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 
 import PlayerCreateModal from '@components/modals/player_create_modal';
@@ -7,6 +7,7 @@ import { getTableState, tableStateToPagination } from '@components/tables/table'
 import { capitalize, getTournamentIdFromRouter } from '@components/utils/util';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
 import { getPlayersPaginated } from '@services/adapter';
+import { importUsersAsPlayers } from '@services/player';
 
 export default function PlayersPage() {
   const tableState = getTableState('name');
@@ -24,10 +25,21 @@ export default function PlayersPage() {
           <Title>{capitalize(t('players_title'))}</Title>
         </Grid.Col>
         <Grid.Col span="content">
-          <PlayerCreateModal
-            swrPlayersResponse={swrPlayersResponse}
-            tournament_id={tournamentData.id}
-          />
+          <Group>
+            <Button
+              variant="outline"
+              onClick={async () => {
+                await importUsersAsPlayers(tournamentData.id);
+                await swrPlayersResponse.mutate();
+              }}
+            >
+              Import Users
+            </Button>
+            <PlayerCreateModal
+              swrPlayersResponse={swrPlayersResponse}
+              tournament_id={tournamentData.id}
+            />
+          </Group>
         </Grid.Col>
       </Grid>
       <PlayersTable

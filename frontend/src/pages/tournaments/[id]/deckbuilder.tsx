@@ -24,12 +24,14 @@ import { showNotification } from '@mantine/notifications';
 import { useEffect, useMemo, useState } from 'react';
 
 import { getTournamentIdFromRouter } from '@components/utils/util';
+import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
 import {
   getLeagueAdminUsers,
   getLeagueCardPool,
   getLeagueCards,
   getLeagueDecks,
+  getTournaments,
   getUser,
 } from '@services/adapter';
 import {
@@ -37,6 +39,7 @@ import {
   exportDeckSwuDb,
   importDeckSwuDb,
   saveDeck,
+  submitLeagueEntry,
   upsertCardPoolEntry,
 } from '@services/league';
 
@@ -112,11 +115,32 @@ function GraphBars({
   );
 }
 
-export default function DeckbuilderPage() {
+export default function DeckbuilderPage({
+  standalone = false,
+}: {
+  standalone?: boolean;
+}) {
   const { tournamentData } = getTournamentIdFromRouter();
+  const swrTournamentsResponse = getTournaments('OPEN');
+  const tournaments = swrTournamentsResponse.data?.data ?? [];
+
+  const [selectedTournamentId, setSelectedTournamentId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!standalone || tournaments.length < 1 || selectedTournamentId != null) return;
+    const saved = window.localStorage.getItem('league_default_tournament_id');
+    const selected = tournaments.find((t: any) => String(t.id) === saved) ?? tournaments[0];
+    setSelectedTournamentId(String(selected.id));
+    window.localStorage.setItem('league_default_tournament_id', String(selected.id));
+  }, [standalone, tournaments, selectedTournamentId]);
+
+  const activeTournamentId = standalone
+    ? Number(selectedTournamentId ?? tournaments[0]?.id ?? 0)
+    : tournamentData.id;
+  const hasTournament = Number.isFinite(activeTournamentId) && activeTournamentId > 0;
 
   const swrCurrentUserResponse = getUser();
-  const swrAdminUsersResponse = getLeagueAdminUsers(tournamentData.id);
+  const swrAdminUsersResponse = getLeagueAdminUsers(activeTournamentId);
   const isAdmin = swrAdminUsersResponse.data != null;
   const adminUsers = swrAdminUsersResponse.data?.data ?? [];
 
@@ -139,9 +163,12 @@ export default function DeckbuilderPage() {
 
   const targetUserId = isAdmin && selectedUserId != null ? Number(selectedUserId) : null;
 
-  const swrCatalogResponse = getLeagueCards(tournamentData.id, { limit: 5000, offset: 0 });
-  const swrCardPoolResponse = getLeagueCardPool(tournamentData.id, targetUserId);
-  const swrDecksResponse = getLeagueDecks(tournamentData.id, targetUserId);
+  const swrCatalogResponse = getLeagueCards(hasTournament ? activeTournamentId : null, {
+    limit: 5000,
+    offset: 0,
+  });
+  const swrCardPoolResponse = getLeagueCardPool(hasTournament ? activeTournamentId : null, targetUserId);
+  const swrDecksResponse = getLeagueDecks(hasTournament ? activeTournamentId : null, targetUserId);
 
   const allCards: CardItem[] = swrCatalogResponse.data?.data?.cards ?? [];
   const decks = swrDecksResponse.data?.data ?? [];
@@ -320,7 +347,8 @@ export default function DeckbuilderPage() {
   ]);
 
   async function addToPool(cardId: string, nextQuantity: number) {
-    await upsertCardPoolEntry(tournamentData.id, cardId, nextQuantity, targetUserId ?? undefined);
+    if (!hasTournament) return;
+    await upsertCardPoolEntry(activeTournamentId, cardId, nextQuantity, targetUserId ?? undefined);
     await swrCardPoolResponse.mutate();
   }
 
@@ -356,11 +384,11 @@ export default function DeckbuilderPage() {
   }
 
   async function onSaveDeck() {
-    if (leaderCard == null || baseCard == null) return;
+    if (!hasTournament || leaderCard == null || baseCard == null) return;
 
-    await saveDeck(tournamentData.id, {
+    await saveDeck(activeTournamentId, {
       user_id: targetUserId ?? undefined,
-      tournament_id: tournamentData.id,
+      tournament_id: activeTournamentId,
       name: deckName,
       leader: leaderCard.card_id,
       base: baseCard.card_id,
@@ -372,7 +400,8 @@ export default function DeckbuilderPage() {
   }
 
   async function onExportSwuDb(deckId: number) {
-    const response = await exportDeckSwuDb(tournamentData.id, deckId);
+    if (!hasTournament) return;
+    const response = await exportDeckSwuDb(activeTournamentId, deckId);
     // @ts-ignore
     const payload = response?.data;
     if (payload == null) return;
@@ -386,13 +415,14 @@ export default function DeckbuilderPage() {
   }
 
   async function onImportSwuDb() {
+    if (!hasTournament) return;
     try {
       const parsed = JSON.parse(swudbImportJson);
       const leader = parsed.leader?.id ?? parsed.leader;
       const base = parsed.base?.id ?? parsed.base;
       const deck = Array.isArray(parsed.deck) ? parsed.deck : [];
       const sideboard = Array.isArray(parsed.sideboard) ? parsed.sideboard : [];
-      await importDeckSwuDb(tournamentData.id, {
+      await importDeckSwuDb(activeTournamentId, {
         user_id: targetUserId ?? undefined,
         name: parsed.name ?? `Imported Deck ${new Date().toISOString()}`,
         leader,
@@ -501,13 +531,47 @@ export default function DeckbuilderPage() {
     showNotification({ color: 'green', title: 'Analytics JSON copied', message: '' });
   }
 
-  return (
-    <TournamentLayout tournament_id={tournamentData.id}>
-      <Stack>
+  async function onSubmitEntry() {
+    if (!hasTournament || leaderCard == null || baseCard == null) return;
+    await submitLeagueEntry(activeTournamentId, {
+      deck_name: deckName,
+      leader: leaderCard.card_id,
+      base: baseCard.card_id,
+      leader_image_url: leaderCard.image_url ?? undefined,
+      mainboard,
+      sideboard,
+    });
+    await swrDecksResponse.mutate();
+    showNotification({
+      color: 'green',
+      title: 'Tournament entry submitted',
+      message: 'You have been entered with your selected deck.',
+    });
+  }
+
+  const content = (
+    <Stack>
         <Title order={2}>Deckbuilder</Title>
         <Text c="dimmed">
           Search by name, keyword, trait, cost, type, aspect, set, rules, and arena. Card pools remain user-specific.
         </Text>
+        {standalone && (
+          <Card withBorder>
+            <Select
+              label="Tournament"
+              value={selectedTournamentId}
+              onChange={(value) => {
+                setSelectedTournamentId(value);
+                if (value != null) {
+                  window.localStorage.setItem('league_default_tournament_id', value);
+                }
+              }}
+              allowDeselect={false}
+              data={tournaments.map((t: any) => ({ value: String(t.id), label: t.name }))}
+            />
+          </Card>
+        )}
+        {!hasTournament && <Text c="dimmed">No tournament selected.</Text>}
 
         {isAdmin && (
           <Card withBorder>
@@ -766,6 +830,9 @@ export default function DeckbuilderPage() {
                 <Button onClick={onSaveDeck} disabled={leaderCardId == null || baseCardId == null}>
                   Save Deck
                 </Button>
+                <Button variant="outline" onClick={onSubmitEntry} disabled={leaderCardId == null || baseCardId == null}>
+                  Submit Tournament Entry
+                </Button>
               </Stack>
             </Card>
 
@@ -838,7 +905,7 @@ export default function DeckbuilderPage() {
                               variant="subtle"
                               color="red"
                               onClick={async () => {
-                                await deleteDeck(tournamentData.id, deck.id);
+                                await deleteDeck(activeTournamentId, deck.id);
                                 await swrDecksResponse.mutate();
                               }}
                             >
@@ -881,7 +948,12 @@ export default function DeckbuilderPage() {
             {graphContent}
           </Stack>
         </Card>
-      </Stack>
-    </TournamentLayout>
+    </Stack>
   );
+
+  if (standalone) {
+    return <Layout>{content}</Layout>;
+  }
+
+  return <TournamentLayout tournament_id={activeTournamentId}>{content}</TournamentLayout>;
 }

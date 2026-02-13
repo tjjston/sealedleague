@@ -155,13 +155,6 @@ export function TournamentLinks({ tournament_id }: any) {
 export function getTournamentHeaderLinks(tournament_id: number) {
   const tm_prefix = `/tournaments/${tournament_id}`;
   return [
-    { link: `${tm_prefix}/deckbuilder`, label: 'Deckbuilder', links: [], icon: IconBrackets },
-    {
-      link: `${tm_prefix}/season-standings`,
-      label: 'Season Standings',
-      links: [],
-      icon: IconScoreboard,
-    },
     { link: `${tm_prefix}/admin`, label: 'League Admin', links: [], icon: IconAdjustments },
   ];
 }

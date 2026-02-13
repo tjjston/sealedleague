@@ -34,8 +34,6 @@ import RankingsPage from './pages/tournaments/[id]/rankings';
 import ResultsPage from './pages/tournaments/[id]/results';
 import SchedulePage from './pages/tournaments/[id]/schedule';
 import LeagueAdminPage from './pages/tournaments/[id]/admin';
-import DeckbuilderPage from './pages/tournaments/[id]/deckbuilder';
-import SeasonStandingsPage from './pages/tournaments/[id]/season_standings';
 import SettingsPage from './pages/tournaments/[id]/settings';
 import StagesPage from './pages/tournaments/[id]/stages';
 import SwissTournamentPage from './pages/tournaments/[id]/stages/swiss/[stage_item_id]';
@@ -100,8 +98,6 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="teams" element={<TeamsPage />} />
                   <Route path="schedule" element={<SchedulePage />} />
                   <Route path="rankings" element={<RankingsPage />} />
-                  <Route path="deckbuilder" element={<DeckbuilderPage />} />
-                  <Route path="season-standings" element={<SeasonStandingsPage />} />
                   <Route path="admin" element={<LeagueAdminPage />} />
                   <Route path="settings" element={<SettingsPage />} />
                   <Route path="results" element={<ResultsPage />} />

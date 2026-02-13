@@ -21,6 +21,31 @@ async def get_user_access_to_tournament(tournament_id: TournamentId, user_id: Us
     return tournament_id in {tournament["id"] for tournament in result}
 
 
+async def get_users_for_tournament(tournament_id: TournamentId) -> list[UserPublic]:
+    query = """
+        SELECT DISTINCT u.*
+        FROM tournaments t
+        JOIN users_x_clubs uxc ON uxc.club_id = t.club_id
+        JOIN users u ON u.id = uxc.user_id
+        WHERE t.id = :tournament_id
+        ORDER BY u.name ASC
+    """
+    result = await database.fetch_all(query=query, values={"tournament_id": tournament_id})
+    return [UserPublic.model_validate(dict(user._mapping)) for user in result]
+
+
+async def get_users_for_club(club_id: ClubId) -> list[UserPublic]:
+    query = """
+        SELECT DISTINCT u.*
+        FROM users_x_clubs uxc
+        JOIN users u ON u.id = uxc.user_id
+        WHERE uxc.club_id = :club_id
+        ORDER BY u.name ASC
+    """
+    result = await database.fetch_all(query=query, values={"club_id": club_id})
+    return [UserPublic.model_validate(dict(user._mapping)) for user in result]
+
+
 async def get_which_clubs_has_user_access_to(user_id: UserId) -> set[ClubId]:
     query = """
         SELECT club_id

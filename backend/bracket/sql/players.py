@@ -61,6 +61,20 @@ async def get_player_by_id(player_id: PlayerId, tournament_id: TournamentId) -> 
     return Player.model_validate(result) if result is not None else None
 
 
+async def get_player_by_name(player_name: str, tournament_id: TournamentId) -> Player | None:
+    query = """
+        SELECT *
+        FROM players
+        WHERE lower(name) = lower(:player_name)
+        AND tournament_id = :tournament_id
+        LIMIT 1
+    """
+    result = await database.fetch_one(
+        query=query, values={"player_name": player_name, "tournament_id": tournament_id}
+    )
+    return Player.model_validate(result) if result is not None else None
+
+
 async def get_player_count(
     tournament_id: TournamentId,
     *,
@@ -78,14 +92,12 @@ async def get_player_count(
 
 async def sql_delete_player(tournament_id: TournamentId, player_id: PlayerId) -> None:
     query = "DELETE FROM players WHERE id = :player_id AND tournament_id = :tournament_id"
-    await database.fetch_one(
-        query=query, values={"player_id": player_id, "tournament_id": tournament_id}
-    )
+    await database.execute(query=query, values={"player_id": player_id, "tournament_id": tournament_id})
 
 
 async def sql_delete_players_of_tournament(tournament_id: TournamentId) -> None:
     query = "DELETE FROM players WHERE tournament_id = :tournament_id"
-    await database.fetch_one(query=query, values={"tournament_id": tournament_id})
+    await database.execute(query=query, values={"tournament_id": tournament_id})
 
 
 async def insert_player(player_body: PlayerBody, tournament_id: TournamentId) -> None:

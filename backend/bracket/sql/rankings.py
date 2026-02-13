@@ -73,9 +73,7 @@ async def sql_update_ranking(
 
 async def sql_delete_ranking(tournament_id: TournamentId, ranking_id: RankingId) -> None:
     query = "DELETE FROM rankings WHERE id = :ranking_id AND tournament_id = :tournament_id"
-    await database.fetch_one(
-        query=query, values={"ranking_id": ranking_id, "tournament_id": tournament_id}
-    )
+    await database.execute(query=query, values={"ranking_id": ranking_id, "tournament_id": tournament_id})
 
 
 async def sql_create_ranking(

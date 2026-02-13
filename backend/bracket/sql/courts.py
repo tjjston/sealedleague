@@ -32,11 +32,9 @@ async def update_court(
 
 async def sql_delete_court(tournament_id: TournamentId, court_id: CourtId) -> None:
     query = "DELETE FROM courts WHERE id = :court_id AND tournament_id = :tournament_id"
-    await database.fetch_one(
-        query=query, values={"court_id": court_id, "tournament_id": tournament_id}
-    )
+    await database.execute(query=query, values={"court_id": court_id, "tournament_id": tournament_id})
 
 
 async def sql_delete_courts_of_tournament(tournament_id: TournamentId) -> None:
     query = "DELETE FROM courts WHERE tournament_id = :tournament_id"
-    await database.fetch_one(query=query, values={"tournament_id": tournament_id})
+    await database.execute(query=query, values={"tournament_id": tournament_id})

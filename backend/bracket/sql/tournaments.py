@@ -63,7 +63,7 @@ async def sql_delete_tournament(tournament_id: TournamentId) -> None:
         DELETE FROM tournaments
         WHERE id = :tournament_id
         """
-    await database.fetch_one(query=query, values={"tournament_id": tournament_id})
+    await database.execute(query=query, values={"tournament_id": tournament_id})
 
 
 async def sql_update_tournament(

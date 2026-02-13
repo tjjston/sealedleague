@@ -400,7 +400,16 @@ async def set_team_logo_for_user_in_tournament(
         UPDATE teams
         SET logo_path = :logo_path
         WHERE tournament_id = :tournament_id
-          AND lower(name) = lower((SELECT name FROM users WHERE id = :user_id))
+          AND (
+            lower(name) = lower((SELECT name FROM users WHERE id = :user_id))
+            OR id IN (
+                SELECT pt.team_id
+                FROM players_x_teams pt
+                JOIN players p ON p.id = pt.player_id
+                WHERE p.tournament_id = :tournament_id
+                  AND lower(p.name) = lower((SELECT name FROM users WHERE id = :user_id))
+            )
+          )
     """
     await database.execute(
         query=query,
@@ -483,3 +492,11 @@ async def get_deck_by_id(deck_id: DeckId) -> LeagueDeckView | None:
 async def delete_deck(deck_id: DeckId) -> None:
     query = "DELETE FROM decks WHERE id = :deck_id"
     await database.execute(query=query, values={"deck_id": deck_id})
+
+
+async def delete_league_data_for_tournament(tournament_id: TournamentId) -> None:
+    query = """
+        DELETE FROM seasons
+        WHERE tournament_id = :tournament_id
+    """
+    await database.execute(query=query, values={"tournament_id": tournament_id})

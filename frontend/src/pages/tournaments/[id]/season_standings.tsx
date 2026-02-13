@@ -1,19 +1,81 @@
-import { Badge, Card, Group, Stack, Table, Text, Title } from '@mantine/core';
+import { Badge, Button, Card, Group, Select, Stack, Table, Text, Title } from '@mantine/core';
+import { useEffect, useState } from 'react';
 
 import { getTournamentIdFromRouter } from '@components/utils/util';
+import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
-import { getLeagueSeasonStandings } from '@services/adapter';
+import { getLeagueAdminUsers, getLeagueSeasonStandings, getTournaments } from '@services/adapter';
+import { exportSeasonStandingsCsv } from '@services/league';
 
-export default function SeasonStandingsPage() {
+export default function SeasonStandingsPage({
+  standalone = false,
+}: {
+  standalone?: boolean;
+}) {
   const { tournamentData } = getTournamentIdFromRouter();
-  const swrStandingsResponse = getLeagueSeasonStandings(tournamentData.id);
-  const rows = swrStandingsResponse.data?.data ?? [];
+  const swrTournamentsResponse = getTournaments('OPEN');
+  const tournaments = swrTournamentsResponse.data?.data ?? [];
+  const [selectedTournamentId, setSelectedTournamentId] = useState<string | null>(null);
 
-  return (
-    <TournamentLayout tournament_id={tournamentData.id}>
-      <Stack>
+  useEffect(() => {
+    if (!standalone || tournaments.length < 1 || selectedTournamentId != null) return;
+    const saved = window.localStorage.getItem('league_default_tournament_id');
+    const selected = tournaments.find((t: any) => String(t.id) === saved) ?? tournaments[0];
+    setSelectedTournamentId(String(selected.id));
+    window.localStorage.setItem('league_default_tournament_id', String(selected.id));
+  }, [standalone, tournaments, selectedTournamentId]);
+
+  const activeTournamentId = standalone
+    ? Number(selectedTournamentId ?? tournaments[0]?.id ?? 0)
+    : tournamentData.id;
+
+  const swrStandingsResponse = getLeagueSeasonStandings(activeTournamentId);
+  const swrAdminUsersResponse = getLeagueAdminUsers(activeTournamentId);
+  const isAdmin = swrAdminUsersResponse.data != null;
+  const rows = swrStandingsResponse.data?.data ?? [];
+  const content = (
+    <Stack>
         <Title>Season Standings</Title>
         <Text c="dimmed">Cumulative points and league accolades for this active season.</Text>
+        {standalone && (
+          <Card withBorder>
+            <Group align="end">
+              <Select
+                label="Tournament"
+                value={selectedTournamentId}
+                onChange={(value) => {
+                  setSelectedTournamentId(value);
+                  if (value != null) {
+                    window.localStorage.setItem('league_default_tournament_id', value);
+                  }
+                }}
+                allowDeselect={false}
+                data={tournaments.map((t: any) => ({ value: String(t.id), label: t.name }))}
+                style={{ minWidth: 320 }}
+              />
+              {isAdmin && (
+                <Button
+                  variant="outline"
+                  onClick={async () => {
+                    const response = await exportSeasonStandingsCsv(activeTournamentId);
+                    // @ts-ignore
+                    const csv = response?.data;
+                    if (csv == null) return;
+                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                    const url = window.URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = `season-standings-${activeTournamentId}.csv`;
+                    link.click();
+                    window.URL.revokeObjectURL(url);
+                  }}
+                >
+                  Export CSV
+                </Button>
+              )}
+            </Group>
+          </Card>
+        )}
         <Card withBorder>
           <Table stickyHeader>
             <Table.Thead>
@@ -59,7 +121,11 @@ export default function SeasonStandingsPage() {
             </Table.Tbody>
           </Table>
         </Card>
-      </Stack>
-    </TournamentLayout>
+    </Stack>
   );
+
+  if (standalone) {
+    return <Layout>{content}</Layout>;
+  }
+  return <TournamentLayout tournament_id={activeTournamentId}>{content}</TournamentLayout>;
 }

@@ -1,4 +1,6 @@
-from pydantic import BaseModel, Field
+import json
+
+from pydantic import BaseModel, Field, field_validator
 
 from bracket.models.db.account import UserAccountType
 from bracket.models.db.league import SeasonMembershipRole
@@ -15,6 +17,27 @@ class LeagueDeckUpsertBody(BaseModel):
     mainboard: dict[str, int] = Field(default_factory=dict)
     sideboard: dict[str, int] = Field(default_factory=dict)
 
+    @field_validator("mainboard", "sideboard", mode="before")
+    @classmethod
+    def sanitize_board(cls, value: object) -> dict[str, int]:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError):
+                return {}
+        if not isinstance(value, dict):
+            return {}
+
+        sanitized: dict[str, int] = {}
+        for card_id, count in value.items():
+            try:
+                normalized_count = int(count)
+            except (TypeError, ValueError):
+                continue
+            if normalized_count > 0:
+                sanitized[str(card_id)] = normalized_count
+        return sanitized
+
 
 class LeagueDeckImportCard(BaseModel):
     id: str
@@ -28,6 +51,37 @@ class LeagueDeckImportSwuDbBody(BaseModel):
     base: str
     deck: list[LeagueDeckImportCard] = Field(default_factory=list)
     sideboard: list[LeagueDeckImportCard] = Field(default_factory=list)
+
+
+class LeagueParticipantSubmissionBody(BaseModel):
+    participant_name: str | None = None
+    deck_name: str
+    leader: str
+    base: str
+    leader_image_url: str | None = None
+    mainboard: dict[str, int] = Field(default_factory=dict)
+    sideboard: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("mainboard", "sideboard", mode="before")
+    @classmethod
+    def sanitize_submission_board(cls, value: object) -> dict[str, int]:
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except (TypeError, ValueError):
+                return {}
+        if not isinstance(value, dict):
+            return {}
+
+        sanitized: dict[str, int] = {}
+        for card_id, count in value.items():
+            try:
+                normalized_count = int(count)
+            except (TypeError, ValueError):
+                continue
+            if normalized_count > 0:
+                sanitized[str(card_id)] = normalized_count
+        return sanitized
 
 
 class LeaguePointsImportRow(BaseModel):
@@ -75,6 +129,20 @@ class LeagueDeckView(BaseModel):
     base: str
     mainboard: dict[str, int] = Field(default_factory=dict)
     sideboard: dict[str, int] = Field(default_factory=dict)
+
+    @field_validator("mainboard", "sideboard", mode="before")
+    @classmethod
+    def parse_json_boards(cls, value: object) -> dict[str, int]:
+        if isinstance(value, dict):
+            return {str(key): int(count) for key, count in value.items()}
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, dict):
+                    return {str(key): int(count) for key, count in parsed.items()}
+            except (TypeError, ValueError):
+                return {}
+        return {}
 
 
 class LeagueStandingsRow(BaseModel):
