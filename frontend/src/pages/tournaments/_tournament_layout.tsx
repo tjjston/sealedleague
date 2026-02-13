@@ -2,7 +2,7 @@ import { Group, ThemeIcon, Title, Tooltip } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { HiArchiveBoxArrowDown } from 'react-icons/hi2';
 
-import { TournamentLinks } from '@components/navbar/_main_links';
+import { TournamentLinks, getTournamentHeaderLinks } from '@components/navbar/_main_links';
 import { responseIsValid } from '@components/utils/util';
 import Layout from '@pages/_layout';
 import { checkForAuthError, getTournamentById } from '@services/adapter';
@@ -14,6 +14,7 @@ export default function TournamentLayout({ children, tournament_id }: any) {
   checkForAuthError(tournamentResponse);
 
   const tournamentLinks = <TournamentLinks tournament_id={tournament_id} />;
+  const tournamentHeaderLinks = getTournamentHeaderLinks(tournament_id);
   const breadcrumbs = responseIsValid(tournamentResponse) ? (
     <Group gap="xs" miw="25rem">
       <Title order={2} maw="20rem">
@@ -38,7 +39,10 @@ export default function TournamentLayout({ children, tournament_id }: any) {
   ) : null;
 
   return (
-    <Layout additionalNavbarLinks={tournamentLinks} breadcrumbs={breadcrumbs}>
+    <Layout
+      additionalNavbarLinks={{ sidebar: tournamentLinks, header: tournamentHeaderLinks }}
+      breadcrumbs={breadcrumbs}
+    >
       {children}
     </Layout>
   );

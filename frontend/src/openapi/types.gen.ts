@@ -1220,7 +1220,7 @@ export type StageRankingResponse = {
 /**
  * StageType
  */
-export type StageType = 'ROUND_ROBIN' | 'SINGLE_ELIMINATION' | 'SWISS';
+export type StageType = 'ROUND_ROBIN' | 'SINGLE_ELIMINATION' | 'DOUBLE_ELIMINATION' | 'SWISS';
 
 /**
  * StageUpdateBody

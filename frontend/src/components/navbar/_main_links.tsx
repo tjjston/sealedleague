@@ -1,13 +1,12 @@
 import { Center, Divider, Group, Tooltip, UnstyledButton } from '@mantine/core';
 import {
   Icon,
-  IconBook,
+  IconAdjustments,
   IconBrackets,
-  IconBrandGithub,
-  IconBrowser,
   IconCalendar,
-  IconDots,
+  IconChartBar,
   IconHome,
+  IconLogout,
   IconScoreboard,
   IconSettings,
   IconTrophy,
@@ -19,7 +18,6 @@ import { useLocation } from 'react-router';
 
 import PreloadLink from '@components/utils/link';
 import { capitalize } from '@components/utils/util';
-import { getBaseApiUrl } from '@services/adapter';
 import classes from './_main_links.module.css';
 
 interface MainLinkProps {
@@ -75,25 +73,17 @@ export function getBaseLinksDict() {
   return [
     { link: '/clubs', label: capitalize(t('clubs_title')), links: [], icon: IconUsers },
     { link: '/', label: capitalize(t('tournaments_title')), links: [], icon: IconHome },
+    { link: '/league/deckbuilder', label: 'Deckbuilder', links: [], icon: IconBrackets },
+    { link: '/league/season-standings', label: 'Season Standings', links: [], icon: IconChartBar },
     {
       link: '/user',
-      label: t('user_title'),
-      links: [],
-      icon: IconUser,
-    },
-    {
-      icon: IconDots,
-      link: '',
-      label: t('more_title'),
+      label: 'Account',
       links: [
-        { link: '/', label: t('website_title'), icon: IconBrowser },
-        {
-          link: '/docs',
-          label: t('api_docs_title'),
-          icon: IconBook,
-        },
-        { link: `${getBaseApiUrl()}/docs`, label: t('api_docs_title'), icon: IconBook },
+        { link: '/user', label: 'Profile', icon: IconUser },
+        { link: '/user/settings', label: 'Settings', icon: IconSettings },
+        { link: '/logout', label: 'Logout', icon: IconLogout },
       ],
+      icon: IconUser,
     },
   ];
 }
@@ -160,4 +150,18 @@ export function TournamentLinks({ tournament_id }: any) {
       {links}
     </>
   );
+}
+
+export function getTournamentHeaderLinks(tournament_id: number) {
+  const tm_prefix = `/tournaments/${tournament_id}`;
+  return [
+    { link: `${tm_prefix}/deckbuilder`, label: 'Deckbuilder', links: [], icon: IconBrackets },
+    {
+      link: `${tm_prefix}/season-standings`,
+      label: 'Season Standings',
+      links: [],
+      icon: IconScoreboard,
+    },
+    { link: `${tm_prefix}/admin`, label: 'League Admin', links: [], icon: IconAdjustments },
+  ];
 }

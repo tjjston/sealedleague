@@ -17,9 +17,13 @@ import HomePage from './pages';
 import NotFoundPage from './pages/404';
 import ClubsPage from './pages/clubs';
 import CreateAccountPage from './pages/create_account';
+import AdminUsersPage from './pages/admin_users';
 import CreateDemoAccountPage from './pages/demo';
 import LoginPage from './pages/login';
+import LogoutPage from './pages/logout';
 import PasswordResetPage from './pages/password_reset';
+import LeagueDeckbuilderEntryPage from './pages/league/deckbuilder';
+import LeagueSeasonStandingsEntryPage from './pages/league/season_standings';
 import DashboardSchedulePage from './pages/tournaments/[id]/dashboard';
 import DashboardNotFoundPage from './pages/tournaments/[id]/dashboard/dashboard_404';
 import CourtsPresentPage from './pages/tournaments/[id]/dashboard/present/courts';
@@ -29,6 +33,9 @@ import PlayersPage from './pages/tournaments/[id]/players';
 import RankingsPage from './pages/tournaments/[id]/rankings';
 import ResultsPage from './pages/tournaments/[id]/results';
 import SchedulePage from './pages/tournaments/[id]/schedule';
+import LeagueAdminPage from './pages/tournaments/[id]/admin';
+import DeckbuilderPage from './pages/tournaments/[id]/deckbuilder';
+import SeasonStandingsPage from './pages/tournaments/[id]/season_standings';
 import SettingsPage from './pages/tournaments/[id]/settings';
 import StagesPage from './pages/tournaments/[id]/stages';
 import SwissTournamentPage from './pages/tournaments/[id]/stages/swiss/[stage_item_id]';
@@ -76,11 +83,16 @@ createRoot(document.getElementById('root')!).render(
             <Routes>
               <Route index element={<HomePage />} />
               <Route path="/login" element={<LoginPage />} />
+              <Route path="/logout" element={<LogoutPage />} />
               <Route path="/clubs" element={<ClubsPage />} />
+              <Route path="/admin/users" element={<AdminUsersPage />} />
               <Route path="/demo" element={<CreateDemoAccountPage />} />
               <Route path="/user" element={<UserPage />} />
+              <Route path="/user/settings" element={<UserPage />} />
               <Route path="/password-reset" element={<PasswordResetPage />} />
               <Route path="/create-account" element={<CreateAccountPage />} />
+              <Route path="/league/deckbuilder" element={<LeagueDeckbuilderEntryPage />} />
+              <Route path="/league/season-standings" element={<LeagueSeasonStandingsEntryPage />} />
 
               <Route path="/tournaments">
                 <Route path=":id">
@@ -88,6 +100,9 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="teams" element={<TeamsPage />} />
                   <Route path="schedule" element={<SchedulePage />} />
                   <Route path="rankings" element={<RankingsPage />} />
+                  <Route path="deckbuilder" element={<DeckbuilderPage />} />
+                  <Route path="season-standings" element={<SeasonStandingsPage />} />
+                  <Route path="admin" element={<LeagueAdminPage />} />
                   <Route path="settings" element={<SettingsPage />} />
                   <Route path="results" element={<ResultsPage />} />
                   <Route path="stages">

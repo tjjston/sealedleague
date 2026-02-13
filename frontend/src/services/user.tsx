@@ -39,6 +39,12 @@ export async function updatePassword(user_id: number, password: string) {
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function updateUserAccountType(user_id: number, accountType: 'REGULAR' | 'DEMO') {
+  return createAxios()
+    .put(`users/${user_id}/account_type`, { account_type: accountType })
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function registerUser(user: UserToRegister, captchaToken: string | null) {
   return createAxios()
     .post('users/register', {

@@ -1,5 +1,4 @@
 import {
-  Alert,
   Anchor,
   Box,
   Button,
@@ -11,7 +10,7 @@ import {
   Title,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
-import { IconAlertCircle, IconArrowLeft } from '@tabler/icons-react';
+import { IconArrowLeft } from '@tabler/icons-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
@@ -56,15 +55,6 @@ export default function CreateAccountPage() {
         {t('create_account_title')}
       </Title>
       <Paper withBorder shadow="md" p={30} radius="md" mt="xl">
-        <Alert
-          icon={<IconAlertCircle size={16} />}
-          mb={16}
-          title={t('create_account_alert_title')}
-          color="red"
-          radius="md"
-        >
-          {t('create_account_alert_description')}
-        </Alert>
         <form
           onSubmit={form.onSubmit(async (values) => {
             await registerAndRedirect(values);

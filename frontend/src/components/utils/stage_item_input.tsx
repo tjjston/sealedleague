@@ -48,3 +48,15 @@ export function formatStageItemInput(
   }
   return null;
 }
+
+export function formatStageItemInputWithRecord(
+  stage_item_input: StageItemInput | null,
+  stageItemsLookup: any
+) {
+  const base = formatStageItemInput(stage_item_input, stageItemsLookup);
+  if (base == null || stage_item_input == null) return base;
+  const wins = Number((stage_item_input as any).wins ?? 0);
+  const draws = Number((stage_item_input as any).draws ?? 0);
+  const losses = Number((stage_item_input as any).losses ?? 0);
+  return `${base} (${wins}-${draws}-${losses})`;
+}

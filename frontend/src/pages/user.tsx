@@ -1,4 +1,5 @@
-import { Group, Stack, Title } from '@mantine/core';
+import { Button, Group, Stack, Title } from '@mantine/core';
+import { useNavigate } from 'react-router';
 import { useTranslation } from 'react-i18next';
 
 import UserForm from '@components/forms/user';
@@ -8,6 +9,7 @@ import { checkForAuthError, getUser } from '@services/adapter';
 import Layout from './_layout';
 
 export default function UserPage() {
+  const navigate = useNavigate();
   const { t, i18n } = useTranslation();
 
   const swrUserResponse = getUser();
@@ -27,6 +29,9 @@ export default function UserPage() {
   return (
     <Layout>
       <Title>{t('edit_profile_title')}</Title>
+      <Button mt="sm" mb="sm" variant="light" onClick={() => navigate('/admin/users')}>
+        Admin Users
+      </Button>
       {swrUserResponse.error && <RequestErrorAlert error={swrUserResponse.error} />}
       <Stack style={{ maxWidth: '40rem' }}>{content}</Stack>
     </Layout>

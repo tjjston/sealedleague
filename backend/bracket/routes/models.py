@@ -6,6 +6,12 @@ from bracket.models.db.court import Court
 from bracket.models.db.match import Match, SuggestedMatch
 from bracket.models.db.player import Player
 from bracket.models.db.ranking import Ranking
+from bracket.models.league import (
+    LeagueAdminUserView,
+    LeagueCardPoolEntryView,
+    LeagueDeckView,
+    LeagueStandingsRow,
+)
 from bracket.models.league_cards import LeagueSearchCards
 from bracket.models.db.stage_item_inputs import (
     StageItemInputOptionFinal,
@@ -85,6 +91,10 @@ class UserPublicResponse(DataResponse[UserPublic]):
     pass
 
 
+class UsersResponse(DataResponse[list[UserPublic]]):
+    pass
+
+
 class TokenResponse(DataResponse[Token]):
     pass
 
@@ -112,4 +122,24 @@ class StageRankingResponse(DataResponse[dict[StageItemId, list[StageItemInputUpd
 
 
 class LeagueCardsResponse(DataResponse[LeagueSearchCards]):
+    pass
+
+
+class LeagueCardPoolEntriesResponse(DataResponse[list[LeagueCardPoolEntryView]]):
+    pass
+
+
+class LeagueDeckResponse(DataResponse[LeagueDeckView]):
+    pass
+
+
+class LeagueDecksResponse(DataResponse[list[LeagueDeckView]]):
+    pass
+
+
+class LeagueSeasonStandingsResponse(DataResponse[list[LeagueStandingsRow]]):
+    pass
+
+
+class LeagueAdminUsersResponse(DataResponse[list[LeagueAdminUserView]]):
     pass

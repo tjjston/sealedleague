@@ -15,6 +15,10 @@ services:
       ENVIRONMENT: DEVELOPMENT
       CORS_ORIGINS: http://localhost:8400
       PG_DSN: postgresql://sealedleague_dev:sealedleague_dev@postgres:5432/sealedleague_dev
+      ADMIN_EMAIL: admin@sealedleague.local
+      ADMIN_PASSWORD: change-me-now
+      ALLOW_USER_REGISTRATION: true
+      ALLOW_DEMO_USER_REGISTRATION: false
       SERVE_FRONTEND: true
       API_PREFIX: '/api'
     build:

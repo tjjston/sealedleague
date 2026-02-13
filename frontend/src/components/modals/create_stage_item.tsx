@@ -72,8 +72,10 @@ export function CreateStagesFromTemplateButtons({
   setSelectedType,
   t,
 }: {
-  selectedType: 'ROUND_ROBIN' | 'SWISS' | 'SINGLE_ELIMINATION';
-  setSelectedType: (type: 'ROUND_ROBIN' | 'SWISS' | 'SINGLE_ELIMINATION') => void;
+  selectedType: 'ROUND_ROBIN' | 'SWISS' | 'SINGLE_ELIMINATION' | 'DOUBLE_ELIMINATION';
+  setSelectedType: (
+    type: 'ROUND_ROBIN' | 'SWISS' | 'SINGLE_ELIMINATION' | 'DOUBLE_ELIMINATION'
+  ) => void;
   t: Translator;
 }) {
   return (
@@ -108,6 +110,17 @@ export function CreateStagesFromTemplateButtons({
           selected={selectedType === 'SWISS'}
           onClick={() => {
             setSelectedType('SWISS');
+          }}
+        />
+      </Grid.Col>
+      <Grid.Col span={{ base: 12, sm: 4 }}>
+        <StageSelectCard
+          title="Double Elimination"
+          description="Bracket-style elimination with extended progression support."
+          image="/icons/single-elimination-stage-item.svg"
+          selected={selectedType === 'DOUBLE_ELIMINATION'}
+          onClick={() => {
+            setSelectedType('DOUBLE_ELIMINATION');
           }}
         />
       </Grid.Col>
@@ -154,7 +167,7 @@ function TeamCountInputRoundRobin({ form }: { form: UseFormReturnType<any> }) {
 }
 
 function TeamCountInput({ form }: { form: UseFormReturnType<any> }) {
-  if (form.values.type === 'SINGLE_ELIMINATION') {
+  if (form.values.type === 'SINGLE_ELIMINATION' || form.values.type === 'DOUBLE_ELIMINATION') {
     return <TeamCountSelectElimination form={form} />;
   }
 
@@ -163,14 +176,14 @@ function TeamCountInput({ form }: { form: UseFormReturnType<any> }) {
 
 function getTeamCount(values: any) {
   return Number(
-    values.type === 'SINGLE_ELIMINATION'
+    values.type === 'SINGLE_ELIMINATION' || values.type === 'DOUBLE_ELIMINATION'
       ? values.team_count_elimination
       : values.team_count_round_robin
   );
 }
 
 interface FormValues {
-  type: 'ROUND_ROBIN' | 'SWISS' | 'SINGLE_ELIMINATION';
+  type: 'ROUND_ROBIN' | 'SWISS' | 'SINGLE_ELIMINATION' | 'DOUBLE_ELIMINATION';
   team_count_round_robin: number;
   team_count_elimination: number;
 }

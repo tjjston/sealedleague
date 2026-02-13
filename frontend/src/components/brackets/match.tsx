@@ -8,6 +8,7 @@ import MatchModal from '@components/modals/match_modal';
 import { assert_not_none } from '@components/utils/assert';
 import { Time } from '@components/utils/datetime';
 import { formatMatchInput1, formatMatchInput2, isMatchHappening } from '@components/utils/match';
+import { formatStageItemInputWithRecord } from '@components/utils/stage_item_input';
 import { TournamentMinimal } from '@components/utils/tournament';
 import { MatchWithDetails, RoundWithMatches, StagesWithStageItemsResponse } from '@openapi';
 import { getMatchLookup, getStageItemLookup } from '@services/lookups';
@@ -69,6 +70,12 @@ export default function Match({
 
   const team1_label = formatMatchInput1(t, stageItemsLookup, matchesLookup, match);
   const team2_label = formatMatchInput2(t, stageItemsLookup, matchesLookup, match);
+  const team1_label_with_record =
+    formatStageItemInputWithRecord(match.stage_item_input1, stageItemsLookup) || team1_label;
+  const team2_label_with_record =
+    formatStageItemInputWithRecord(match.stage_item_input2, stageItemsLookup) || team2_label;
+  const team1_logo = (match.stage_item_input1 as any)?.team?.logo_path;
+  const team2_logo = (match.stage_item_input2 as any)?.team?.logo_path;
 
   const [opened, setOpened] = useState(false);
 
@@ -77,14 +84,36 @@ export default function Match({
       <MatchBadge match={match} theme={theme} />
       <div className={classes.top} style={team1_style}>
         <Grid grow>
-          <Grid.Col span={10}>{team1_label}</Grid.Col>
+          <Grid.Col span={10}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              {team1_logo && (
+                <img
+                  src={team1_logo}
+                  alt="leader"
+                  style={{ width: 20, height: 20, borderRadius: 999, objectFit: 'cover' }}
+                />
+              )}
+              <span>{team1_label_with_record}</span>
+            </div>
+          </Grid.Col>
           <Grid.Col span={2}>{match.stage_item_input1_score}</Grid.Col>
         </Grid>
       </div>
       <div className={classes.divider} />
       <div className={classes.bottom} style={team2_style}>
         <Grid grow>
-          <Grid.Col span={10}>{team2_label}</Grid.Col>
+          <Grid.Col span={10}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              {team2_logo && (
+                <img
+                  src={team2_logo}
+                  alt="leader"
+                  style={{ width: 20, height: 20, borderRadius: 999, objectFit: 'cover' }}
+                />
+              )}
+              <span>{team2_label_with_record}</span>
+            </div>
+          </Grid.Col>
           <Grid.Col span={2}>{match.stage_item_input2_score}</Grid.Col>
         </Grid>
       </div>

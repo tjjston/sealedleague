@@ -129,9 +129,11 @@ export default function Layout({ children, additionalNavbarLinks, breadcrumbs }:
   const linksComponent = (
     <AppShell.Section grow>
       {getBaseLinks()}
-      {additionalNavbarLinks}
+      {additionalNavbarLinks?.sidebar ?? additionalNavbarLinks}
     </AppShell.Section>
   );
+
+  const headerLinks = [...getBaseLinksDict(), ...(additionalNavbarLinks?.header ?? [])];
 
   return (
     <AppShell
@@ -140,14 +142,18 @@ export default function Layout({ children, additionalNavbarLinks, breadcrumbs }:
         width: 80,
         breakpoint: 'sm',
         collapsed: {
-          desktop: additionalNavbarLinks == null || additionalNavbarLinks.length < 1,
+          desktop:
+            additionalNavbarLinks == null ||
+            (additionalNavbarLinks?.sidebar != null
+              ? additionalNavbarLinks.sidebar.length < 1
+              : additionalNavbarLinks.length < 1),
           mobile: !opened,
         },
       }}
       padding="md"
     >
       <HeaderAction
-        links={getBaseLinksDict()}
+        links={headerLinks}
         navbarState={navbarState}
         breadcrumbs={breadcrumbs}
       />

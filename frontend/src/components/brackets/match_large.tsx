@@ -1,7 +1,7 @@
 import { Card, Center, Grid, Text } from '@mantine/core';
 
 import { Time } from '@components/utils/datetime';
-import { formatStageItemInput } from '@components/utils/stage_item_input';
+import { formatStageItemInputWithRecord } from '@components/utils/stage_item_input';
 import { MatchWithDetails } from '@openapi';
 
 export default function MatchLarge({
@@ -17,10 +17,10 @@ export default function MatchLarge({
         <Grid align="center">
           <Grid.Col span={{ sm: 9 }}>
             <Text lineClamp={1} inherit>
-              {formatStageItemInput(match.stage_item_input1, stageItemsLookup) || <i>N/A</i>}
+              {formatStageItemInputWithRecord(match.stage_item_input1, stageItemsLookup) || <i>N/A</i>}
             </Text>
             <Text lineClamp={1} inherit>
-              {formatStageItemInput(match.stage_item_input2, stageItemsLookup) || <i>N/A</i>}
+              {formatStageItemInputWithRecord(match.stage_item_input2, stageItemsLookup) || <i>N/A</i>}
             </Text>
           </Grid.Col>
           <Grid.Col span={{ sm: 3 }}>

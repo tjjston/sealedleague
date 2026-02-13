@@ -13,9 +13,11 @@ class LeagueSearchCard(BaseModel):
     keywords: list[str] = Field(default_factory=list)
     arenas: list[str] = Field(default_factory=list)
     rules_text: str = ""
-    cost: int | str | None = None
-    power: int | str | None = None
-    hp: int | str | None = None
+    image_url: str | None = None
+    variant_type: str | None = None
+    cost: int | None = None
+    power: int | None = None
+    hp: int | None = None
     unique: bool = False
 
 

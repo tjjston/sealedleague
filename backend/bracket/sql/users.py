@@ -76,6 +76,16 @@ async def get_user_by_id(user_id: UserId) -> UserPublic | None:
     return UserPublic.model_validate(dict(result._mapping)) if result is not None else None
 
 
+async def get_users() -> list[UserPublic]:
+    query = """
+        SELECT *
+        FROM users
+        ORDER BY created DESC
+        """
+    result = await database.fetch_all(query=query)
+    return [UserPublic.model_validate(dict(user._mapping)) for user in result]
+
+
 async def get_expired_demo_users() -> list[UserPublic]:
     query = """
         SELECT *

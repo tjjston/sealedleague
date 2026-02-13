@@ -142,6 +142,7 @@ stage_items = Table(
         "type",
         Enum(
             "SINGLE_ELIMINATION",
+            "DOUBLE_ELIMINATION",
             "SWISS",
             "ROUND_ROBIN",
             name="stage_type",

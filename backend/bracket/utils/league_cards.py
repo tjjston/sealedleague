@@ -68,6 +68,14 @@ def normalize_card_for_deckbuilding(raw: dict) -> dict:
             return []
         return [str(item).strip() for item in value if str(item).strip()]
 
+    def to_int(value: object) -> int | None:
+        try:
+            if value is None or value == "":
+                return None
+            return int(str(value))
+        except (TypeError, ValueError):
+            return None
+
     return {
         "card_id": normalize_card_id(set_code=set_code, number=number),
         "set_code": set_code,
@@ -80,9 +88,11 @@ def normalize_card_for_deckbuilding(raw: dict) -> dict:
         "keywords": list_of_strings(raw.get("Keywords")),
         "arenas": list_of_strings(raw.get("Arenas")),
         "rules_text": str(raw.get("FrontText", "")).strip(),
-        "cost": raw.get("Cost"),
-        "power": raw.get("Power"),
-        "hp": raw.get("HP"),
+        "image_url": str(raw.get("FrontArt", "")).strip() or None,
+        "variant_type": str(raw.get("VariantType", "")).strip() or None,
+        "cost": to_int(raw.get("Cost")),
+        "power": to_int(raw.get("Power")),
+        "hp": to_int(raw.get("HP")),
         "unique": bool(raw.get("Unique", False)),
     }
 
@@ -98,6 +108,11 @@ def filter_cards_for_deckbuilding(
     arenas: Sequence[str] | None = None,
     card_type: str | None = None,
     rarity: str | None = None,
+    name: str | None = None,
+    rules: str | None = None,
+    cost: int | None = None,
+    cost_min: int | None = None,
+    cost_max: int | None = None,
     unique: bool | None = None,
 ) -> list[dict]:
     normalized_cards = [normalize_card_for_deckbuilding(card) for card in cards]
@@ -109,13 +124,34 @@ def filter_cards_for_deckbuilding(
     normalized_arenas = {value.strip().lower() for value in (arenas or []) if value.strip()}
     normalized_card_type = card_type.strip().lower() if card_type else None
     normalized_rarity = rarity.strip().lower() if rarity else None
+    normalized_name = name.strip().lower() if name else None
+    normalized_rules = rules.strip().lower() if rules else None
     normalized_query = query.strip().lower() if query else None
 
-    filtered: list[dict] = []
+    variant_priority = {"normal": 0, "hyperspace": 1, "showcase": 2}
+
+    def dedupe_key(card: dict) -> tuple:
+        return (
+            card["set_code"].lower(),
+            card["name"].lower(),
+            card["type"].lower(),
+            card["cost"],
+            card["power"],
+            card["hp"],
+            card["rules_text"].lower(),
+            tuple(sorted(value.lower() for value in card["aspects"])),
+            tuple(sorted(value.lower() for value in card["traits"])),
+            tuple(sorted(value.lower() for value in card["keywords"])),
+            tuple(sorted(value.lower() for value in card["arenas"])),
+        )
+
+    deduped: dict[tuple, dict] = {}
     for card in normalized_cards:
         card_set = card["set_code"].lower()
         card_type_value = card["type"].lower()
         card_rarity = card["rarity"].lower()
+        card_name = card["name"].lower()
+        card_rules = card["rules_text"].lower()
         card_aspects = {value.lower() for value in card["aspects"]}
         card_traits = {value.lower() for value in card["traits"]}
         card_keywords = {value.lower() for value in card["keywords"]}
@@ -126,6 +162,16 @@ def filter_cards_for_deckbuilding(
         if normalized_card_type and card_type_value != normalized_card_type:
             continue
         if normalized_rarity and card_rarity != normalized_rarity:
+            continue
+        if normalized_name and normalized_name not in card_name:
+            continue
+        if normalized_rules and normalized_rules not in card_rules:
+            continue
+        if cost is not None and card["cost"] != cost:
+            continue
+        if cost_min is not None and (card["cost"] is None or card["cost"] < cost_min):
+            continue
+        if cost_max is not None and (card["cost"] is None or card["cost"] > cost_max):
             continue
         if unique is not None and card["unique"] is not unique:
             continue
@@ -151,6 +197,15 @@ def filter_cards_for_deckbuilding(
             if normalized_query not in haystack:
                 continue
 
-        filtered.append(card)
+        key = dedupe_key(card)
+        previous = deduped.get(key)
+        if previous is None:
+            deduped[key] = card
+            continue
 
-    return filtered
+        prev_variant = str(previous.get("variant_type") or "").lower()
+        curr_variant = str(card.get("variant_type") or "").lower()
+        if variant_priority.get(curr_variant, 99) < variant_priority.get(prev_variant, 99):
+            deduped[key] = card
+
+    return list(deduped.values())

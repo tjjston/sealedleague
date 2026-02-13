@@ -64,9 +64,7 @@ export function requestSucceeded(result: AxiosResponse | AxiosError) {
 }
 
 export function getBaseApiUrl() {
-  return import.meta.env.VITE_API_BASE_URL != null
-    ? import.meta.env.VITE_API_BASE_URL
-    : 'http://localhost:8400';
+  return import.meta.env.VITE_API_BASE_URL != null ? import.meta.env.VITE_API_BASE_URL : '/api';
 }
 
 export function createAxios() {
@@ -225,6 +223,68 @@ export function getCourtsLive(tournament_id: number | null): SWRResponse<CourtsR
 
 export function getUser(): SWRResponse<UserPublicResponse> {
   return useSWR('users/me', fetcher);
+}
+
+export function getUsersAdmin(): SWRResponse<any> {
+  return useSWR('users', fetcher);
+}
+
+export function getLeagueCards(
+  tournament_id: number,
+  filters: {
+    query?: string;
+    name?: string;
+    rules?: string;
+    aspect?: string;
+    trait?: string;
+    keyword?: string;
+    arena?: string;
+    card_type?: string;
+    set_code?: string;
+    cost?: number | null;
+    cost_min?: number | null;
+    cost_max?: number | null;
+    limit?: number;
+    offset?: number;
+  }
+): SWRResponse<any> {
+  const params = new URLSearchParams();
+  if (filters.query != null && filters.query !== '') params.set('query', filters.query);
+  if (filters.name != null && filters.name !== '') params.set('name', filters.name);
+  if (filters.rules != null && filters.rules !== '') params.set('rules', filters.rules);
+  if (filters.aspect != null && filters.aspect !== '') params.append('aspect', filters.aspect);
+  if (filters.trait != null && filters.trait !== '') params.append('trait', filters.trait);
+  if (filters.keyword != null && filters.keyword !== '') params.append('keyword', filters.keyword);
+  if (filters.arena != null && filters.arena !== '') params.append('arena', filters.arena);
+  if (filters.card_type != null && filters.card_type !== '') params.set('card_type', filters.card_type);
+  if (filters.set_code != null && filters.set_code !== '') params.append('set_code', filters.set_code);
+  if (filters.cost != null) params.set('cost', String(filters.cost));
+  if (filters.cost_min != null) params.set('cost_min', String(filters.cost_min));
+  if (filters.cost_max != null) params.set('cost_max', String(filters.cost_max));
+  params.set('limit', String(filters.limit ?? 100));
+  params.set('offset', String(filters.offset ?? 0));
+  return useSWR(`tournaments/${tournament_id}/league/cards?${params.toString()}`, fetcher);
+}
+
+export function getLeagueCardPool(
+  tournament_id: number,
+  user_id?: number | null
+): SWRResponse<any> {
+  const suffix = user_id == null ? '' : `?user_id=${user_id}`;
+  return useSWR(`tournaments/${tournament_id}/league/card_pool${suffix}`, fetcher);
+}
+
+export function getLeagueDecks(tournament_id: number, user_id?: number | null): SWRResponse<any> {
+  const suffix = user_id == null ? '' : `?user_id=${user_id}`;
+  return useSWR(`tournaments/${tournament_id}/league/decks${suffix}`, fetcher);
+}
+
+export function getLeagueSeasonStandings(tournament_id: number): SWRResponse<any> {
+  return useSWR(`tournaments/${tournament_id}/league/season_standings`, fetcher);
+}
+
+export function getLeagueAdminUsers(tournament_id: number): SWRResponse<any> {
+  return useSWR(`tournaments/${tournament_id}/league/admin/users`, fetcher);
 }
 
 export function getUpcomingMatches(

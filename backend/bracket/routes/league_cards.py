@@ -33,9 +33,14 @@ async def search_league_cards(
     arena: list[str] | None = Query(default=None, description="Require arenas to be present."),
     card_type: str | None = Query(default=None, description="Exact type match."),
     rarity: str | None = Query(default=None, description="Exact rarity match."),
+    name: str | None = Query(default=None, description="Search by card name."),
+    rules: str | None = Query(default=None, description="Search in rules text."),
+    cost: int | None = Query(default=None, ge=0, le=20, description="Exact card cost."),
+    cost_min: int | None = Query(default=None, ge=0, le=20, description="Minimum card cost."),
+    cost_max: int | None = Query(default=None, ge=0, le=20, description="Maximum card cost."),
     unique: bool | None = Query(default=None, description="Filter unique vs non-unique cards."),
     offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=250),
+    limit: int = Query(default=50, ge=1, le=5000),
 ) -> LeagueCardsResponse:
     set_codes = set_code if set_code else list(DEFAULT_SWU_SET_CODES)
 
@@ -57,6 +62,11 @@ async def search_league_cards(
         arenas=arena,
         card_type=card_type,
         rarity=rarity,
+        name=name,
+        rules=rules,
+        cost=cost,
+        cost_min=cost_min,
+        cost_max=cost_max,
         unique=unique,
     )
     filtered_cards.sort(key=lambda card: (card["name"].lower(), card["card_id"]))

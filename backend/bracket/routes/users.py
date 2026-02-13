@@ -9,6 +9,7 @@ from bracket.logic.subscriptions import setup_demo_account
 from bracket.models.db.account import UserAccountType
 from bracket.models.db.user import (
     DemoUserToRegister,
+    UserAccountTypeToUpdate,
     UserInsertable,
     UserPasswordToUpdate,
     UserPublic,
@@ -21,11 +22,13 @@ from bracket.routes.auth import (
     create_access_token,
     user_authenticated,
 )
-from bracket.routes.models import SuccessResponse, TokenResponse, UserPublicResponse
+from bracket.routes.models import SuccessResponse, TokenResponse, UserPublicResponse, UsersResponse
 from bracket.sql.users import (
     check_whether_email_is_in_use,
     create_user,
+    get_users,
     get_user_by_id,
+    update_user_account_type,
     update_user,
     update_user_password,
 )
@@ -34,6 +37,18 @@ from bracket.utils.security import hash_password, verify_captcha_token
 from bracket.utils.types import assert_some
 
 router = APIRouter(prefix=config.api_prefix)
+
+
+def user_is_admin(user_public: UserPublic) -> bool:
+    return config.admin_email is not None and user_public.email == config.admin_email
+
+
+@router.get("/users", response_model=UsersResponse)
+async def list_users(user_public: UserPublic = Depends(user_authenticated)) -> UsersResponse:
+    if not user_is_admin(user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+
+    return UsersResponse(data=await get_users())
 
 
 @router.get("/users/me", response_model=UserPublicResponse)
@@ -57,10 +72,10 @@ async def update_user_details(
     user_to_update: UserToUpdate,
     user_public: UserPublic = Depends(user_authenticated),
 ) -> UserPublicResponse:
-    if user_public.id != user_id:
+    if user_public.id != user_id and not user_is_admin(user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Can't change details of this user")
 
-    await update_user(user_public.id, user_to_update)
+    await update_user(user_id, user_to_update)
     user_updated = await get_user_by_id(user_id)
     return UserPublicResponse(data=assert_some(user_updated))
 
@@ -71,9 +86,22 @@ async def put_user_password(
     user_to_update: UserPasswordToUpdate,
     user_public: UserPublic = Depends(user_authenticated),
 ) -> SuccessResponse:
-    if user_public.id != user_id:
+    if user_public.id != user_id and not user_is_admin(user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Can't change details of this user")
-    await update_user_password(user_public.id, hash_password(user_to_update.password))
+    await update_user_password(user_id, hash_password(user_to_update.password))
+    return SuccessResponse()
+
+
+@router.put("/users/{user_id}/account_type", response_model=SuccessResponse)
+async def put_user_account_type(
+    user_id: UserId,
+    user_to_update: UserAccountTypeToUpdate,
+    user_public: UserPublic = Depends(user_authenticated),
+) -> SuccessResponse:
+    if not user_is_admin(user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+
+    await update_user_account_type(user_id, user_to_update.account_type)
     return SuccessResponse()
 
 

@@ -48,6 +48,10 @@ class UserPasswordToUpdate(BaseModel):
     password: Annotated[str, StringConstraints(min_length=8, max_length=48)]
 
 
+class UserAccountTypeToUpdate(BaseModel):
+    account_type: UserAccountType
+
+
 class DemoUserToRegister(BaseModelORM):
     captcha_token: str
 

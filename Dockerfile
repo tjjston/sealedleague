@@ -9,7 +9,7 @@ COPY frontend .
 
 RUN apk add pnpm && \
     CI=true pnpm install && \
-    VITE_API_BASE_URL=http://localhost:8400/api pnpm build
+    VITE_API_BASE_URL=/api pnpm build
 
 # Build backend image that also serves frontend (stored in `/app/frontend-dist`)
 FROM python:3.14-alpine3.22
