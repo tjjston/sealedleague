@@ -1,6 +1,6 @@
 from sqlalchemy import Column, ForeignKey, Integer, String, Table, UniqueConstraint, func
 from sqlalchemy.orm import declarative_base  # type: ignore[attr-defined]
-from sqlalchemy.sql.sqltypes import BigInteger, Boolean, DateTime, Enum, Float, Text
+from sqlalchemy.sql.sqltypes import JSON, BigInteger, Boolean, DateTime, Enum, Float, Text
 
 Base = declarative_base()
 metadata = Base.metadata
@@ -40,6 +40,83 @@ tournaments = Table(
         server_default="OPEN",
         index=True,
     ),
+)
+
+
+seasons = Table(
+    "seasons",
+    metadata,
+    Column("id", BigInteger, primary_key=True, index=True, autoincrement=True),
+    Column("name", String, nullable=False, index=True),
+    Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
+    Column("start_time", DateTimeTZ, nullable=True),
+    Column("end_time", DateTimeTZ, nullable=True),
+    Column("is_active", Boolean, nullable=False, server_default="t", index=True),
+    Column("tournament_id", BigInteger, ForeignKey("tournaments.id"), index=True, nullable=False),
+)
+
+season_memberships = Table(
+    "season_memberships",
+    metadata,
+    Column("id", BigInteger, primary_key=True, index=True, autoincrement=True),
+    Column("season_id", BigInteger, ForeignKey("seasons.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
+    Column(
+        "role",
+        Enum(
+            "PLAYER",
+            "ADMIN",
+            name="season_membership_role",
+        ),
+        nullable=False,
+        server_default="PLAYER",
+    ),
+    Column("can_manage_points", Boolean, nullable=False, server_default="f"),
+    Column("can_manage_tournaments", Boolean, nullable=False, server_default="f"),
+    UniqueConstraint("season_id", "user_id"),
+)
+
+season_points_ledger = Table(
+    "season_points_ledger",
+    metadata,
+    Column("id", BigInteger, primary_key=True, index=True, autoincrement=True),
+    Column("season_id", BigInteger, ForeignKey("seasons.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("changed_by_user_id", BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True),
+    Column("tournament_id", BigInteger, ForeignKey("tournaments.id", ondelete="SET NULL"), index=True, nullable=True),
+    Column("points_delta", Float, nullable=False),
+    Column("reason", Text, nullable=True),
+    Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
+)
+
+card_pool_entries = Table(
+    "card_pool_entries",
+    metadata,
+    Column("id", BigInteger, primary_key=True, index=True, autoincrement=True),
+    Column("season_id", BigInteger, ForeignKey("seasons.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("card_id", String, nullable=False, index=True),
+    Column("quantity", Integer, nullable=False),
+    Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
+    UniqueConstraint("season_id", "user_id", "card_id"),
+)
+
+decks = Table(
+    "decks",
+    metadata,
+    Column("id", BigInteger, primary_key=True, index=True, autoincrement=True),
+    Column("season_id", BigInteger, ForeignKey("seasons.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("user_id", BigInteger, ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("tournament_id", BigInteger, ForeignKey("tournaments.id", ondelete="SET NULL"), index=True, nullable=True),
+    Column("name", String, nullable=False),
+    Column("leader", String, nullable=False, index=True),
+    Column("base", String, nullable=False, index=True),
+    Column("mainboard", JSON, nullable=False),
+    Column("sideboard", JSON, nullable=False),
+    Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
+    Column("updated", DateTimeTZ, nullable=False, server_default=func.now()),
+    UniqueConstraint("season_id", "user_id", "name"),
 )
 
 stages = Table(
