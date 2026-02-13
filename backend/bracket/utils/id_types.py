@@ -1,6 +1,11 @@
 from typing import NewType
 
 ClubId = NewType("ClubId", int)
+CardPoolEntryId = NewType("CardPoolEntryId", int)
+DeckId = NewType("DeckId", int)
+SeasonId = NewType("SeasonId", int)
+SeasonMembershipId = NewType("SeasonMembershipId", int)
+SeasonPointsLedgerId = NewType("SeasonPointsLedgerId", int)
 CourtId = NewType("CourtId", int)
 MatchId = NewType("MatchId", int)
 PlayerId = NewType("PlayerId", int)
