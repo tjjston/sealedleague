@@ -63,7 +63,9 @@ export function TournamentLogo({ tournamentDataFull }: { tournamentDataFull: Tou
 }
 
 export function getTournamentHeadTitle(tournamentDataFull: Tournament) {
-  return tournamentDataFull !== null ? `Bracket | ${tournamentDataFull.name}` : 'Bracket';
+  return tournamentDataFull !== null
+    ? `Sealed League | ${tournamentDataFull.name}`
+    : 'Sealed League';
 }
 
 export function TournamentTitle({ tournamentDataFull }: { tournamentDataFull: Tournament }) {

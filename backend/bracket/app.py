@@ -88,34 +88,26 @@ table_of_contents = "\n\n".join(
 
 description = f"""
 ### Description
-This API allows you to do everything the frontend of [Bracket](https://github.com/evroon/bracket)
-allows you to do (the frontend uses this API as well).
+This API powers Sealed League, a platform for running sealed deck leagues,
+tracking card pools, and organizing tournaments.
 
-Fore more information, see the [documentation](https://docs.bracketapp.nl).
+Use the API documentation below to explore endpoints and integrations.
 
 ### Table of Contents
-*(links only work for [ReDoc](https://api.bracketapp.nl/redoc), not for Swagger UI)*
+*(links only work for ReDoc, not for Swagger UI)*
 
 {table_of_contents}
 
 ### Links
-GitHub: <https://github.com/evroon/bracket>
-
-Docs: <https://docs.bracketapp.nl>
-
-Demo: <https://www.bracketapp.nl/demo>
-
-API docs (Redoc): <https://api.bracketapp.nl/redoc>
-
-API docs (Swagger UI): <https://api.bracketapp.nl/docs>
+API docs (Swagger UI): </docs>
 """
 
 app = FastAPI(
-    title="Bracket API",
+    title="Sealed League API",
     docs_url="/docs",
     version="1.0.0",
     lifespan=lifespan,
-    summary="API for Bracket, an open source tournament system.",
+    summary="API for Sealed League, a sealed deck league platform.",
     description=description,
     license_info={
         "name": "AGPL-3.0",

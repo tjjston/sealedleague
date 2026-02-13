@@ -10,9 +10,9 @@ export function Brand() {
           <Image
             style={{ width: '38px', marginRight: '0px' }}
             src="/favicon.svg"
-            alt="Bracket logg"
+            alt="Sealed League logo"
           />
-          <Title style={{ height: '38px', marginBottom: '0.4rem' }}>Bracket</Title>
+          <Title style={{ height: '38px', marginBottom: '0.4rem' }}>Sealed League</Title>
         </Group>
       </UnstyledButton>
     </Center>
@@ -27,10 +27,10 @@ export function BrandFooter() {
           mb="0.25rem"
           style={{ width: '32px', marginRight: '0px' }}
           src="/favicon.svg"
-          alt="Bracket logg"
+          alt="Sealed League logo"
         />
         <Text size="xl" ml="0.75rem">
-          Bracket
+          Sealed League
         </Text>
       </Center>
     </Center>
