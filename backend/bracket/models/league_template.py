@@ -1,5 +1,9 @@
 import csv
 import io
+from collections.abc import Iterable, Sequence
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 LEAGUE_POINTS_TEMPLATE_HEADERS = [
     "season_name",
