@@ -183,6 +183,43 @@ class LeagueAdminUserView(BaseModel):
     can_manage_tournaments: bool = False
 
 
+class LeagueSeasonRecord(BaseModel):
+    season_id: int
+    season_name: str
+    wins: int = 0
+    draws: int = 0
+    losses: int = 0
+    matches: int = 0
+    win_percentage: float = 0
+
+
+class LeagueAspectUsage(BaseModel):
+    aspect: str
+    count: int
+
+
+class LeagueFavoriteCard(BaseModel):
+    card_id: str
+    name: str | None = None
+    image_url: str | None = None
+    uses: int = 0
+
+
+class LeaguePlayerCareerProfile(BaseModel):
+    user_id: UserId
+    user_name: str
+    user_email: str
+    account_type: UserAccountType
+    overall_wins: int = 0
+    overall_draws: int = 0
+    overall_losses: int = 0
+    overall_matches: int = 0
+    overall_win_percentage: float = 0
+    season_records: list[LeagueSeasonRecord] = Field(default_factory=list)
+    most_used_aspects: list[LeagueAspectUsage] = Field(default_factory=list)
+    favorite_card: LeagueFavoriteCard | None = None
+
+
 class LeagueSeasonCreateBody(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     is_active: bool = False

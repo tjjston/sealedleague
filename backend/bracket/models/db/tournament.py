@@ -31,6 +31,7 @@ class TournamentInsertable(BaseModelORM):
 
 class Tournament(TournamentInsertable):
     id: TournamentId
+    club_name: str | None = None
 
 
 class TournamentUpdateBody(BaseModelORM):

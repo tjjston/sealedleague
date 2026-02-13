@@ -134,8 +134,11 @@ export function getTournamentById(tournament_id: number): SWRResponse<Tournament
   return useSWR(`tournaments/${tournament_id}`, fetcher);
 }
 
-export function getTournaments(filter: TournamentFilter): SWRResponse<TournamentsResponse> {
-  return useSWR(`tournaments?filter_=${filter}`, fetcher);
+export function getTournaments(
+  filter: TournamentFilter,
+  enabled: boolean = true
+): SWRResponse<TournamentsResponse> {
+  return useSWR(enabled ? `tournaments?filter_=${filter}` : null, fetcher);
 }
 
 export function getPlayers(
@@ -235,6 +238,26 @@ export function getUser(): SWRResponse<UserPublicResponse> {
 
 export function getUsersAdmin(): SWRResponse<any> {
   return useSWR('users', fetcher);
+}
+
+export function getUserDirectory(): SWRResponse<any> {
+  return useSWR('users/directory', fetcher);
+}
+
+export function getUserCardCatalog(query: string, limit: number = 100): SWRResponse<any> {
+  const params = new URLSearchParams();
+  if (query.trim() !== '') {
+    params.set('query', query.trim());
+  }
+  params.set('limit', String(limit));
+  return useSWR(`users/card_catalog?${params.toString()}`, fetcher);
+}
+
+export function getUserCareer(user_id: number | null): SWRResponse<any> {
+  if (user_id == null || Number.isNaN(user_id)) {
+    return useSWR(null, fetcher);
+  }
+  return useSWR(`users/${user_id}/career`, fetcher);
 }
 
 export function getLeagueCards(

@@ -243,15 +243,15 @@ export default function LeagueAdminPage() {
                   <Table.Td>{user.user_name}</Table.Td>
                   <Table.Td>
                     <Select
-                      value={user.account_type}
+                      value={user.account_type === 'ADMIN' ? 'ADMIN' : 'REGULAR'}
                       data={[
-                        { value: 'REGULAR', label: 'REGULAR' },
-                        { value: 'DEMO', label: 'DEMO' },
+                        { value: 'REGULAR', label: 'USER' },
+                        { value: 'ADMIN', label: 'ADMIN' },
                       ]}
                       allowDeselect={false}
                       onChange={async (value) => {
                         if (value == null) return;
-                        await updateUserAccountType(user.user_id, value as 'REGULAR' | 'DEMO');
+                        await updateUserAccountType(user.user_id, value as 'REGULAR' | 'ADMIN');
                         await swrUsersResponse.mutate();
                       }}
                     />

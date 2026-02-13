@@ -53,7 +53,7 @@ function GeneralTournamentForm({
       dashboard_endpoint: '',
       players_can_be_in_multiple_teams: false,
       auto_assign_courts: true,
-      duration_minutes: 10,
+      duration_minutes: 20,
       margin_minutes: 5,
     },
 

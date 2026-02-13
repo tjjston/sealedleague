@@ -29,9 +29,11 @@ export default function UserPage() {
   return (
     <Layout>
       <Title>{t('edit_profile_title')}</Title>
-      <Button mt="sm" mb="sm" variant="light" onClick={() => navigate('/admin/users')}>
-        Admin Users
-      </Button>
+      {user?.account_type === 'ADMIN' ? (
+        <Button mt="sm" mb="sm" variant="light" onClick={() => navigate('/admin/users')}>
+          Admin Users
+        </Button>
+      ) : null}
       {swrUserResponse.error && <RequestErrorAlert error={swrUserResponse.error} />}
       <Stack style={{ maxWidth: '40rem' }}>{content}</Stack>
     </Layout>

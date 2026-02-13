@@ -12,7 +12,7 @@ import { IconAlertCircle } from '@tabler/icons-react';
 import { useEffect, useMemo, useState } from 'react';
 
 import RequestErrorAlert from '@components/utils/error_alert';
-import { checkForAuthError, getUsersAdmin } from '@services/adapter';
+import { checkForAuthError, getUser, getUsersAdmin } from '@services/adapter';
 import { updatePassword, updateUser, updateUserAccountType } from '@services/user';
 import Layout from './_layout';
 
@@ -20,12 +20,14 @@ type UserItem = {
   id: number;
   name: string;
   email: string;
-  account_type: 'REGULAR' | 'DEMO';
+  account_type: string;
 };
 
 export default function AdminUsersPage() {
   const swrUsersResponse = getUsersAdmin();
+  const swrCurrentUserResponse = getUser();
   checkForAuthError(swrUsersResponse);
+  checkForAuthError(swrCurrentUserResponse);
 
   const users: UserItem[] = useMemo(
     () => swrUsersResponse.data?.data ?? [],
@@ -34,7 +36,7 @@ export default function AdminUsersPage() {
   const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [accountType, setAccountType] = useState<'REGULAR' | 'DEMO'>('REGULAR');
+  const [accountType, setAccountType] = useState<'REGULAR' | 'ADMIN'>('REGULAR');
   const [newPassword, setNewPassword] = useState('');
 
   useEffect(() => {
@@ -48,13 +50,13 @@ export default function AdminUsersPage() {
     if (selected != null) {
       setName(selected.name);
       setEmail(selected.email);
-      setAccountType(selected.account_type);
+      setAccountType(selected.account_type === 'ADMIN' ? 'ADMIN' : 'REGULAR');
       setNewPassword('');
     }
   }, [users, selectedUserId]);
 
   const selected = users.find((user) => String(user.id) === selectedUserId);
-  const isUnauthorized = swrUsersResponse.error?.response?.status === 401;
+  const isUnauthorized = swrCurrentUserResponse.data?.data?.account_type !== 'ADMIN';
 
   async function refreshUsers() {
     await swrUsersResponse.mutate();
@@ -72,7 +74,7 @@ export default function AdminUsersPage() {
           color="red"
           mt="md"
         >
-          This page is only available to the configured admin account.
+          This page is only available to admin accounts.
         </Alert>
       )}
 
@@ -102,10 +104,10 @@ export default function AdminUsersPage() {
           <Select
             label="Account Type"
             value={accountType}
-            onChange={(value) => setAccountType((value as 'REGULAR' | 'DEMO') ?? 'REGULAR')}
+            onChange={(value) => setAccountType((value as 'REGULAR' | 'ADMIN') ?? 'REGULAR')}
             data={[
-              { value: 'REGULAR', label: 'REGULAR' },
-              { value: 'DEMO', label: 'DEMO' },
+              { value: 'REGULAR', label: 'USER' },
+              { value: 'ADMIN', label: 'ADMIN' },
             ]}
             allowDeselect={false}
           />

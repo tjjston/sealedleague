@@ -14,6 +14,7 @@ from bracket.models.league import (
     LeagueSeasonHistoryView,
     LeagueTournamentApplicationView,
     LeagueStandingsRow,
+    LeaguePlayerCareerProfile,
 )
 from bracket.models.league_cards import LeagueDraftSimulation, LeagueSearchCards
 from bracket.models.db.stage_item_inputs import (
@@ -23,6 +24,7 @@ from bracket.models.db.stage_item_inputs import (
 from bracket.models.db.team import FullTeamWithPlayers, Team
 from bracket.models.db.tournament import Tournament
 from bracket.models.db.user import UserPublic
+from bracket.models.db.user import CardCatalogEntry, UserDirectoryEntry
 from bracket.models.db.util import StageWithStageItems
 from bracket.routes.auth import Token
 from bracket.utils.id_types import StageId, StageItemId
@@ -98,6 +100,14 @@ class UsersResponse(DataResponse[list[UserPublic]]):
     pass
 
 
+class UserDirectoryResponse(DataResponse[list[UserDirectoryEntry]]):
+    pass
+
+
+class CardCatalogResponse(DataResponse[list[CardCatalogEntry]]):
+    pass
+
+
 class TokenResponse(DataResponse[Token]):
     pass
 
@@ -161,4 +171,8 @@ class LeagueAdminSeasonsResponse(DataResponse[list[LeagueSeasonAdminView]]):
 
 
 class LeagueTournamentApplicationsResponse(DataResponse[list[LeagueTournamentApplicationView]]):
+    pass
+
+
+class LeaguePlayerCareerProfileResponse(DataResponse[LeaguePlayerCareerProfile]):
     pass

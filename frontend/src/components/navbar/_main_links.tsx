@@ -72,11 +72,11 @@ export function getBaseLinksDict() {
   const { t } = useTranslation();
 
   return [
-    { link: '/clubs', label: capitalize(t('clubs_title')), links: [], icon: IconUsers },
     { link: '/', label: capitalize(t('tournaments_title')), links: [], icon: IconHome },
     { link: '/league/deckbuilder', label: 'Deckbuilder', links: [], icon: IconBrackets },
     { link: '/league/sealed-draft', label: 'Sealed Draft', links: [], icon: IconCards },
     { link: '/league/season-standings', label: 'Season Standings', links: [], icon: IconChartBar },
+    { link: '/league/players', label: 'Players', links: [], icon: IconUser },
     {
       link: '/user',
       label: 'Account',

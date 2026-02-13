@@ -51,7 +51,7 @@ from bracket.sql.matches import sql_update_match
 from bracket.sql.stage_items import get_stage_item, sql_create_stage_item_with_inputs
 from bracket.sql.stages import get_full_tournament_details
 from bracket.sql.tournaments import sql_get_tournament
-from bracket.sql.users import create_user, get_user
+from bracket.sql.users import create_user
 from bracket.utils.alembic import alembic_stamp_head
 from bracket.utils.db import insert_generic
 from bracket.utils.dummy_records import (
@@ -106,7 +106,7 @@ async def create_admin_user() -> UserId:
             email=config.admin_email,
             password_hash=hash_password(config.admin_password),
             created=datetime_utc.now(),
-            account_type=UserAccountType.REGULAR,
+            account_type=UserAccountType.ADMIN,
         )
     )
     return user.id
@@ -116,9 +116,18 @@ async def init_db_when_empty() -> UserId | None:
     table_count = await database.fetch_val(
         "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
     )
+    admin_exists = False
+    if config.admin_email:
+        admin_exists = (
+            await database.fetch_val(
+                "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
+                values={"email": config.admin_email},
+            )
+            is True
+        )
     if config.admin_email and config.admin_password:
         if (table_count <= 1 and environment != Environment.CI) or (
-            environment is Environment.DEVELOPMENT and await get_user(config.admin_email) is None
+            environment is Environment.DEVELOPMENT and not admin_exists
         ):
             logger.warning("Empty db detected, creating tables...")
             metadata.create_all(engine)

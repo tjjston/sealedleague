@@ -20,6 +20,7 @@ from bracket.models.db.tournament import (
 )
 from bracket.models.db.user import UserPublic
 from bracket.routes.auth import (
+    is_admin_user,
     user_authenticated,
     user_authenticated_for_tournament,
     user_authenticated_or_public_dashboard,
@@ -67,6 +68,8 @@ async def get_tournament(
     tournament = await sql_get_tournament(tournament_id)
     if user is None and not tournament.dashboard_public:
         raise unauthorized_exception
+    if user is not None and not is_admin_user(user):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
     return TournamentResponse(data=tournament)
 
@@ -92,6 +95,8 @@ async def get_tournaments(
             return TournamentsResponse(data=[tournament])
 
         case _, _ if isinstance(user, UserPublic):
+            if not is_admin_user(user):
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
             user_club_ids = await get_which_clubs_has_user_access_to(user.id)
             return TournamentsResponse(
                 data=await sql_get_tournaments(tuple(user_club_ids), endpoint_name, filter_)
@@ -157,6 +162,9 @@ async def change_status(
 async def create_tournament(
     tournament_to_insert: TournamentBody, user: UserPublic = Depends(user_authenticated)
 ) -> SuccessResponse:
+    if not is_admin_user(user):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+
     existing_tournaments = await sql_get_tournaments((tournament_to_insert.club_id,))
     check_requirement(existing_tournaments, user, "max_tournaments")
 

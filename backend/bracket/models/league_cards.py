@@ -6,6 +6,7 @@ class LeagueSearchCard(BaseModel):
     set_code: str
     number: str
     name: str
+    character_variant: str | None = None
     type: str
     rarity: str
     aspects: list[str] = Field(default_factory=list)

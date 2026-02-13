@@ -74,6 +74,10 @@ export default function TournamentsCardTable({
             </Group>
 
             <Card.Section className={classes.section}>
+              <Stat title="Club" value={(tournament as any).club_name ?? '-'} />
+            </Card.Section>
+
+            <Card.Section className={classes.section}>
               <Stat title={t('start_time')} value={<DateTime datetime={tournament.start_time} />} />
             </Card.Section>
 

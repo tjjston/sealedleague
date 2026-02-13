@@ -27,7 +27,7 @@ tournaments = Table(
     Column("dashboard_endpoint", String, nullable=True, index=True, unique=True),
     Column("players_can_be_in_multiple_teams", Boolean, nullable=False, server_default="f"),
     Column("auto_assign_courts", Boolean, nullable=False, server_default="f"),
-    Column("duration_minutes", Integer, nullable=False, server_default="15"),
+    Column("duration_minutes", Integer, nullable=False, server_default="20"),
     Column("margin_minutes", Integer, nullable=False, server_default="5"),
     Column(
         "status",
@@ -281,10 +281,16 @@ users = Table(
     Column("name", String, nullable=False),
     Column("password_hash", String, nullable=False),
     Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
+    Column("avatar_url", String, nullable=True),
+    Column("favorite_card_id", String, nullable=True),
+    Column("favorite_card_name", String, nullable=True),
+    Column("favorite_card_image_url", String, nullable=True),
+    Column("favorite_media", String, nullable=True),
     Column(
         "account_type",
         Enum(
             "REGULAR",
+            "ADMIN",
             "DEMO",
             name="account_type",
         ),

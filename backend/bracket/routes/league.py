@@ -20,7 +20,7 @@ from bracket.models.league import (
     LeaguePointsImportBody,
     LeagueSeasonPrivilegesUpdateBody,
 )
-from bracket.routes.auth import user_authenticated_for_tournament
+from bracket.routes.auth import is_admin_user, user_authenticated_for_tournament
 from bracket.routes.models import (
     LeagueAdminSeasonsResponse,
     LeagueTournamentApplicationsResponse,
@@ -67,14 +67,10 @@ from bracket.models.db.tournament import TournamentUpdateBody
 router = APIRouter(prefix=config.api_prefix)
 
 
-def user_is_admin(user_public: UserPublic) -> bool:
-    return config.admin_email is not None and user_public.email == config.admin_email
-
-
 async def user_is_league_admin_for_tournament(
     tournament_id: TournamentId, user_public: UserPublic
 ) -> bool:
-    if user_is_admin(user_public):
+    if is_admin_user(user_public):
         return True
     return await user_is_league_admin(tournament_id, user_public.id)
 
@@ -233,6 +229,9 @@ async def submit_league_entry(
     body: LeagueParticipantSubmissionBody,
     user_public: UserPublic = Depends(user_authenticated_for_tournament),
 ) -> LeagueDeckResponse:
+    if not is_admin_user(user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+
     participant_name = (
         body.participant_name.strip() if body.participant_name is not None else user_public.name.strip()
     )

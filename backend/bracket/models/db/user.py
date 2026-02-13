@@ -17,6 +17,11 @@ class UserBase(BaseModelORM):
     email: str
     name: str
     created: datetime_utc
+    avatar_url: str | None = None
+    favorite_card_id: str | None = None
+    favorite_card_name: str | None = None
+    favorite_card_image_url: str | None = None
+    favorite_media: str | None = None
     account_type: UserAccountType
 
     @property
@@ -44,6 +49,14 @@ class UserToUpdate(BaseModel):
     name: str
 
 
+class UserPreferencesToUpdate(BaseModel):
+    avatar_url: str | None = None
+    favorite_card_id: str | None = None
+    favorite_card_name: str | None = None
+    favorite_card_image_url: str | None = None
+    favorite_media: str | None = None
+
+
 class UserPasswordToUpdate(BaseModel):
     password: Annotated[str, StringConstraints(min_length=8, max_length=48)]
 
@@ -66,3 +79,23 @@ class UserToRegister(BaseModelORM):
 class UserInDB(UserBase):
     id: UserId
     password_hash: str
+
+
+class CardCatalogEntry(BaseModelORM):
+    card_id: str
+    name: str
+    character_variant: str | None = None
+    set_code: str
+    image_url: str | None = None
+
+
+class UserDirectoryEntry(BaseModelORM):
+    user_id: UserId
+    user_name: str
+    avatar_url: str | None = None
+    tournaments_won: int = 0
+    tournaments_placed: int = 0
+    favorite_media: str | None = None
+    current_leader_card_id: str | None = None
+    current_leader_name: str | None = None
+    current_leader_image_url: str | None = None

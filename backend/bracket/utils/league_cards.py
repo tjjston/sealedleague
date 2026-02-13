@@ -2,7 +2,9 @@ import json
 import random
 import time
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 SWU_DB_SET_ENDPOINT = "https://api.swu-db.com/cards/{set_code}"
@@ -11,16 +13,36 @@ _SWU_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _SWU_CACHE_LOCK = Lock()
 
 
-def fetch_swu_cards(set_codes: Sequence[str], timeout_s: int = 30) -> list[dict]:
-    cards: list[dict] = []
-    for set_code in set_codes:
+def _fetch_swu_set_cards(set_code: str, timeout_s: int) -> list[dict]:
+    try:
         with urlopen(
             SWU_DB_SET_ENDPOINT.format(set_code=set_code.lower()),
             timeout=timeout_s,
         ) as response:  # noqa: S310 controlled host
             payload = json.loads(response.read().decode("utf-8"))
         data = payload.get("data", [])
-        cards.extend(data if isinstance(data, list) else [data])
+        return data if isinstance(data, list) else [data]
+    except (URLError, HTTPError, TimeoutError, ValueError):
+        # Fail-soft per set so one slow/downstream failure doesn't block deckbuilder.
+        return []
+
+
+def fetch_swu_cards(set_codes: Sequence[str], timeout_s: int = 10) -> list[dict]:
+    cards: list[dict] = []
+    normalized_set_codes = sorted(
+        {set_code.strip().lower() for set_code in set_codes if set_code.strip()}
+    )
+    if len(normalized_set_codes) < 1:
+        return cards
+
+    with ThreadPoolExecutor(max_workers=min(8, len(normalized_set_codes))) as executor:
+        futures = [
+            executor.submit(_fetch_swu_set_cards, set_code, timeout_s)
+            for set_code in normalized_set_codes
+        ]
+        for future in as_completed(futures):
+            cards.extend(future.result())
+
     return cards
 
 
@@ -82,6 +104,7 @@ def normalize_card_for_deckbuilding(raw: dict) -> dict:
         "set_code": set_code,
         "number": number,
         "name": str(raw.get("Name", "")).strip(),
+        "character_variant": str(raw.get("Subtitle", "")).strip() or None,
         "type": str(raw.get("Type", "")).strip(),
         "rarity": str(raw.get("Rarity", "")).strip(),
         "aspects": list_of_strings(raw.get("Aspects")),
@@ -135,6 +158,7 @@ def filter_cards_for_deckbuilding(
         return (
             card["set_code"].lower(),
             card["name"].lower(),
+            str(card.get("character_variant") or "").lower(),
             card["type"].lower(),
             card["cost"],
             card["power"],
@@ -152,6 +176,7 @@ def filter_cards_for_deckbuilding(
         card_type_value = card["type"].lower()
         card_rarity = card["rarity"].lower()
         card_name = card["name"].lower()
+        card_character_variant = str(card.get("character_variant") or "").lower()
         card_rules = card["rules_text"].lower()
         card_aspects = {value.lower() for value in card["aspects"]}
         card_traits = {value.lower() for value in card["traits"]}
@@ -164,7 +189,7 @@ def filter_cards_for_deckbuilding(
             continue
         if normalized_rarity and card_rarity != normalized_rarity:
             continue
-        if normalized_name and normalized_name not in card_name:
+        if normalized_name and normalized_name not in card_name and normalized_name not in card_character_variant:
             continue
         if normalized_rules and normalized_rules not in card_rules:
             continue
@@ -188,6 +213,7 @@ def filter_cards_for_deckbuilding(
             haystack = " ".join(
                 [
                     card["name"].lower(),
+                    card_character_variant,
                     card["rules_text"].lower(),
                     card_type_value,
                     " ".join(card_aspects),

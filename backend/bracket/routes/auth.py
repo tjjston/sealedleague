@@ -10,6 +10,7 @@ from starlette.requests import Request
 
 from bracket.config import config
 from bracket.database import database
+from bracket.models.db.account import UserAccountType
 from bracket.models.db.tournament import Tournament
 from bracket.models.db.user import UserInDB, UserPublic
 from bracket.schema import tournaments
@@ -51,6 +52,12 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     email: str | None = None
+
+
+def is_admin_user(user: UserPublic) -> bool:
+    return user.account_type is UserAccountType.ADMIN or (
+        config.admin_email is not None and user.email == config.admin_email
+    )
 
 
 async def authenticate_user(email: str, password: str) -> UserInDB | None:
@@ -103,7 +110,11 @@ async def user_authenticated_for_tournament(
 ) -> UserPublic:
     user = await check_jwt_and_get_user(token)
 
-    if not user or not await get_user_access_to_tournament(tournament_id, user.id):
+    if (
+        not user
+        or not is_admin_user(user)
+        or not await get_user_access_to_tournament(tournament_id, user.id)
+    ):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",

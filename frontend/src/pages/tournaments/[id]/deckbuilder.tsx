@@ -5,6 +5,7 @@ import {
   Grid,
   Group,
   Image,
+  Modal,
   NumberInput,
   Progress,
   ScrollArea,
@@ -46,10 +47,13 @@ type CardItem = {
   card_id: string;
   set_code: string;
   name: string;
+  character_variant?: string | null;
   number: string;
   type: string;
   rarity: string;
   cost: number | null;
+  power?: number | null;
+  hp?: number | null;
   aspects: string[];
   traits: string[];
   keywords: string[];
@@ -58,7 +62,21 @@ type CardItem = {
   image_url?: string | null;
 };
 
-type DeckGraphView = 'cost' | 'type' | 'rarity' | 'out_aspect' | 'synergy' | 'arena';
+type DeckGraphView =
+  | 'cost'
+  | 'type'
+  | 'rarity'
+  | 'out_aspect'
+  | 'synergy'
+  | 'arena'
+  | 'power'
+  | 'hp';
+type AlignmentFilter = 'heroic' | 'villainy' | 'neither';
+
+const HEROIC_ASPECT_VALUES = new Set(['heroic', 'heroism']);
+const VILLAINY_ASPECT_VALUES = new Set(['villainy']);
+const DEFAULT_ASPECT_OPTIONS = ['Aggression', 'Cunning', 'Command', 'Vigilance'];
+const MAX_RENDERED_CARD_ROWS = 250;
 
 function countCards(deck: Record<string, number>) {
   return Object.values(deck).reduce((sum, count) => sum + count, 0);
@@ -192,7 +210,8 @@ export default function DeckbuilderPage({
   const [rulesQuery, setRulesQuery] = useState('');
   const [keywordQuery, setKeywordQuery] = useState('');
   const [traitQuery, setTraitQuery] = useState('');
-  const [aspectQuery, setAspectQuery] = useState('');
+  const [aspectFilter, setAspectFilter] = useState<string | null>(null);
+  const [alignmentFilter, setAlignmentFilter] = useState<AlignmentFilter | null>(null);
   const [costQuery, setCostQuery] = useState<number | ''>('');
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [rarityFilter, setRarityFilter] = useState<string | null>(null);
@@ -202,6 +221,8 @@ export default function DeckbuilderPage({
   const [showCardImage, setShowCardImage] = useState(false);
   const [onlyLegalCards, setOnlyLegalCards] = useState(false);
   const [onlyCardsInPool, setOnlyCardsInPool] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewImageLabel, setPreviewImageLabel] = useState<string>('');
 
   const [deckName, setDeckName] = useState('League Deck');
   const [leaderCardId, setLeaderCardId] = useState<string | null>(null);
@@ -251,13 +272,32 @@ export default function DeckbuilderPage({
     [allCards]
   );
 
+  const aspectOptions = useMemo(() => {
+    const derived = [
+      ...new Set(
+        allCards
+          .flatMap((card: CardItem) => card.aspects ?? [])
+          .map((value) => value.trim())
+          .filter((value) => value !== '')
+          .filter((value) => {
+            const normalized = value.toLowerCase();
+            return !HEROIC_ASPECT_VALUES.has(normalized) && !VILLAINY_ASPECT_VALUES.has(normalized);
+          })
+      ),
+    ];
+
+    return [...new Set([...DEFAULT_ASPECT_OPTIONS, ...derived])]
+      .sort((a, b) => a.localeCompare(b))
+      .map((value) => ({ value, label: value }));
+  }, [allCards]);
+
   const leaderOptions = useMemo(
     () =>
       allCards
         .filter((card: CardItem) => card.type.toLowerCase() === 'leader')
         .map((card: CardItem) => ({
           value: card.card_id,
-          label: `${card.name} (${card.set_code.toUpperCase()})`,
+          label: `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''} (${card.set_code.toUpperCase()})`,
         }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     [allCards]
@@ -269,7 +309,7 @@ export default function DeckbuilderPage({
         .filter((card: CardItem) => card.type.toLowerCase() === 'base')
         .map((card: CardItem) => ({
           value: card.card_id,
-          label: `${card.name} (${card.set_code.toUpperCase()})`,
+          label: `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''} (${card.set_code.toUpperCase()})`,
         }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     [allCards]
@@ -290,11 +330,12 @@ export default function DeckbuilderPage({
     const normalizedRules = rulesQuery.trim().toLowerCase();
     const normalizedKeyword = keywordQuery.trim().toLowerCase();
     const normalizedTrait = traitQuery.trim().toLowerCase();
-    const normalizedAspect = aspectQuery.trim().toLowerCase();
+    const normalizedAspectFilter = (aspectFilter ?? '').trim().toLowerCase();
 
     return allCards
       .filter((card: CardItem) => {
         const name = card.name.toLowerCase();
+        const variant = (card.character_variant ?? '').toLowerCase();
         const rules = (card.rules_text ?? '').toLowerCase();
         const type = card.type.toLowerCase();
         const aspects = (card.aspects ?? []).map((value) => value.toLowerCase());
@@ -304,10 +345,16 @@ export default function DeckbuilderPage({
         const rarity = (card.rarity ?? '').toLowerCase();
 
         if (normalizedQuery !== '') {
-          const haystack = `${name} ${rules} ${type} ${rarity} ${aspects.join(' ')} ${traits.join(' ')} ${keywords.join(' ')} ${arenas.join(' ')}`;
+          const haystack = `${name} ${variant} ${rules} ${type} ${rarity} ${aspects.join(' ')} ${traits.join(' ')} ${keywords.join(' ')} ${arenas.join(' ')} ${card.card_id.toLowerCase()}`;
           if (!haystack.includes(normalizedQuery)) return false;
         }
-        if (normalizedName !== '' && !name.includes(normalizedName)) return false;
+        if (
+          normalizedName !== '' &&
+          !name.includes(normalizedName) &&
+          !variant.includes(normalizedName)
+        ) {
+          return false;
+        }
         if (normalizedRules !== '' && !rules.includes(normalizedRules)) return false;
         if (normalizedKeyword !== '' && !keywords.some((value) => value.includes(normalizedKeyword))) {
           return false;
@@ -315,8 +362,20 @@ export default function DeckbuilderPage({
         if (normalizedTrait !== '' && !traits.some((value) => value.includes(normalizedTrait))) {
           return false;
         }
-        if (normalizedAspect !== '' && !aspects.some((value) => value.includes(normalizedAspect))) {
+        if (normalizedAspectFilter !== '' && !aspects.includes(normalizedAspectFilter)) {
           return false;
+        }
+        if (alignmentFilter != null) {
+          const hasHeroic = aspects.some((value) => HEROIC_ASPECT_VALUES.has(value));
+          const hasVillainy = aspects.some((value) => VILLAINY_ASPECT_VALUES.has(value));
+          const alignment: AlignmentFilter = hasVillainy
+            ? 'villainy'
+            : hasHeroic
+              ? 'heroic'
+              : 'neither';
+          if (alignment !== alignmentFilter) {
+            return false;
+          }
         }
         if (costQuery !== '' && card.cost !== Number(costQuery)) return false;
         if (typeFilter != null && card.type !== typeFilter) return false;
@@ -336,6 +395,8 @@ export default function DeckbuilderPage({
       .sort((a, b) => {
         const nameSort = a.name.localeCompare(b.name);
         if (nameSort !== 0) return nameSort;
+        const variantSort = (a.character_variant ?? '').localeCompare(b.character_variant ?? '');
+        if (variantSort !== 0) return variantSort;
         return (a.cost ?? 999) - (b.cost ?? 999);
       });
   }, [
@@ -345,7 +406,8 @@ export default function DeckbuilderPage({
     rulesQuery,
     keywordQuery,
     traitQuery,
-    aspectQuery,
+    aspectFilter,
+    alignmentFilter,
     costQuery,
     typeFilter,
     rarityFilter,
@@ -356,6 +418,11 @@ export default function DeckbuilderPage({
     onlyLegalCards,
     allowedAspects,
   ]);
+
+  const visibleFilteredCards = useMemo(
+    () => filteredCards.slice(0, MAX_RENDERED_CARD_ROWS),
+    [filteredCards]
+  );
 
   async function addToPool(cardId: string, nextQuantity: number) {
     if (!hasTournament) return;
@@ -471,6 +538,10 @@ export default function DeckbuilderPage({
     const byCost = aggregateCountMap(
       deckEntries.map((x) => [String(x.card?.cost ?? '-'), x.row.qty])
     );
+    const byPower = aggregateCountMap(
+      deckEntries.map((x) => [String(x.card?.power ?? '-'), x.row.qty])
+    );
+    const byHp = aggregateCountMap(deckEntries.map((x) => [String(x.card?.hp ?? '-'), x.row.qty]));
     const byType = aggregateCountMap(deckEntries.map((x) => [x.card?.type ?? 'Unknown', x.row.qty]));
     const byRarity = aggregateCountMap(deckEntries.map((x) => [x.card?.rarity ?? 'Unknown', x.row.qty]));
     const byArena = aggregateCountMap(
@@ -504,6 +575,8 @@ export default function DeckbuilderPage({
     return {
       totalQty,
       byCost: toSortedRows(byCost),
+      byPower: toSortedRows(byPower),
+      byHp: toSortedRows(byHp),
       byType: toSortedRows(byType),
       byRarity: toSortedRows(byRarity),
       byArena: toSortedRows(byArena),
@@ -518,6 +591,10 @@ export default function DeckbuilderPage({
   let graphContent = null;
   if (graphView === 'cost') {
     graphContent = <GraphBars data={deckMetrics.byCost} total={deckMetrics.totalQty} />;
+  } else if (graphView === 'power') {
+    graphContent = <GraphBars data={deckMetrics.byPower} total={deckMetrics.totalQty} />;
+  } else if (graphView === 'hp') {
+    graphContent = <GraphBars data={deckMetrics.byHp} total={deckMetrics.totalQty} />;
   } else if (graphView === 'type') {
     graphContent = <GraphBars data={deckMetrics.byType} total={deckMetrics.totalQty} />;
   } else if (graphView === 'rarity') {
@@ -537,6 +614,8 @@ export default function DeckbuilderPage({
       base: baseCard?.card_id ?? null,
       total_cards: deckMetrics.totalQty,
       by_cost: deckMetrics.byCost,
+      by_power: deckMetrics.byPower,
+      by_hp: deckMetrics.byHp,
       by_type: deckMetrics.byType,
       by_rarity: deckMetrics.byRarity,
       aspect_fit: deckMetrics.outAspectRows,
@@ -567,9 +646,21 @@ export default function DeckbuilderPage({
 
   const content = (
     <Stack>
+        <Modal
+          opened={previewImageUrl != null}
+          onClose={() => setPreviewImageUrl(null)}
+          title={previewImageLabel}
+          size="85vw"
+          centered
+        >
+          {previewImageUrl != null && (
+            <Image src={previewImageUrl} alt={previewImageLabel} fit="contain" style={{ maxHeight: '78vh' }} />
+          )}
+        </Modal>
         <Title order={2}>Deckbuilder</Title>
         <Text c="dimmed">
-          Search by name, keyword, trait, cost, type, aspect, set, rules, and arena. Card pools remain user-specific.
+          Search by name, keyword, trait, cost, type, aspect, alignment, set, rules, and arena.
+          Card pools remain user-specific.
         </Text>
         {standalone && (
           <Card withBorder>
@@ -629,11 +720,29 @@ export default function DeckbuilderPage({
                     value={keywordQuery}
                     onChange={(e) => setKeywordQuery(e.currentTarget.value)}
                   />
-                  <TextInput label="Trait" value={traitQuery} onChange={(e) => setTraitQuery(e.currentTarget.value)} />
                   <TextInput
+                    label="Trait"
+                    value={traitQuery}
+                    onChange={(e) => setTraitQuery(e.currentTarget.value)}
+                  />
+                  <Select
                     label="Aspect"
-                    value={aspectQuery}
-                    onChange={(e) => setAspectQuery(e.currentTarget.value)}
+                    data={aspectOptions}
+                    value={aspectFilter}
+                    onChange={setAspectFilter}
+                    clearable
+                    searchable
+                  />
+                  <Select
+                    label="Alignment"
+                    value={alignmentFilter}
+                    onChange={(value) => setAlignmentFilter((value as AlignmentFilter | null) ?? null)}
+                    data={[
+                      { value: 'heroic', label: 'Heroic' },
+                      { value: 'villainy', label: 'Villainy' },
+                      { value: 'neither', label: 'Neither' },
+                    ]}
+                    clearable
                   />
                 </Group>
                 <Group grow>
@@ -680,6 +789,12 @@ export default function DeckbuilderPage({
                 </Group>
 
                 <ScrollArea h={500}>
+                  {filteredCards.length > MAX_RENDERED_CARD_ROWS ? (
+                    <Text size="sm" c="dimmed" mb="xs">
+                      Showing first {MAX_RENDERED_CARD_ROWS} of {filteredCards.length} cards. Narrow search filters to
+                      load a smaller set.
+                    </Text>
+                  ) : null}
                   <Table highlightOnHover stickyHeader>
                     <Table.Thead>
                       <Table.Tr>
@@ -688,6 +803,8 @@ export default function DeckbuilderPage({
                         <Table.Th>Type</Table.Th>
                         <Table.Th>Rarity</Table.Th>
                         <Table.Th>Cost</Table.Th>
+                        <Table.Th>Power</Table.Th>
+                        <Table.Th>HP</Table.Th>
                         <Table.Th>Aspects</Table.Th>
                         <Table.Th>Arena</Table.Th>
                         <Table.Th>Set</Table.Th>
@@ -696,7 +813,7 @@ export default function DeckbuilderPage({
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
-                      {filteredCards.map((card: CardItem) => {
+                      {visibleFilteredCards.map((card: CardItem) => {
                         const currentQty = cardPoolMap[card.card_id] ?? 0;
                         const cardIsLeaderOrBase = isLeaderOrBase(card);
                         return (
@@ -704,7 +821,19 @@ export default function DeckbuilderPage({
                             {showCardImage && (
                               <Table.Td>
                                 {card.image_url != null ? (
-                                  <Image src={card.image_url} w={64} h={90} radius="sm" />
+                                  <Image
+                                    src={card.image_url}
+                                    w={64}
+                                    h={90}
+                                    radius="sm"
+                                    style={{ cursor: 'zoom-in' }}
+                                    onClick={() => {
+                                      setPreviewImageLabel(
+                                        `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''}`
+                                      );
+                                      setPreviewImageUrl(card.image_url ?? null);
+                                    }}
+                                  />
                                 ) : (
                                   <Text size="xs" c="dimmed">
                                     No image
@@ -715,6 +844,11 @@ export default function DeckbuilderPage({
                             <Table.Td>
                               <Stack gap={0}>
                                 <Text fw={600}>{card.name}</Text>
+                                {card.character_variant != null && card.character_variant !== '' && (
+                                  <Text size="xs" c="dimmed">
+                                    {card.character_variant}
+                                  </Text>
+                                )}
                                 <Group gap={6}>
                                   <Text size="xs" c="dimmed">
                                     {card.card_id}
@@ -725,6 +859,8 @@ export default function DeckbuilderPage({
                             <Table.Td>{card.type}</Table.Td>
                             <Table.Td>{card.rarity || '-'}</Table.Td>
                             <Table.Td>{card.cost ?? '-'}</Table.Td>
+                            <Table.Td>{card.power ?? '-'}</Table.Td>
+                            <Table.Td>{card.hp ?? '-'}</Table.Td>
                             <Table.Td>{(card.aspects ?? []).join(', ') || '-'}</Table.Td>
                             <Table.Td>{(card.arenas ?? []).join(', ') || '-'}</Table.Td>
                             <Table.Td>{card.set_code.toUpperCase()}</Table.Td>
@@ -784,10 +920,36 @@ export default function DeckbuilderPage({
                   data={leaderOptions}
                 />
                 {leaderCard?.image_url != null && (
-                  <Image src={leaderCard.image_url} h={130} fit="contain" radius="sm" />
+                  <Image
+                    src={leaderCard.image_url}
+                    h={130}
+                    fit="contain"
+                    radius="sm"
+                    style={{ cursor: 'zoom-in' }}
+                    onClick={() => {
+                      setPreviewImageLabel(
+                        `${leaderCard.name}${leaderCard.character_variant ? ` - ${leaderCard.character_variant}` : ''}`
+                      );
+                      setPreviewImageUrl(leaderCard.image_url ?? null);
+                    }}
+                  />
                 )}
                 <Select searchable label="Base" value={baseCardId} onChange={setBaseCardId} data={baseOptions} />
-                {baseCard?.image_url != null && <Image src={baseCard.image_url} h={130} fit="contain" radius="sm" />}
+                {baseCard?.image_url != null && (
+                  <Image
+                    src={baseCard.image_url}
+                    h={130}
+                    fit="contain"
+                    radius="sm"
+                    style={{ cursor: 'zoom-in' }}
+                    onClick={() => {
+                      setPreviewImageLabel(
+                        `${baseCard.name}${baseCard.character_variant ? ` - ${baseCard.character_variant}` : ''}`
+                      );
+                      setPreviewImageUrl(baseCard.image_url ?? null);
+                    }}
+                  />
+                )}
                 <Group justify="space-between">
                   <Text>Mainboard ({countCards(mainboard)})</Text>
                   <Text size="sm" c="dimmed">
@@ -804,6 +966,8 @@ export default function DeckbuilderPage({
                         <Table.Th>Name</Table.Th>
                         <Table.Th>Type</Table.Th>
                         <Table.Th>Cost</Table.Th>
+                        <Table.Th>Power</Table.Th>
+                        <Table.Th>HP</Table.Th>
                         <Table.Th>Aspect</Table.Th>
                         <Table.Th>Arena/Set</Table.Th>
                         <Table.Th></Table.Th>
@@ -812,7 +976,7 @@ export default function DeckbuilderPage({
                     <Table.Tbody>
                       {deckRows.length < 1 && (
                         <Table.Tr>
-                          <Table.Td colSpan={8}>
+                          <Table.Td colSpan={10}>
                             <Text c="dimmed" size="sm">
                               No cards added yet.
                             </Text>
@@ -825,9 +989,20 @@ export default function DeckbuilderPage({
                           <Table.Tr key={`${row.side}-${row.card_id}`}>
                             <Table.Td>{row.side}</Table.Td>
                             <Table.Td>{row.qty}</Table.Td>
-                            <Table.Td>{card?.name ?? row.card_id}</Table.Td>
+                            <Table.Td>
+                              <Stack gap={0}>
+                                <Text size="sm">{card?.name ?? row.card_id}</Text>
+                                {card?.character_variant != null && card.character_variant !== '' ? (
+                                  <Text size="xs" c="dimmed">
+                                    {card.character_variant}
+                                  </Text>
+                                ) : null}
+                              </Stack>
+                            </Table.Td>
                             <Table.Td>{card?.type ?? '-'}</Table.Td>
                             <Table.Td>{card?.cost ?? '-'}</Table.Td>
+                            <Table.Td>{card?.power ?? '-'}</Table.Td>
+                            <Table.Td>{card?.hp ?? '-'}</Table.Td>
                             <Table.Td>{card != null ? (card.aspects ?? []).join(', ') || '-' : '-'}</Table.Td>
                             <Table.Td>
                               {card != null
@@ -854,9 +1029,19 @@ export default function DeckbuilderPage({
                 <Button onClick={onSaveDeck} disabled={leaderCardId == null || baseCardId == null}>
                   Save Deck
                 </Button>
-                <Button variant="outline" onClick={onSubmitEntry} disabled={leaderCardId == null || baseCardId == null}>
-                  Submit Tournament Entry
-                </Button>
+                {isAdmin ? (
+                  <Button
+                    variant="outline"
+                    onClick={onSubmitEntry}
+                    disabled={leaderCardId == null || baseCardId == null}
+                  >
+                    Submit Tournament Entry
+                  </Button>
+                ) : (
+                  <Text size="sm" c="dimmed">
+                    Only admins can submit tournament entries.
+                  </Text>
+                )}
               </Stack>
             </Card>
 
@@ -961,6 +1146,8 @@ export default function DeckbuilderPage({
                   onChange={(value) => setGraphView(value as DeckGraphView)}
                   data={[
                     { value: 'cost', label: 'By Cost' },
+                    { value: 'power', label: 'By Power' },
+                    { value: 'hp', label: 'By HP' },
                     { value: 'type', label: 'By Type' },
                     { value: 'rarity', label: 'By Rarity' },
                     { value: 'out_aspect', label: 'Aspect Fit' },

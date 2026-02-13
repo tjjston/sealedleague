@@ -12,9 +12,10 @@ from bracket.utils.id_types import TournamentId
 
 async def sql_get_tournament(tournament_id: TournamentId) -> Tournament:
     query = """
-        SELECT *
-        FROM tournaments
-        WHERE id = :tournament_id
+        SELECT t.*, c.name AS club_name
+        FROM tournaments t
+        JOIN clubs c ON c.id = t.club_id
+        WHERE t.id = :tournament_id
         """
     result = await database.fetch_one(query=query, values={"tournament_id": tournament_id})
     assert result is not None
@@ -23,10 +24,11 @@ async def sql_get_tournament(tournament_id: TournamentId) -> Tournament:
 
 async def sql_get_tournament_by_endpoint_name(endpoint_name: str) -> Tournament | None:
     query = """
-        SELECT *
-        FROM tournaments
-        WHERE dashboard_endpoint = :endpoint_name
-        AND dashboard_public IS TRUE
+        SELECT t.*, c.name AS club_name
+        FROM tournaments t
+        JOIN clubs c ON c.id = t.club_id
+        WHERE t.dashboard_endpoint = :endpoint_name
+        AND t.dashboard_public IS TRUE
         """
     result = await database.fetch_one(query=query, values={"endpoint_name": endpoint_name})
     return Tournament.model_validate(result) if result is not None else None
@@ -38,21 +40,22 @@ async def sql_get_tournaments(
     filter_: Literal["ALL", "OPEN", "ARCHIVED"] = "ALL",
 ) -> list[Tournament]:
     query = """
-        SELECT *
-        FROM tournaments
-        WHERE club_id = any(:club_ids)
+        SELECT t.*, c.name AS club_name
+        FROM tournaments t
+        JOIN clubs c ON c.id = t.club_id
+        WHERE t.club_id = any(:club_ids)
         """
 
     params: dict[str, Any] = {"club_ids": club_ids}
 
     if endpoint_name is not None:
-        query += "AND dashboard_endpoint = :endpoint_name"
+        query += "AND t.dashboard_endpoint = :endpoint_name"
         params = {**params, "endpoint_name": endpoint_name}
 
     if filter_ == "OPEN":
-        query += "AND status = 'OPEN'"
+        query += "AND t.status = 'OPEN'"
     elif filter_ == "ARCHIVED":
-        query += "AND status = 'ARCHIVED'"
+        query += "AND t.status = 'ARCHIVED'"
 
     result = await database.fetch_all(query=query, values=params)
     return [Tournament.model_validate(x) for x in result]

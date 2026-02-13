@@ -13,8 +13,10 @@ import TableLayout, { ThNotSortable, ThSortable, getTableState, sortTableEntries
 
 export default function ClubsTable({
   swrClubsResponse,
+  canManageClubs = false,
 }: {
   swrClubsResponse: SWRResponse<ClubsResponse>;
+  canManageClubs?: boolean;
 }) {
   const clubs: Club[] = swrClubsResponse.data != null ? swrClubsResponse.data.data : [];
   const tableState = getTableState('name');
@@ -31,14 +33,18 @@ export default function ClubsTable({
       <Table.Tr key={club.id}>
         <Table.Td>{club.name}</Table.Td>
         <Table.Td>
-          <ClubModal swrClubsResponse={swrClubsResponse} club={club} />
-          <DeleteButton
-            onClick={async () => {
-              await deleteClub(club.id);
-              await swrClubsResponse.mutate();
-            }}
-            title={t('delete_club_button')}
-          />
+          {canManageClubs ? (
+            <>
+              <ClubModal swrClubsResponse={swrClubsResponse} club={club} />
+              <DeleteButton
+                onClick={async () => {
+                  await deleteClub(club.id);
+                  await swrClubsResponse.mutate();
+                }}
+                title={t('delete_club_button')}
+              />
+            </>
+          ) : null}
         </Table.Td>
       </Table.Tr>
     ));

@@ -59,6 +59,7 @@ regular_subscription = Subscription(
 subscription_lookup = {
     UserAccountType.DEMO: demo_subscription,
     UserAccountType.REGULAR: regular_subscription,
+    UserAccountType.ADMIN: regular_subscription,
 }
 
 

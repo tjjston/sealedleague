@@ -1,3 +1,5 @@
+from collections import Counter
+from collections.abc import Sequence
 from heliclockter import datetime_utc
 import json
 
@@ -6,7 +8,11 @@ from bracket.models.db.league import Season
 from bracket.models.db.player import PlayerBody
 from bracket.models.db.team import TeamInsertable
 from bracket.models.league import (
+    LeagueAspectUsage,
     LeagueAdminUserView,
+    LeagueFavoriteCard,
+    LeaguePlayerCareerProfile,
+    LeagueSeasonRecord,
     LeagueSeasonAdminView,
     LeagueCardPoolEntryView,
     LeagueDeckView,
@@ -17,6 +23,11 @@ from bracket.models.league import (
 from bracket.sql.players import get_player_by_name, insert_player
 from bracket.schema import teams
 from bracket.utils.id_types import DeckId, TournamentId, UserId
+from bracket.utils.league_cards import (
+    DEFAULT_SWU_SET_CODES,
+    fetch_swu_cards_cached,
+    normalize_card_for_deckbuilding,
+)
 from bracket.utils.types import assert_some
 
 
@@ -990,3 +1001,194 @@ async def delete_league_data_for_tournament(tournament_id: TournamentId) -> None
            )
     """
     await database.execute(query=query, values={"tournament_id": tournament_id})
+
+
+async def get_user_season_records(user_id: UserId, user_name: str) -> list[LeagueSeasonRecord]:
+    rows = await database.fetch_all(
+        """
+        WITH season_map AS (
+            SELECT s.id AS season_id, s.name AS season_name, s.created, s.tournament_id
+            FROM seasons s
+            UNION
+            SELECT s.id AS season_id, s.name AS season_name, s.created, st.tournament_id
+            FROM seasons s
+            JOIN season_tournaments st ON st.season_id = s.id
+        )
+        SELECT
+            sm.season_id,
+            sm.season_name,
+            sm.created,
+            COALESCE(SUM(p.wins), 0) AS wins,
+            COALESCE(SUM(p.draws), 0) AS draws,
+            COALESCE(SUM(p.losses), 0) AS losses
+        FROM season_map sm
+        JOIN tournaments t ON t.id = sm.tournament_id
+        JOIN users_x_clubs uxc ON uxc.club_id = t.club_id
+        LEFT JOIN players p
+            ON p.tournament_id = t.id
+            AND lower(trim(p.name)) = lower(trim(:user_name))
+        WHERE uxc.user_id = :user_id
+        GROUP BY sm.season_id, sm.season_name, sm.created
+        ORDER BY sm.created DESC, sm.season_id DESC
+        """,
+        values={"user_id": user_id, "user_name": user_name},
+    )
+    records: list[LeagueSeasonRecord] = []
+    for row in rows:
+        wins = int(row._mapping["wins"] or 0)
+        draws = int(row._mapping["draws"] or 0)
+        losses = int(row._mapping["losses"] or 0)
+        matches = wins + draws + losses
+        win_percentage = (wins / matches * 100) if matches > 0 else 0
+        records.append(
+            LeagueSeasonRecord(
+                season_id=int(row._mapping["season_id"]),
+                season_name=str(row._mapping["season_name"]),
+                wins=wins,
+                draws=draws,
+                losses=losses,
+                matches=matches,
+                win_percentage=round(win_percentage, 2),
+            )
+        )
+    return records
+
+
+def _get_card_lookup(card_ids: Sequence[str]) -> dict[str, dict]:
+    if len(card_ids) < 1:
+        return {}
+
+    cards_raw = fetch_swu_cards_cached(DEFAULT_SWU_SET_CODES)
+    cards = [normalize_card_for_deckbuilding(card) for card in cards_raw]
+    by_id = {str(card["card_id"]).lower(): card for card in cards}
+    return {
+        card_id.lower(): by_id[card_id.lower()]
+        for card_id in card_ids
+        if card_id.lower() in by_id
+    }
+
+
+async def get_user_career_profile(
+    user_id: UserId,
+) -> LeaguePlayerCareerProfile | None:
+    user_row = await database.fetch_one(
+        """
+        SELECT id, name, email, account_type
+        FROM users
+        WHERE id = :user_id
+        """,
+        values={"user_id": user_id},
+    )
+    if user_row is None:
+        return None
+
+    user_name = str(user_row._mapping["name"])
+    summary_row = await database.fetch_one(
+        """
+        SELECT
+            COALESCE(SUM(p.wins), 0) AS wins,
+            COALESCE(SUM(p.draws), 0) AS draws,
+            COALESCE(SUM(p.losses), 0) AS losses
+        FROM tournaments t
+        JOIN users_x_clubs uxc ON uxc.club_id = t.club_id
+        LEFT JOIN players p
+            ON p.tournament_id = t.id
+            AND lower(trim(p.name)) = lower(trim(:user_name))
+        WHERE uxc.user_id = :user_id
+        """,
+        values={"user_id": user_id, "user_name": user_name},
+    )
+
+    wins = int(assert_some(summary_row)._mapping["wins"] or 0)
+    draws = int(assert_some(summary_row)._mapping["draws"] or 0)
+    losses = int(assert_some(summary_row)._mapping["losses"] or 0)
+    matches = wins + draws + losses
+    overall_win_percentage = (wins / matches * 100) if matches > 0 else 0
+
+    season_records = await get_user_season_records(user_id, user_name)
+
+    deck_rows = await database.fetch_all(
+        """
+        SELECT leader, base, mainboard
+        FROM decks
+        WHERE user_id = :user_id
+        ORDER BY updated DESC
+        """,
+        values={"user_id": user_id},
+    )
+    aspect_counts: Counter[str] = Counter()
+    card_counts: Counter[str] = Counter()
+    card_ids: set[str] = set()
+
+    for row in deck_rows:
+        leader = str(row._mapping["leader"] or "").strip().lower()
+        base = str(row._mapping["base"] or "").strip().lower()
+        if leader != "":
+            card_ids.add(leader)
+        if base != "":
+            card_ids.add(base)
+
+        mainboard_raw = row._mapping["mainboard"]
+        if isinstance(mainboard_raw, str):
+            try:
+                mainboard_raw = json.loads(mainboard_raw)
+            except ValueError:
+                mainboard_raw = {}
+        if isinstance(mainboard_raw, dict):
+            for card_id, amount in mainboard_raw.items():
+                normalized_card_id = str(card_id).strip().lower()
+                if normalized_card_id == "":
+                    continue
+                try:
+                    amount_int = int(amount)
+                except (TypeError, ValueError):
+                    continue
+                if amount_int <= 0:
+                    continue
+                card_counts[normalized_card_id] += amount_int
+                card_ids.add(normalized_card_id)
+
+    card_lookup = _get_card_lookup(list(card_ids))
+    for row in deck_rows:
+        leader = str(row._mapping["leader"] or "").strip().lower()
+        base = str(row._mapping["base"] or "").strip().lower()
+        for deck_card_id in [leader, base]:
+            if deck_card_id == "" or deck_card_id not in card_lookup:
+                continue
+            for aspect in card_lookup[deck_card_id].get("aspects", []):
+                normalized_aspect = str(aspect).strip()
+                if normalized_aspect != "":
+                    aspect_counts[normalized_aspect] += 1
+
+    most_used_aspects = [
+        LeagueAspectUsage(aspect=aspect, count=count)
+        for aspect, count in aspect_counts.most_common(6)
+    ]
+
+    favorite_card: LeagueFavoriteCard | None = None
+    if len(card_counts) > 0:
+        card_id, uses = card_counts.most_common(1)[0]
+        favorite = card_lookup.get(card_id)
+        favorite_card = LeagueFavoriteCard(
+            card_id=card_id,
+            uses=uses,
+            name=None if favorite is None else str(favorite.get("name") or ""),
+            image_url=None if favorite is None else favorite.get("image_url"),
+        )
+
+    return LeaguePlayerCareerProfile.model_validate(
+        {
+            "user_id": int(user_row._mapping["id"]),
+            "user_name": str(user_row._mapping["name"]),
+            "user_email": str(user_row._mapping["email"]),
+            "account_type": str(user_row._mapping["account_type"]),
+            "overall_wins": wins,
+            "overall_draws": draws,
+            "overall_losses": losses,
+            "overall_matches": matches,
+            "overall_win_percentage": round(overall_win_percentage, 2),
+            "season_records": [record.model_dump() for record in season_records],
+            "most_used_aspects": [aspect.model_dump() for aspect in most_used_aspects],
+            "favorite_card": None if favorite_card is None else favorite_card.model_dump(),
+        }
+    )

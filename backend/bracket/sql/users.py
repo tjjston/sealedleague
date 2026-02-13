@@ -1,7 +1,15 @@
 from bracket.database import database
 from bracket.logic.tournaments import sql_delete_tournament_completely
 from bracket.models.db.account import UserAccountType
-from bracket.models.db.user import User, UserInDB, UserInsertable, UserPublic, UserToUpdate
+from bracket.models.db.user import (
+    User,
+    UserDirectoryEntry,
+    UserInDB,
+    UserInsertable,
+    UserPreferencesToUpdate,
+    UserPublic,
+    UserToUpdate,
+)
 from bracket.schema import users
 from bracket.sql.clubs import get_clubs_for_user_id, sql_delete_club
 from bracket.sql.tournaments import sql_get_tournaments
@@ -71,6 +79,23 @@ async def update_user(user_id: UserId, user: UserToUpdate) -> None:
     )
 
 
+async def update_user_preferences(user_id: UserId, body: UserPreferencesToUpdate) -> None:
+    query = """
+        UPDATE users
+        SET
+            avatar_url = :avatar_url,
+            favorite_card_id = :favorite_card_id,
+            favorite_card_name = :favorite_card_name,
+            favorite_card_image_url = :favorite_card_image_url,
+            favorite_media = :favorite_media
+        WHERE id = :user_id
+        """
+    await database.execute(
+        query=query,
+        values={"user_id": user_id, **body.model_dump()},
+    )
+
+
 async def update_user_account_type(user_id: UserId, account_type: UserAccountType) -> None:
     query = """
         UPDATE users
@@ -109,6 +134,56 @@ async def get_users() -> list[UserPublic]:
         """
     result = await database.fetch_all(query=query)
     return [UserPublic.model_validate(dict(user._mapping)) for user in result]
+
+
+async def get_user_directory() -> list[UserDirectoryEntry]:
+    rows = await database.fetch_all(
+        """
+        SELECT
+            u.id AS user_id,
+            u.name AS user_name,
+            u.avatar_url,
+            u.favorite_media,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN spl.reason LIKE 'TOURNAMENT_WIN:%'
+                            THEN COALESCE(NULLIF(split_part(spl.reason, ':', 2), ''), '0')::INT
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS tournaments_won,
+            COALESCE(
+                SUM(
+                    CASE
+                        WHEN spl.reason LIKE 'TOURNAMENT_PLACEMENT:%'
+                            THEN COALESCE(NULLIF(split_part(spl.reason, ':', 2), ''), '0')::INT
+                        ELSE 0
+                    END
+                ),
+                0
+            ) AS tournaments_placed,
+            d.leader AS current_leader_card_id
+        FROM users u
+        LEFT JOIN LATERAL (
+            SELECT leader
+            FROM decks
+            WHERE user_id = u.id
+            ORDER BY updated DESC
+            LIMIT 1
+        ) d ON TRUE
+        LEFT JOIN season_points_ledger spl ON spl.user_id = u.id
+        GROUP BY
+            u.id,
+            u.name,
+            u.avatar_url,
+            u.favorite_media,
+            d.leader
+        ORDER BY u.name ASC
+        """
+    )
+    return [UserDirectoryEntry.model_validate(dict(row._mapping)) for row in rows]
 
 
 async def get_expired_demo_users() -> list[UserPublic]:

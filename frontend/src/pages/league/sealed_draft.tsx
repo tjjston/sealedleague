@@ -5,6 +5,7 @@ import {
   Card,
   Group,
   Image,
+  Modal,
   NumberInput,
   ScrollArea,
   Select,
@@ -28,6 +29,7 @@ type CardItem = {
   card_id: string;
   set_code: string;
   name: string;
+  character_variant?: string | null;
   type: string;
   rarity: string;
   traits?: string[];
@@ -36,6 +38,8 @@ type CardItem = {
   aspects: string[];
   arenas: string[];
   cost: number | null;
+  power?: number | null;
+  hp?: number | null;
   image_url?: string | null;
 };
 
@@ -82,6 +86,8 @@ export default function SealedDraftSimulationPage() {
   const [setFilter, setSetFilter] = useState<string | null>(null);
   const [arenaFilter, setArenaFilter] = useState<string | null>(null);
   const [onlyLegalCards, setOnlyLegalCards] = useState(false);
+  const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
+  const [previewImageLabel, setPreviewImageLabel] = useState<string>('');
 
   useEffect(() => {
     if (tournaments.length < 1 || selectedTournamentId != null) return;
@@ -140,7 +146,7 @@ export default function SealedDraftSimulationPage() {
     () =>
       [...new Map(leaders.map((card) => [card.card_id, card])).values()].map((card) => ({
         value: card.card_id,
-        label: `${card.name} (${card.set_code.toUpperCase()})`,
+        label: `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''} (${card.set_code.toUpperCase()})`,
       })),
     [leaders]
   );
@@ -148,7 +154,7 @@ export default function SealedDraftSimulationPage() {
     () =>
       [...new Map(bases.map((card) => [card.card_id, card])).values()].map((card) => ({
         value: card.card_id,
-        label: `${card.name} (${card.set_code.toUpperCase()})`,
+        label: `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''} (${card.set_code.toUpperCase()})`,
       })),
     [bases]
   );
@@ -208,6 +214,7 @@ export default function SealedDraftSimulationPage() {
     return uniquePoolCards
       .filter((card: CardItem) => {
         const name = card.name.toLowerCase();
+        const variant = (card.character_variant ?? '').toLowerCase();
         const rules = (card.rules_text ?? '').toLowerCase();
         const type = card.type.toLowerCase();
         const rarity = (card.rarity ?? '').toLowerCase();
@@ -217,10 +224,16 @@ export default function SealedDraftSimulationPage() {
         const arenas = (card.arenas ?? []).map((value) => value.toLowerCase());
 
         if (normalizedQuery !== '') {
-          const haystack = `${name} ${rules} ${type} ${rarity} ${aspects.join(' ')} ${traits.join(' ')} ${keywords.join(' ')} ${arenas.join(' ')}`;
+          const haystack = `${name} ${variant} ${rules} ${type} ${rarity} ${aspects.join(' ')} ${traits.join(' ')} ${keywords.join(' ')} ${arenas.join(' ')} ${card.card_id.toLowerCase()}`;
           if (!haystack.includes(normalizedQuery)) return false;
         }
-        if (normalizedName !== '' && !name.includes(normalizedName)) return false;
+        if (
+          normalizedName !== '' &&
+          !name.includes(normalizedName) &&
+          !variant.includes(normalizedName)
+        ) {
+          return false;
+        }
         if (normalizedRules !== '' && !rules.includes(normalizedRules)) return false;
         if (normalizedKeyword !== '' && !keywords.some((value) => value.includes(normalizedKeyword))) return false;
         if (normalizedTrait !== '' && !traits.some((value) => value.includes(normalizedTrait))) return false;
@@ -238,7 +251,11 @@ export default function SealedDraftSimulationPage() {
         }
         return true;
       })
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .sort((a, b) => {
+        const byName = a.name.localeCompare(b.name);
+        if (byName !== 0) return byName;
+        return (a.character_variant ?? '').localeCompare(b.character_variant ?? '');
+      });
   }, [
     uniquePoolCards,
     query,
@@ -362,6 +379,17 @@ export default function SealedDraftSimulationPage() {
   return (
     <Layout>
       <Stack>
+        <Modal
+          opened={previewImageUrl != null}
+          onClose={() => setPreviewImageUrl(null)}
+          title={previewImageLabel}
+          size="85vw"
+          centered
+        >
+          {previewImageUrl != null && (
+            <Image src={previewImageUrl} alt={previewImageLabel} fit="contain" style={{ maxHeight: '78vh' }} />
+          )}
+        </Modal>
         <Title>Sealed Draft Simulation</Title>
         <Text c="dimmed">
           Simulate sealed packs, choose leader/base, then build a 30-card minimum deck with sideboard.
@@ -399,8 +427,28 @@ export default function SealedDraftSimulationPage() {
                 {leaders.map((card, index) => (
                   <Card key={`leader-${card.card_id}-${index}`} withBorder p="xs">
                     <Stack gap={4}>
-                      {card.image_url != null && <Image src={card.image_url} w={220} h={120} fit="contain" radius="sm" />}
+                      {card.image_url != null && (
+                        <Image
+                          src={card.image_url}
+                          w={220}
+                          h={120}
+                          fit="contain"
+                          radius="sm"
+                          style={{ cursor: 'zoom-in' }}
+                          onClick={() => {
+                            setPreviewImageLabel(
+                              `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''}`
+                            );
+                            setPreviewImageUrl(card.image_url ?? null);
+                          }}
+                        />
+                      )}
                       <Text size="xs">{card.name}</Text>
+                      {card.character_variant != null && card.character_variant !== '' ? (
+                        <Text size="xs" c="dimmed">
+                          {card.character_variant}
+                        </Text>
+                      ) : null}
                     </Stack>
                   </Card>
                 ))}
@@ -413,8 +461,28 @@ export default function SealedDraftSimulationPage() {
                 {bases.map((card, index) => (
                   <Card key={`base-${card.card_id}-${index}`} withBorder p="xs">
                     <Stack gap={4}>
-                      {card.image_url != null && <Image src={card.image_url} w={220} h={120} fit="contain" radius="sm" />}
+                      {card.image_url != null && (
+                        <Image
+                          src={card.image_url}
+                          w={220}
+                          h={120}
+                          fit="contain"
+                          radius="sm"
+                          style={{ cursor: 'zoom-in' }}
+                          onClick={() => {
+                            setPreviewImageLabel(
+                              `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''}`
+                            );
+                            setPreviewImageUrl(card.image_url ?? null);
+                          }}
+                        />
+                      )}
                       <Text size="xs">{card.name}</Text>
+                      {card.character_variant != null && card.character_variant !== '' ? (
+                        <Text size="xs" c="dimmed">
+                          {card.character_variant}
+                        </Text>
+                      ) : null}
                     </Stack>
                   </Card>
                 ))}
@@ -523,6 +591,7 @@ export default function SealedDraftSimulationPage() {
                   <Table stickyHeader>
                     <Table.Thead>
                       <Table.Tr>
+                        <Table.Th>Image</Table.Th>
                         <Table.Th>Card</Table.Th>
                         <Table.Th>Type</Table.Th>
                         <Table.Th>Aspects</Table.Th>
@@ -531,6 +600,8 @@ export default function SealedDraftSimulationPage() {
                         <Table.Th>Pulled</Table.Th>
                         <Table.Th>Used</Table.Th>
                         <Table.Th>Cost</Table.Th>
+                        <Table.Th>Power</Table.Th>
+                        <Table.Th>HP</Table.Th>
                         <Table.Th>Rarity</Table.Th>
                         <Table.Th>Actions</Table.Th>
                       </Table.Tr>
@@ -538,7 +609,40 @@ export default function SealedDraftSimulationPage() {
                     <Table.Tbody>
                       {filteredPoolCards.map((card) => (
                         <Table.Tr key={card.card_id}>
-                          <Table.Td>{card.name}</Table.Td>
+                          <Table.Td>
+                            {card.image_url != null ? (
+                              <Image
+                                src={card.image_url}
+                                w={58}
+                                h={82}
+                                radius="sm"
+                                style={{ cursor: 'zoom-in' }}
+                                onClick={() => {
+                                  setPreviewImageLabel(
+                                    `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''}`
+                                  );
+                                  setPreviewImageUrl(card.image_url ?? null);
+                                }}
+                              />
+                            ) : (
+                              <Text size="xs" c="dimmed">
+                                No image
+                              </Text>
+                            )}
+                          </Table.Td>
+                          <Table.Td>
+                            <Stack gap={0}>
+                              <Text size="sm">{card.name}</Text>
+                              {card.character_variant != null && card.character_variant !== '' ? (
+                                <Text size="xs" c="dimmed">
+                                  {card.character_variant}
+                                </Text>
+                              ) : null}
+                              <Text size="xs" c="dimmed">
+                                {card.card_id}
+                              </Text>
+                            </Stack>
+                          </Table.Td>
                           <Table.Td>{card.type}</Table.Td>
                           <Table.Td>{(card.aspects ?? []).join(', ') || '-'}</Table.Td>
                           <Table.Td>{(card.arenas ?? []).join(', ') || '-'}</Table.Td>
@@ -546,6 +650,8 @@ export default function SealedDraftSimulationPage() {
                           <Table.Td>{poolCountMap[card.card_id] ?? 0}</Table.Td>
                           <Table.Td>{usedCountMap[card.card_id] ?? 0}</Table.Td>
                           <Table.Td>{card.cost ?? '-'}</Table.Td>
+                          <Table.Td>{card.power ?? '-'}</Table.Td>
+                          <Table.Td>{card.hp ?? '-'}</Table.Td>
                           <Table.Td>{card.rarity}</Table.Td>
                           <Table.Td>
                             <Group gap={4}>

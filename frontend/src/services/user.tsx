@@ -39,7 +39,35 @@ export async function updatePassword(user_id: number, password: string) {
     .catch((response: any) => handleRequestError(response));
 }
 
-export async function updateUserAccountType(user_id: number, accountType: 'REGULAR' | 'DEMO') {
+export async function updateUserPreferences(
+  user_id: number,
+  body: {
+    avatar_url: string | null;
+    favorite_card_id: string | null;
+    favorite_card_name: string | null;
+    favorite_card_image_url: string | null;
+    favorite_media: string | null;
+  }
+) {
+  return createAxios()
+    .put(`users/${user_id}/preferences`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function uploadUserAvatar(user_id: number, file: File | null) {
+  const bodyFormData = new FormData();
+  if (file != null) {
+    bodyFormData.append('file', file, file.name);
+  }
+  return createAxios()
+    .post(`users/${user_id}/avatar`, bodyFormData)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function updateUserAccountType(
+  user_id: number,
+  accountType: 'REGULAR' | 'ADMIN'
+) {
   return createAxios()
     .put(`users/${user_id}/account_type`, { account_type: accountType })
     .catch((response: any) => handleRequestError(response));

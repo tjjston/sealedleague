@@ -1,132 +1,130 @@
+# Sealed League
 
+Sealed League is a customized fork of [evroon/bracket](https://github.com/evroon/bracket) focused on running league-style play for sealed deck formats (including Star Wars Unlimited workflows).
 
-<p align="center">
-  <a href="https://github.com/evroon/bracket/actions"
-    ><img
-      src="https://img.shields.io/github/actions/workflow/status/evroon/bracket/backend.yml"
-      alt="build status"
-  /></a>
-  <a href="https://crowdin.com/project/bracket"
-    ><img
-      src="https://badges.crowdin.net/bracket/localized.svg"
-      alt="translations"
-  /></a>
-  <a href="https://github.com/evroon/bracket/commits/"
-    ><img
-      src="https://img.shields.io/github/last-commit/evroon/bracket"
-      alt="last commit"
-  /></a>
-  <a href="https://github.com/evroon/bracket/releases"
-    ><img
-      src="https://img.shields.io/github/v/release/evroon/bracket"
-      alt="release"
-  /></a>
-  <a href="https://codecov.io/gh/evroon/bracket"
-    ><img
-      src="https://codecov.io/gh/evroon/bracket/branch/master/graph/badge.svg?token=YJL0DVPFFG"
-      alt="codecov"
-  /></a>
-</p>
-<p align="center">
-  <a href="https://www.bracketapp.nl/demo">Demo</a>
-  ·
-  <a href="https://docs.bracketapp.nl">Documentation</a>
-  ·
-  <a href="https://docs.bracketapp.nl/docs/running-bracket/quickstart">Quickstart</a>
-  ·
-  <a href="https://github.com/evroon/bracket">GitHub</a>
-  ·
-  <a href="https://github.com/evroon/bracket/releases">Releases</a>
-</p>
-<p align="center">
-<a href="https://trendshift.io/repositories/13714" target="_blank"><img src="https://trendshift.io/api/badge/repositories/13714" alt="evroon/bracket | Trendshift" width="250" height="55"/></a>
-</p>
-<h1></h1>
+It keeps Bracket's tournament management foundation and adds league-specific features like season standings, sealed draft simulation, card-pool tracking, and deck submission/deckbuilding flows.
 
-Tournament system meant to be easy to use. Bracket is written in async Python (with
-[FastAPI](https://fastapi.tiangolo.com)) and [Vite](https://vite.dev/) as frontend using the
-[Mantine](https://mantine.dev/) library.
+## What this repo includes
 
-It has the following features:
-- Supports **single elimination, round-robin and swiss** formats.
-- **Build your tournament structure** with multiple stages that can have multiple groups/brackets in
-  them.
-- **Drag-and-drop matches** to different courts or reschedule them to another start time.
-- Various **dashboard pages** are available that can be presented to the public, customized with a
-  logo.
-- Create/update **teams**, and add players to **teams**.
-- Create **multiple clubs**, with **multiple tournaments** per club.
-- **Swiss tournaments** can be handled dynamically, with automatic scheduling of matches.
+- Backend: FastAPI + async Python (`backend/`)
+- Frontend: React + Vite + Mantine (`frontend/`)
+- Dockerized app + Postgres for local/dev deployment (`docker-compose.yml`)
+- League APIs and pages for:
+- season standings/history
+- card pool management
+- deck save/import/submission
+- sealed draft simulation
 
-<img alt="" src="docs/content/img/bracket-screenshot-design.png" width="100%" />
+## Quick Start (Docker)
 
-<p align="center">
-<a href="https://docs.bracketapp.nl"><strong>Explore the Bracket docs&nbsp;&nbsp;▶</strong></a>
-</p>
+Run the full stack with Docker Compose:
 
-# Live Demo
-A demo is available for free at <https://www.bracketapp.nl/demo>. The demo lasts for 30 minutes, after which
-your data will de deleted. 
-
-# Quickstart
-To quickly run bracket to see how it works, clone it and run `docker compose up`:
 ```bash
-git clone git@github.com:evroon/bracket.git
-cd bracket
-sudo docker compose up -d
+docker compose up -d --build
 ```
 
-This will start the backend and frontend of Bracket, as well as a postgres instance. You should now
-be able to view bracket at http://localhost:3000. You can log in with the following credentials:
+App URL:
 
-- Username: `test@example.org`
-- Password: `aeGhoe1ahng2Aezai0Dei6Aih6dieHoo`.
+- `http://localhost:8400`
 
-To insert dummy rows into the database, run:
+Default local credentials from `docker-compose.yml`:
+
+- Admin email: `admin@sealedleague.local`
+- Admin password: `change-me-now`
+
+Important: change these values before using this outside local development.
+
+Useful commands:
+
 ```bash
-docker exec bracket-backend uv run --no-dev ./cli.py create-dev-db
+# Follow logs
+docker compose logs -f sealedleague
+
+# Stop stack
+docker compose down
+
+# Stop stack and remove DB volume
+docker compose down -v
 ```
 
-See also the [quickstart docs](https://docs.bracketapp.nl/docs/running-bracket/quickstart).
+## Development (without Docker)
 
-# Usage
-Read the [usage guide](https://docs.bracketapp.nl/docs/usage/guide) for how to organize a tournament in Bracket from start to finish.
+Prerequisites:
 
-# Configuration
-Read the [configuration docs](https://docs.bracketapp.nl/docs/running-bracket/configuration) for how to configure Bracket.
+- Python 3.12+
+- `uv`
+- Node.js + `pnpm`
+- PostgreSQL
 
-Bracket's backend is configured using `.env` files (`prod.env` for production, `dev.env` for development etc.).
-But you can also configure Bracket using environment variables directly, for example by specifying them in the `docker-compose.yml`.
+Run frontend + backend together:
 
-The frontend doesn't can be configured by environment variables as well, as well as `.env` files using Vite's way of loading environment variables.
+```bash
+./run.sh
+```
 
-# Running Bracket in production
-Read the [deployment docs](https://docs.bracketapp.nl/docs/deployment) for how to deploy Bracket and run it in production.
+This starts:
 
-Bracket can be run in Docker or by itself (using `uv` and `pnpm`).
+- Frontend dev server (Vite)
+- Backend on `http://localhost:8400`
 
-# Development setup
-Read the [development docs](https://docs.bracketapp.nl/docs/community/development) for how to run Bracket for development.
+You can also run each service separately:
 
-Prerequisites are `pnpm`, `postgresql` and `uv` to run the frontend, database and backend.
+```bash
+# Backend
+cd backend
+ENVIRONMENT=DEVELOPMENT uv run gunicorn \
+  -k bracket.uvicorn.RestartableUvicornWorker \
+  bracket.app:app \
+  --bind localhost:8400 \
+  --workers 1 \
+  --reload
 
-# Translations
-Based on your browser settings, your language should be automatically detected and loaded. For now,
-there's no manual way of choosing a different language.
+# Frontend
+cd frontend
+pnpm install
+pnpm run dev
+```
 
-## Supported Languages
-To add/refine translations, [Crowdin](https://crowdin.com/project/bracket) is used.
-See the [docs](https://docs.bracketapp.nl/docs/community/contributing/#translating) for more information.
+## Database and helper commands
 
-# More screenshots
-<img alt="" src="docs/content/img/schedule_preview.png" width="50%" /><img alt=""
-src="docs/content/img/planning_preview.png" width="50%" /> <img alt=""
-src="docs/content/img/builder_preview.png" width="50%" /><img alt=""
-src="docs/content/img/standings_preview.png" width="50%" />
+From `backend/`:
 
-# License
-Bracket is licensed under [AGPL-v3.0](https://choosealicense.com/licenses/agpl-3.0/).
+```bash
+# Seed a development database
+uv run ./cli.py create-dev-db
 
-Please note that any contributions also fall under this license.
+# Generate OpenAPI JSON
+uv run ./cli.py generate-openapi
 
-See [LICENSE](LICENSE)
+# Register a user interactively
+uv run ./cli.py register-user
+```
+
+## Quality checks
+
+From `backend/`:
+
+```bash
+# Formatting + type checks used in this repo
+./check.sh
+
+# Full precommit pipeline (lint/tests/openapi generation)
+./precommit.sh
+```
+
+## Project layout
+
+```text
+backend/    FastAPI app, SQL models, league logic, tests
+frontend/   React/Vite UI and league pages
+docs/       Documentation site content
+Dockerfile  Production-style image (builds frontend, serves via backend)
+docker-compose.yml  Local stack (app + postgres)
+```
+
+## Upstream
+
+This project is based on `evroon/bracket` and retains AGPL-3.0 licensing.
+
+- Upstream repo: <https://github.com/evroon/bracket>
+- License: [AGPL-3.0](LICENSE)
