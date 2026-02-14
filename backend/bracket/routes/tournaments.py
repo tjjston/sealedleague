@@ -38,7 +38,9 @@ from bracket.sql.tournaments import (
     sql_update_tournament,
     sql_update_tournament_status,
 )
-from bracket.sql.users import get_user_access_to_club, get_which_clubs_has_user_access_to
+from bracket.sql.users import (
+    get_user_access_to_club,
+)
 from bracket.sql.users import get_users_for_club
 from bracket.sql.players import insert_player
 from bracket.models.db.player import PlayerBody
@@ -65,11 +67,12 @@ async def get_tournament(
     tournament_id: TournamentId,
     user: UserPublic | None = Depends(user_authenticated_or_public_dashboard),
 ) -> TournamentResponse:
-    tournament = await sql_get_tournament(tournament_id)
+    try:
+        tournament = await sql_get_tournament(tournament_id)
+    except AssertionError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tournament not found") from exc
     if user is None and not tournament.dashboard_public:
         raise unauthorized_exception
-    if user is not None and not is_admin_user(user):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
     return TournamentResponse(data=tournament)
 
@@ -95,12 +98,7 @@ async def get_tournaments(
             return TournamentsResponse(data=[tournament])
 
         case _, _ if isinstance(user, UserPublic):
-            if not is_admin_user(user):
-                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
-            user_club_ids = await get_which_clubs_has_user_access_to(user.id)
-            return TournamentsResponse(
-                data=await sql_get_tournaments(tuple(user_club_ids), endpoint_name, filter_)
-            )
+            return TournamentsResponse(data=await sql_get_tournaments(None, endpoint_name, filter_))
 
     raise RuntimeError()
 

@@ -10,13 +10,39 @@ type PlayerUser = {
   user_id: number;
   user_name: string;
   avatar_url: string | null;
+  weapon_icon: string | null;
   tournaments_won: number;
   tournaments_placed: number;
+  total_cards_active_season: number;
+  total_cards_career_pool: number;
   favorite_media: string | null;
   current_leader_card_id: string | null;
   current_leader_name: string | null;
   current_leader_image_url: string | null;
 };
+
+function getWeaponIconDisplay(weaponIcon: string | null) {
+  switch (weaponIcon) {
+    case 'blaster_pistol':
+      return { symbol: '🔫', label: 'Blaster Pistol' };
+    case 'blaster_rifle':
+      return { symbol: '🛡️', label: 'Blaster Rifle' };
+    case 'lightsaber_blue':
+      return { symbol: '🔵', label: 'Blue Lightsaber' };
+    case 'lightsaber_red':
+      return { symbol: '🔴', label: 'Red Lightsaber' };
+    case 'lightsaber_green':
+      return { symbol: '🟢', label: 'Green Lightsaber' };
+    case 'lightsaber_purple':
+      return { symbol: '🟣', label: 'Purple Lightsaber' };
+    case 'wrist_rockets':
+      return { symbol: '🚀', label: 'Wrist Rockets' };
+    case 'electrostaff':
+      return { symbol: '⚡', label: 'Electrostaff' };
+    default:
+      return { symbol: '-', label: 'Not selected' };
+  }
+}
 
 export default function LeaguePlayersPage() {
   const swrUsersResponse = getUserDirectory();
@@ -41,6 +67,8 @@ export default function LeaguePlayersPage() {
               <Table.Th>Current Deck Leader</Table.Th>
               <Table.Th>Tournaments Won</Table.Th>
               <Table.Th>Tournaments Placed</Table.Th>
+              <Table.Th>Cards (Active Season)</Table.Th>
+              <Table.Th>Cards (Career Pool)</Table.Th>
               <Table.Th>Favorite SW Media</Table.Th>
             </Table.Tr>
           </Table.Thead>
@@ -49,7 +77,12 @@ export default function LeaguePlayersPage() {
               <Table.Tr key={user.user_id}>
                 <Table.Td>
                   <PreloadLink href={`/league/players/${user.user_id}`}>
-                    <Text fw={600}>{user.user_name}</Text>
+                    <Group gap={6}>
+                      <Text title={getWeaponIconDisplay(user.weapon_icon).label}>
+                        {getWeaponIconDisplay(user.weapon_icon).symbol}
+                      </Text>
+                      <Text fw={600}>{user.user_name}</Text>
+                    </Group>
                   </PreloadLink>
                 </Table.Td>
                 <Table.Td>
@@ -85,6 +118,8 @@ export default function LeaguePlayersPage() {
                 </Table.Td>
                 <Table.Td>{user.tournaments_won ?? 0}</Table.Td>
                 <Table.Td>{user.tournaments_placed ?? 0}</Table.Td>
+                <Table.Td>{user.total_cards_active_season ?? 0}</Table.Td>
+                <Table.Td>{user.total_cards_career_pool ?? 0}</Table.Td>
                 <Table.Td>{user.favorite_media ?? '-'}</Table.Td>
               </Table.Tr>
             ))}

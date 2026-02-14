@@ -12,7 +12,7 @@ from bracket.models.league_cards import (
     LeagueSearchCard,
     LeagueSearchCards,
 )
-from bracket.routes.auth import user_authenticated, user_authenticated_for_tournament
+from bracket.routes.auth import user_authenticated, user_authenticated_for_tournament_member
 from bracket.routes.models import LeagueCardsResponse, LeagueDraftSimulationResponse
 from bracket.utils.id_types import TournamentId
 from bracket.utils.league_cards import (
@@ -28,7 +28,7 @@ router = APIRouter(prefix=config.api_prefix)
 @router.get("/tournaments/{tournament_id}/league/cards", response_model=LeagueCardsResponse)
 async def search_league_cards(
     tournament_id: TournamentId,
-    _: UserPublic = Depends(user_authenticated_for_tournament),
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
     query: str | None = Query(default=None, description="Search in name, rules text, and traits."),
     set_code: list[str] | None = Query(
         default=None, description="Filter by one or more set codes (e.g. sor, shd)."
@@ -92,7 +92,7 @@ async def search_league_cards(
 async def simulate_draft(
     tournament_id: TournamentId,
     body: LeagueDraftSimulationBody,
-    _: UserPublic = Depends(user_authenticated_for_tournament),
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueDraftSimulationResponse:
     set_codes = body.set_codes if body.set_codes else list(DEFAULT_SWU_SET_CODES)
     try:

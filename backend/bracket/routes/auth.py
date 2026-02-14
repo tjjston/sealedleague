@@ -15,7 +15,7 @@ from bracket.models.db.tournament import Tournament
 from bracket.models.db.user import UserInDB, UserPublic
 from bracket.schema import tournaments
 from bracket.sql.tournaments import sql_get_tournament_by_endpoint_name
-from bracket.sql.users import get_user, get_user_access_to_club, get_user_access_to_tournament
+from bracket.sql.users import get_user, get_user_access_to_club
 from bracket.utils.db import fetch_all_parsed
 from bracket.utils.id_types import ClubId, TournamentId, UserId
 from bracket.utils.security import verify_password
@@ -109,12 +109,33 @@ async def user_authenticated_for_tournament(
     tournament_id: TournamentId, token: str = Depends(oauth2_scheme)
 ) -> UserPublic:
     user = await check_jwt_and_get_user(token)
+    tournament_exists = len(
+        await fetch_all_parsed(
+            database, Tournament, tournaments.select().where(tournaments.c.id == tournament_id)
+        )
+    ) > 0
 
-    if (
-        not user
-        or not is_admin_user(user)
-        or not await get_user_access_to_tournament(tournament_id, user.id)
-    ):
+    if not user or not is_admin_user(user) or not tournament_exists:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    return UserPublic.model_validate(user.model_dump())
+
+
+async def user_authenticated_for_tournament_member(
+    tournament_id: TournamentId, token: str = Depends(oauth2_scheme)
+) -> UserPublic:
+    user = await check_jwt_and_get_user(token)
+    tournament_exists = len(
+        await fetch_all_parsed(
+            database, Tournament, tournaments.select().where(tournaments.c.id == tournament_id)
+        )
+    ) > 0
+
+    if not user or not tournament_exists:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
@@ -145,7 +166,7 @@ async def user_authenticated_or_public_dashboard(
     try:
         token: str = assert_some(await oauth2_scheme(request))
         user = await check_jwt_and_get_user(token)
-        if user is not None and await get_user_access_to_tournament(tournament_id, user.id):
+        if user is not None:
             return user
     except HTTPException:
         pass

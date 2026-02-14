@@ -32,37 +32,70 @@ async def schedule_all_unscheduled_matches(
     time_last_match_from_previous_stage = tournament.start_time
     position_last_match_from_previous_stage = 0
 
+    def get_slot_minutes(match: MatchWithDetailsDefinitive | MatchWithDetails) -> int:
+        duration = (
+            tournament.duration_minutes
+            if match.custom_duration_minutes is None
+            else match.custom_duration_minutes
+        )
+        margin = (
+            tournament.margin_minutes if match.custom_margin_minutes is None else match.custom_margin_minutes
+        )
+        return duration + margin
+
     for stage in stages:
         stage_items = sorted(stage.stage_items, key=lambda x: x.name)
-
         stage_start_time = time_last_match_from_previous_stage
         stage_position_in_schedule = position_last_match_from_previous_stage
 
-        for i, stage_item in enumerate(stage_items):
-            court = courts[min(i, len(courts) - 1)]
-            start_time = stage_start_time
-            position_in_schedule = stage_position_in_schedule
+        for stage_item in stage_items:
+            round_start_time = stage_start_time
+            round_position_in_schedule = stage_position_in_schedule
+
             for round_ in sorted(stage_item.rounds, key=lambda r: r.id):
-                for match in round_.matches:
-                    if match.start_time is None and match.position_in_schedule is None:
-                        await sql_reschedule_match_and_determine_duration_and_margin(
-                            court.id,
-                            start_time,
-                            position_in_schedule,
-                            match,
-                            tournament,
+                matches = sorted(round_.matches, key=lambda m: m.id)
+                if len(matches) < 1:
+                    continue
+
+                batch_start_time = round_start_time
+                batches = [
+                    matches[start : start + len(courts)] for start in range(0, len(matches), len(courts))
+                ]
+
+                for batch_offset, batch in enumerate(batches):
+                    position_in_schedule = round_position_in_schedule + batch_offset
+                    slot_end_time = batch_start_time
+
+                    for court_index, match in enumerate(batch):
+                        court = courts[court_index]
+                        if match.start_time is None and match.position_in_schedule is None:
+                            await sql_reschedule_match_and_determine_duration_and_margin(
+                                court.id,
+                                batch_start_time,
+                                position_in_schedule,
+                                match,
+                                tournament,
+                            )
+
+                        slot_end_time = max(
+                            slot_end_time,
+                            batch_start_time + timedelta(minutes=get_slot_minutes(match)),
                         )
 
-                    start_time += timedelta(minutes=match.duration_minutes)
-                    position_in_schedule += 1
+                    batch_start_time = slot_end_time
 
-                    time_last_match_from_previous_stage = max(
-                        time_last_match_from_previous_stage, start_time
-                    )
+                round_start_time = batch_start_time
+                round_position_in_schedule += len(batches)
 
-                    position_last_match_from_previous_stage = max(
-                        position_last_match_from_previous_stage, position_in_schedule
-                    )
+            stage_start_time = round_start_time
+            stage_position_in_schedule = round_position_in_schedule
+
+        time_last_match_from_previous_stage = max(
+            time_last_match_from_previous_stage, stage_start_time
+        )
+        position_last_match_from_previous_stage = max(
+            position_last_match_from_previous_stage, stage_position_in_schedule
+        )
 
     await update_start_times_of_matches(tournament_id)
 

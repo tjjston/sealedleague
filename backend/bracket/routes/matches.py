@@ -28,11 +28,16 @@ from bracket.models.db.match import (
 from bracket.models.db.stage_item import StageType
 from bracket.models.db.tournament import Tournament
 from bracket.models.db.user import UserPublic
-from bracket.routes.auth import user_authenticated_for_tournament
+from bracket.routes.auth import (
+    is_admin_user,
+    user_authenticated_for_tournament,
+    user_authenticated_for_tournament_member,
+)
 from bracket.routes.models import SingleMatchResponse, SuccessResponse, UpcomingMatchesResponse
 from bracket.routes.util import disallow_archived_tournament, match_dependency
 from bracket.sql.courts import get_all_courts_in_tournament
 from bracket.sql.matches import sql_create_match, sql_delete_match, sql_update_match
+from bracket.sql.players import recalculate_tournament_records
 from bracket.sql.rounds import get_round_by_id
 from bracket.sql.stage_items import get_stage_item
 from bracket.sql.stages import get_full_tournament_details
@@ -42,6 +47,24 @@ from bracket.utils.id_types import MatchId, StageItemId, TournamentId
 from bracket.utils.types import assert_some
 
 router = APIRouter(prefix=config.api_prefix)
+
+
+def user_is_participant_in_match(user: UserPublic, match: Match) -> bool:
+    target_name = user.name.strip().lower()
+    if target_name == "":
+        return False
+
+    for stage_input in [match.stage_item_input1, match.stage_item_input2]:
+        if stage_input is None:
+            continue
+        team = getattr(stage_input, "team", None)
+        if team is None:
+            continue
+        team_name = str(getattr(team, "name", "")).strip().lower()
+        if team_name == target_name:
+            return True
+
+    return False
 
 
 @router.get(
@@ -95,6 +118,7 @@ async def delete_match(
     stage_item = await get_stage_item(tournament_id, round_.stage_item_id)
 
     await recalculate_ranking_for_stage_item(tournament_id, stage_item)
+    await recalculate_tournament_records(tournament_id)
     return SuccessResponse()
 
 
@@ -158,10 +182,25 @@ async def update_match_by_id(
     tournament_id: TournamentId,
     match_id: MatchId,
     match_body: MatchBody,
-    _: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
     __: Tournament = Depends(disallow_archived_tournament),
     match: Match = Depends(match_dependency),
 ) -> SuccessResponse:
+    if not is_admin_user(user_public):
+        if not user_is_participant_in_match(user_public, match):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="You can only submit scores for matches you are playing in",
+            )
+        match_body = MatchBody(
+            round_id=match.round_id,
+            stage_item_input1_score=match_body.stage_item_input1_score,
+            stage_item_input2_score=match_body.stage_item_input2_score,
+            court_id=match.court_id,
+            custom_duration_minutes=match.custom_duration_minutes,
+            custom_margin_minutes=match.custom_margin_minutes,
+        )
+
     await check_foreign_keys_belong_to_tournament(match_body, tournament_id)
     tournament = await sql_get_tournament(tournament_id)
 
@@ -182,4 +221,5 @@ async def update_match_by_id(
     if stage_item.type in {StageType.SINGLE_ELIMINATION, StageType.DOUBLE_ELIMINATION}:
         await update_inputs_in_subsequent_elimination_rounds(round_.id, stage_item, {match_id})
 
+    await recalculate_tournament_records(tournament_id)
     return SuccessResponse()

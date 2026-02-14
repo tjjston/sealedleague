@@ -18,6 +18,18 @@ from bracket.utils.id_types import ClubId, TournamentId, UserId
 from bracket.utils.types import assert_some
 
 
+async def get_users_table_columns() -> set[str]:
+    rows = await database.fetch_all(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'users'
+        """
+    )
+    return {str(row._mapping["column_name"]) for row in rows}
+
+
 async def get_user_access_to_tournament(tournament_id: TournamentId, user_id: UserId) -> bool:
     query = """
         SELECT DISTINCT t.id
@@ -80,19 +92,36 @@ async def update_user(user_id: UserId, user: UserToUpdate) -> None:
 
 
 async def update_user_preferences(user_id: UserId, body: UserPreferencesToUpdate) -> None:
-    query = """
+    available_columns = await get_users_table_columns()
+    updatable_columns = [
+        "avatar_url",
+        "favorite_card_id",
+        "favorite_card_name",
+        "favorite_card_image_url",
+        "favorite_media",
+        "weapon_icon",
+    ]
+    assignments = [
+        f"{column_name} = :{column_name}"
+        for column_name in updatable_columns
+        if column_name in available_columns
+    ]
+    if len(assignments) < 1:
+        return
+
+    query = f"""
         UPDATE users
-        SET
-            avatar_url = :avatar_url,
-            favorite_card_id = :favorite_card_id,
-            favorite_card_name = :favorite_card_name,
-            favorite_card_image_url = :favorite_card_image_url,
-            favorite_media = :favorite_media
+        SET {", ".join(assignments)}
         WHERE id = :user_id
         """
+    values = {"user_id": user_id}
+    body_values = body.model_dump()
+    for column_name in updatable_columns:
+        if column_name in available_columns:
+            values[column_name] = body_values.get(column_name)
     await database.execute(
         query=query,
-        values={"user_id": user_id, **body.model_dump()},
+        values=values,
     )
 
 
@@ -137,13 +166,30 @@ async def get_users() -> list[UserPublic]:
 
 
 async def get_user_directory() -> list[UserDirectoryEntry]:
+    available_columns = await get_users_table_columns()
+    has_favorite_media = "favorite_media" in available_columns
+    has_weapon_icon = "weapon_icon" in available_columns
+    favorite_media_select = (
+        "u.favorite_media"
+        if has_favorite_media
+        else "NULL::TEXT AS favorite_media"
+    )
+    weapon_icon_select = (
+        "u.weapon_icon"
+        if has_weapon_icon
+        else "NULL::TEXT AS weapon_icon"
+    )
+    favorite_media_group_by = ", u.favorite_media" if has_favorite_media else ""
+    weapon_icon_group_by = ", u.weapon_icon" if has_weapon_icon else ""
+
     rows = await database.fetch_all(
-        """
+        f"""
         SELECT
             u.id AS user_id,
             u.name AS user_name,
             u.avatar_url,
-            u.favorite_media,
+            {favorite_media_select},
+            {weapon_icon_select},
             COALESCE(
                 SUM(
                     CASE
@@ -164,6 +210,8 @@ async def get_user_directory() -> list[UserDirectoryEntry]:
                 ),
                 0
             ) AS tournaments_placed,
+            COALESCE(active_pool.total_cards_active_season, 0) AS total_cards_active_season,
+            COALESCE(career_pool.total_cards_career_pool, 0) AS total_cards_career_pool,
             d.leader AS current_leader_card_id
         FROM users u
         LEFT JOIN LATERAL (
@@ -173,17 +221,52 @@ async def get_user_directory() -> list[UserDirectoryEntry]:
             ORDER BY updated DESC
             LIMIT 1
         ) d ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT COALESCE(SUM(cpe.quantity), 0) AS total_cards_active_season
+            FROM card_pool_entries cpe
+            JOIN seasons s ON s.id = cpe.season_id
+            WHERE cpe.user_id = u.id
+              AND s.is_active = TRUE
+        ) active_pool ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT COALESCE(SUM(cpe.quantity), 0) AS total_cards_career_pool
+            FROM card_pool_entries cpe
+            WHERE cpe.user_id = u.id
+        ) career_pool ON TRUE
         LEFT JOIN season_points_ledger spl ON spl.user_id = u.id
         GROUP BY
             u.id,
             u.name,
             u.avatar_url,
-            u.favorite_media,
-            d.leader
+            d.leader,
+            active_pool.total_cards_active_season,
+            career_pool.total_cards_career_pool
+            {favorite_media_group_by}
+            {weapon_icon_group_by}
         ORDER BY u.name ASC
         """
     )
     return [UserDirectoryEntry.model_validate(dict(row._mapping)) for row in rows]
+
+
+async def get_latest_leader_card_id_for_user(user_id: UserId) -> str | None:
+    try:
+        row = await database.fetch_one(
+            """
+            SELECT leader
+            FROM decks
+            WHERE user_id = :user_id
+            ORDER BY updated DESC
+            LIMIT 1
+            """,
+            values={"user_id": user_id},
+        )
+    except Exception:
+        return None
+    if row is None:
+        return None
+    leader = row._mapping["leader"]
+    return None if leader is None else str(leader)
 
 
 async def get_expired_demo_users() -> list[UserPublic]:

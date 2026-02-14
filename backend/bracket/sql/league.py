@@ -12,6 +12,7 @@ from bracket.models.league import (
     LeagueAdminUserView,
     LeagueFavoriteCard,
     LeaguePlayerCareerProfile,
+    LeagueUpcomingOpponentView,
     LeagueSeasonRecord,
     LeagueSeasonAdminView,
     LeagueCardPoolEntryView,
@@ -86,7 +87,7 @@ async def get_or_create_active_season(tournament_id: TournamentId) -> Season:
 async def get_seasons_for_tournament(tournament_id: TournamentId) -> list[Season]:
     query = """
         SELECT DISTINCT s.*
-        FROM seasons
+        FROM seasons s
         LEFT JOIN season_tournaments st ON st.season_id = s.id
         WHERE s.tournament_id = :tournament_id
            OR st.tournament_id = :tournament_id
@@ -216,6 +217,31 @@ async def get_league_standings(
             )
         """
     )
+    tournament_scope_filter = (
+        """
+            t.id IN (
+                SELECT tournament_id
+                FROM season_tournaments
+                WHERE season_id = :season_id
+                UNION
+                SELECT tournament_id
+                FROM seasons
+                WHERE id = :season_id
+            )
+        """
+        if season_id is not None
+        else f"""
+            t.id IN (
+                SELECT DISTINCT tournament_id
+                FROM season_tournaments
+                WHERE season_id IN ({season_ids_subquery()})
+                UNION
+                SELECT DISTINCT tournament_id
+                FROM seasons
+                WHERE id IN ({season_ids_subquery()})
+            )
+        """
+    )
     query = """
         WITH tournament_users AS (
             SELECT DISTINCT u.id, u.name, u.email
@@ -223,19 +249,34 @@ async def get_league_standings(
             JOIN users_x_clubs uxc ON uxc.club_id = t.club_id
             JOIN users u ON u.id = uxc.user_id
             WHERE t.id = :tournament_id
+        ),
+        live_match_points AS (
+            SELECT
+                tu.id AS user_id,
+                COALESCE(SUM((p.wins * 3) + p.draws), 0) AS live_points
+            FROM tournament_users tu
+            JOIN tournaments t
+                ON {tournament_scope_filter}
+            LEFT JOIN players p
+                ON p.tournament_id = t.id
+               AND lower(trim(p.name)) = lower(trim(tu.name))
+            GROUP BY tu.id
         )
         SELECT
             tu.id AS user_id,
             tu.name AS user_name,
             tu.email AS user_email,
-            COALESCE(
-                SUM(
-                    CASE
-                        WHEN spl.reason LIKE 'ACCOLADE:%' THEN 0
-                        ELSE spl.points_delta
-                    END
-                ),
-                0
+            (
+                COALESCE(
+                    SUM(
+                        CASE
+                            WHEN spl.reason LIKE 'ACCOLADE:%' THEN 0
+                            ELSE spl.points_delta
+                        END
+                    ),
+                    0
+                )
+                + COALESCE(lmp.live_points, 0)
             ) AS points,
             COALESCE(
                 ARRAY_AGG(REPLACE(spl.reason, 'ACCOLADE:', ''))
@@ -279,10 +320,13 @@ async def get_league_standings(
         LEFT JOIN season_points_ledger spl
             ON spl.user_id = tu.id
             {season_filter}
+        LEFT JOIN live_match_points lmp
+            ON lmp.user_id = tu.id
         GROUP BY
             tu.id,
             tu.name,
             tu.email,
+            lmp.live_points,
             sm.role,
             sm.can_manage_points,
             sm.can_manage_tournaments
@@ -290,6 +334,7 @@ async def get_league_standings(
     """.format(
         membership_filter=membership_filter,
         season_filter=season_filter,
+        tournament_scope_filter=tournament_scope_filter,
     )
     values: dict[str, int] = {"tournament_id": tournament_id}
     if season_id is not None:
@@ -480,14 +525,38 @@ async def upsert_card_pool_entry(season_id: int, user_id: UserId, card_id: str, 
     )
 
 
-async def get_decks(season_id: int, user_id: UserId | None = None) -> list[LeagueDeckView]:
+async def get_decks(
+    season_id: int,
+    user_id: UserId | None = None,
+    *,
+    only_admin_users: bool = False,
+) -> list[LeagueDeckView]:
     values: dict[str, int] = {"season_id": season_id}
     condition = ""
     if user_id is not None:
         condition = "AND d.user_id = :user_id"
         values["user_id"] = user_id
+    if only_admin_users:
+        condition += " AND u.account_type = 'ADMIN'"
 
     query = f"""
+        WITH deck_stats AS (
+            SELECT
+                ta.deck_id,
+                COUNT(DISTINCT ta.tournament_id) AS tournaments_submitted,
+                COALESCE(SUM(p.wins), 0) AS wins,
+                COALESCE(SUM(p.draws), 0) AS draws,
+                COALESCE(SUM(p.losses), 0) AS losses
+            FROM tournament_applications ta
+            JOIN decks d2 ON d2.id = ta.deck_id
+            JOIN users u2 ON u2.id = d2.user_id
+            JOIN tournaments t ON t.id = ta.tournament_id
+            LEFT JOIN players p
+                ON p.tournament_id = t.id
+               AND lower(trim(p.name)) = lower(trim(u2.name))
+            WHERE ta.deck_id IS NOT NULL
+            GROUP BY ta.deck_id
+        )
         SELECT
             d.id,
             d.season_id,
@@ -499,9 +568,30 @@ async def get_decks(season_id: int, user_id: UserId | None = None) -> list[Leagu
             d.leader,
             d.base,
             d.mainboard,
-            d.sideboard
+            d.sideboard,
+            COALESCE(ds.tournaments_submitted, 0) AS tournaments_submitted,
+            COALESCE(ds.wins, 0) AS wins,
+            COALESCE(ds.draws, 0) AS draws,
+            COALESCE(ds.losses, 0) AS losses,
+            COALESCE(ds.wins, 0) + COALESCE(ds.draws, 0) + COALESCE(ds.losses, 0) AS matches,
+            CASE
+                WHEN COALESCE(ds.wins, 0) + COALESCE(ds.draws, 0) + COALESCE(ds.losses, 0) > 0
+                    THEN ROUND(
+                        (
+                            COALESCE(ds.wins, 0)::numeric
+                            / (
+                                COALESCE(ds.wins, 0)
+                                + COALESCE(ds.draws, 0)
+                                + COALESCE(ds.losses, 0)
+                            )
+                        ) * 100,
+                        2
+                    )::float
+                ELSE 0
+            END AS win_percentage
         FROM decks d
         JOIN users u ON u.id = d.user_id
+        LEFT JOIN deck_stats ds ON ds.deck_id = d.id
         WHERE d.season_id = :season_id
         {condition}
         ORDER BY d.updated DESC, d.name ASC
@@ -614,6 +704,23 @@ async def upsert_deck(
 
     row = await database.fetch_one(
         """
+        WITH deck_stats AS (
+            SELECT
+                ta.deck_id,
+                COUNT(DISTINCT ta.tournament_id) AS tournaments_submitted,
+                COALESCE(SUM(p.wins), 0) AS wins,
+                COALESCE(SUM(p.draws), 0) AS draws,
+                COALESCE(SUM(p.losses), 0) AS losses
+            FROM tournament_applications ta
+            JOIN decks d2 ON d2.id = ta.deck_id
+            JOIN users u2 ON u2.id = d2.user_id
+            JOIN tournaments t ON t.id = ta.tournament_id
+            LEFT JOIN players p
+                ON p.tournament_id = t.id
+               AND lower(trim(p.name)) = lower(trim(u2.name))
+            WHERE ta.deck_id IS NOT NULL
+            GROUP BY ta.deck_id
+        )
         SELECT
             d.id,
             d.season_id,
@@ -625,14 +732,97 @@ async def upsert_deck(
             d.leader,
             d.base,
             d.mainboard,
-            d.sideboard
+            d.sideboard,
+            COALESCE(ds.tournaments_submitted, 0) AS tournaments_submitted,
+            COALESCE(ds.wins, 0) AS wins,
+            COALESCE(ds.draws, 0) AS draws,
+            COALESCE(ds.losses, 0) AS losses,
+            COALESCE(ds.wins, 0) + COALESCE(ds.draws, 0) + COALESCE(ds.losses, 0) AS matches,
+            CASE
+                WHEN COALESCE(ds.wins, 0) + COALESCE(ds.draws, 0) + COALESCE(ds.losses, 0) > 0
+                    THEN ROUND(
+                        (
+                            COALESCE(ds.wins, 0)::numeric
+                            / (
+                                COALESCE(ds.wins, 0)
+                                + COALESCE(ds.draws, 0)
+                                + COALESCE(ds.losses, 0)
+                            )
+                        ) * 100,
+                        2
+                    )::float
+                ELSE 0
+            END AS win_percentage
         FROM decks d
         JOIN users u ON u.id = d.user_id
+        LEFT JOIN deck_stats ds ON ds.deck_id = d.id
         WHERE d.id = :deck_id
         """,
         values={"deck_id": deck_id},
     )
     return LeagueDeckView.model_validate(dict(assert_some(row)._mapping))
+
+
+async def get_deck_by_id(deck_id: DeckId) -> LeagueDeckView | None:
+    row = await database.fetch_one(
+        """
+        WITH deck_stats AS (
+            SELECT
+                ta.deck_id,
+                COUNT(DISTINCT ta.tournament_id) AS tournaments_submitted,
+                COALESCE(SUM(p.wins), 0) AS wins,
+                COALESCE(SUM(p.draws), 0) AS draws,
+                COALESCE(SUM(p.losses), 0) AS losses
+            FROM tournament_applications ta
+            JOIN decks d2 ON d2.id = ta.deck_id
+            JOIN users u2 ON u2.id = d2.user_id
+            JOIN tournaments t ON t.id = ta.tournament_id
+            LEFT JOIN players p
+                ON p.tournament_id = t.id
+               AND lower(trim(p.name)) = lower(trim(u2.name))
+            WHERE ta.deck_id IS NOT NULL
+            GROUP BY ta.deck_id
+        )
+        SELECT
+            d.id,
+            d.season_id,
+            d.user_id,
+            u.name AS user_name,
+            u.email AS user_email,
+            d.tournament_id,
+            d.name,
+            d.leader,
+            d.base,
+            d.mainboard,
+            d.sideboard,
+            COALESCE(ds.tournaments_submitted, 0) AS tournaments_submitted,
+            COALESCE(ds.wins, 0) AS wins,
+            COALESCE(ds.draws, 0) AS draws,
+            COALESCE(ds.losses, 0) AS losses,
+            COALESCE(ds.wins, 0) + COALESCE(ds.draws, 0) + COALESCE(ds.losses, 0) AS matches,
+            CASE
+                WHEN COALESCE(ds.wins, 0) + COALESCE(ds.draws, 0) + COALESCE(ds.losses, 0) > 0
+                    THEN ROUND(
+                        (
+                            COALESCE(ds.wins, 0)::numeric
+                            / (
+                                COALESCE(ds.wins, 0)
+                                + COALESCE(ds.draws, 0)
+                                + COALESCE(ds.losses, 0)
+                            )
+                        ) * 100,
+                        2
+                    )::float
+                ELSE 0
+            END AS win_percentage
+        FROM decks d
+        JOIN users u ON u.id = d.user_id
+        LEFT JOIN deck_stats ds ON ds.deck_id = d.id
+        WHERE d.id = :deck_id
+        """,
+        values={"deck_id": deck_id},
+    )
+    return LeagueDeckView.model_validate(dict(row._mapping)) if row is not None else None
 
 
 async def set_team_logo_for_user_in_tournament(
@@ -713,26 +903,86 @@ async def get_user_id_by_email(email: str) -> UserId | None:
     return UserId(result._mapping["id"]) if result is not None else None
 
 
-async def get_deck_by_id(deck_id: DeckId) -> LeagueDeckView | None:
-    query = """
+async def get_next_opponent_for_user_in_tournament(
+    tournament_id: TournamentId,
+    user_name: str,
+) -> LeagueUpcomingOpponentView | None:
+    my_team_ids_rows = await database.fetch_all(
+        """
+        SELECT DISTINCT t.id
+        FROM teams t
+        LEFT JOIN players_x_teams pt ON pt.team_id = t.id
+        LEFT JOIN players p ON p.id = pt.player_id
+        WHERE t.tournament_id = :tournament_id
+          AND (
+            lower(trim(t.name)) = lower(trim(:user_name))
+            OR lower(trim(p.name)) = lower(trim(:user_name))
+          )
+        """,
+        values={"tournament_id": tournament_id, "user_name": user_name},
+    )
+    my_team_ids = [int(row._mapping["id"]) for row in my_team_ids_rows]
+    if len(my_team_ids) < 1:
+        return None
+
+    row = await database.fetch_one(
+        """
         SELECT
-            d.id,
-            d.season_id,
-            d.user_id,
-            u.name AS user_name,
-            u.email AS user_email,
-            d.tournament_id,
-            d.name,
-            d.leader,
-            d.base,
-            d.mainboard,
-            d.sideboard
-        FROM decks d
-        JOIN users u ON u.id = d.user_id
-        WHERE d.id = :deck_id
-    """
-    row = await database.fetch_one(query=query, values={"deck_id": deck_id})
-    return LeagueDeckView.model_validate(dict(row._mapping)) if row is not None else None
+            m.id AS match_id,
+            si.name AS stage_item_name,
+            m.start_time,
+            c.name AS court_name,
+            t1.id AS team1_id,
+            t1.name AS team1_name,
+            t2.id AS team2_id,
+            t2.name AS team2_name
+        FROM matches m
+        JOIN rounds r ON r.id = m.round_id
+        JOIN stage_items si ON si.id = r.stage_item_id
+        JOIN stages s ON s.id = si.stage_id
+        LEFT JOIN stage_item_inputs sii1 ON sii1.id = m.stage_item_input1_id
+        LEFT JOIN stage_item_inputs sii2 ON sii2.id = m.stage_item_input2_id
+        LEFT JOIN teams t1 ON t1.id = sii1.team_id
+        LEFT JOIN teams t2 ON t2.id = sii2.team_id
+        LEFT JOIN courts c ON c.id = m.court_id
+        WHERE s.tournament_id = :tournament_id
+          AND m.start_time IS NOT NULL
+          AND (
+            sii1.team_id = ANY(:my_team_ids)
+            OR sii2.team_id = ANY(:my_team_ids)
+          )
+          AND (
+            m.start_time >= NOW()
+            OR (
+                m.start_time <= NOW()
+                AND (m.stage_item_input1_score = 0 AND m.stage_item_input2_score = 0)
+            )
+          )
+        ORDER BY m.start_time ASC, m.id ASC
+        LIMIT 1
+        """,
+        values={"tournament_id": tournament_id, "my_team_ids": my_team_ids},
+    )
+    if row is None:
+        return None
+
+    team1_id = row._mapping["team1_id"]
+    team2_id = row._mapping["team2_id"]
+    team1_name = row._mapping["team1_name"]
+    team2_name = row._mapping["team2_name"]
+    team1_is_me = team1_id is not None and int(team1_id) in my_team_ids
+    my_team_name = team1_name if team1_is_me else team2_name
+    opponent_team_name = team2_name if team1_is_me else team1_name
+
+    return LeagueUpcomingOpponentView(
+        tournament_id=tournament_id,
+        match_id=int(row._mapping["match_id"]),
+        stage_item_name=None if row._mapping["stage_item_name"] is None else str(row._mapping["stage_item_name"]),
+        start_time=row._mapping["start_time"],
+        court_name=None if row._mapping["court_name"] is None else str(row._mapping["court_name"]),
+        my_team_name=None if my_team_name is None else str(my_team_name),
+        opponent_team_name=None if opponent_team_name is None else str(opponent_team_name),
+    )
 
 
 async def delete_deck(deck_id: DeckId) -> None:
@@ -952,9 +1202,13 @@ async def get_tournament_applications(
             ta.tournament_id,
             ta.season_id,
             ta.deck_id,
+            d.name AS deck_name,
+            d.leader AS deck_leader,
+            d.base AS deck_base,
             ta.status
         FROM tournament_applications ta
         JOIN users u ON u.id = ta.user_id
+        LEFT JOIN decks d ON d.id = ta.deck_id
         WHERE ta.tournament_id = :tournament_id
         {user_filter}
         ORDER BY ta.updated DESC, u.name ASC

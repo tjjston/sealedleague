@@ -20,10 +20,11 @@ from bracket.models.league import (
     LeaguePointsImportBody,
     LeagueSeasonPrivilegesUpdateBody,
 )
-from bracket.routes.auth import is_admin_user, user_authenticated_for_tournament
+from bracket.routes.auth import is_admin_user, user_authenticated_for_tournament_member
 from bracket.routes.models import (
     LeagueAdminSeasonsResponse,
     LeagueTournamentApplicationsResponse,
+    LeagueUpcomingOpponentResponse,
     LeagueAdminUsersResponse,
     LeagueCardPoolEntriesResponse,
     LeagueDeckResponse,
@@ -44,8 +45,10 @@ from bracket.sql.league import (
     get_league_standings,
     get_season_by_id,
     get_tournament_applications,
+    get_next_opponent_for_user_in_tournament,
     get_or_create_season_by_name,
     get_or_create_active_season,
+    get_tournament_ids_for_season,
     get_seasons_for_tournament,
     get_user_id_by_email,
     insert_accolade,
@@ -63,6 +66,7 @@ from bracket.utils.id_types import DeckId, TournamentId, UserId
 from bracket.utils.logging import logger
 from bracket.sql.tournaments import sql_get_tournament, sql_update_tournament
 from bracket.models.db.tournament import TournamentUpdateBody
+from bracket.sql.players import recalculate_tournament_records
 
 router = APIRouter(prefix=config.api_prefix)
 
@@ -79,14 +83,32 @@ def can_manage_other_users(current_user: UserPublic, target_user_id: UserId | No
     return target_user_id is not None and target_user_id != current_user.id
 
 
+async def resolve_season_for_tournament(
+    tournament_id: TournamentId,
+    season_id: int | None,
+):
+    if season_id is None:
+        return await get_or_create_active_season(tournament_id)
+
+    season = await get_season_by_id(season_id)
+    if season is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Season not found")
+
+    mapped_tournaments = await get_tournament_ids_for_season(season.id)
+    if int(tournament_id) not in {int(mapped_id) for mapped_id in mapped_tournaments}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Season does not belong to this tournament")
+    return season
+
+
 @router.get(
     "/tournaments/{tournament_id}/league/season_standings",
     response_model=LeagueSeasonStandingsResponse,
 )
 async def get_season_standings(
     tournament_id: TournamentId,
-    _: UserPublic = Depends(user_authenticated_for_tournament),
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueSeasonStandingsResponse:
+    await recalculate_tournament_records(tournament_id)
     season = await get_or_create_active_season(tournament_id)
     standings = await get_league_standings(tournament_id, season.id)
     return LeagueSeasonStandingsResponse(data=standings)
@@ -98,8 +120,9 @@ async def get_season_standings(
 )
 async def get_season_history(
     tournament_id: TournamentId,
-    _: UserPublic = Depends(user_authenticated_for_tournament),
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueSeasonHistoryResponse:
+    await recalculate_tournament_records(tournament_id)
     seasons = await get_seasons_for_tournament(tournament_id)
     season_views = []
     for season in seasons:
@@ -122,13 +145,14 @@ async def get_season_history(
 async def get_card_pool(
     tournament_id: TournamentId,
     user_id: UserId | None = Query(default=None),
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    season_id: int | None = Query(default=None),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueCardPoolEntriesResponse:
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
     if can_manage_other_users(user_public, user_id) and not has_admin_access:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
-    season = await get_or_create_active_season(tournament_id)
+    season = await resolve_season_for_tournament(tournament_id, season_id)
     if has_admin_access and user_id is None:
         return LeagueCardPoolEntriesResponse(data=await get_card_pool_entries(season.id, None))
 
@@ -143,13 +167,13 @@ async def get_card_pool(
 async def put_card_pool_entry(
     tournament_id: TournamentId,
     body: LeagueCardPoolUpdateBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
     if can_manage_other_users(user_public, body.user_id) and not has_admin_access:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
-    season = await get_or_create_active_season(tournament_id)
+    season = await resolve_season_for_tournament(tournament_id, body.season_id)
     target_user_id = body.user_id if body.user_id is not None and has_admin_access else user_public.id
     await upsert_card_pool_entry(season.id, target_user_id, body.card_id, body.quantity)
     return SuccessResponse()
@@ -162,19 +186,23 @@ async def put_card_pool_entry(
 async def list_decks(
     tournament_id: TournamentId,
     user_id: UserId | None = Query(default=None),
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    season_id: int | None = Query(default=None),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueDecksResponse:
+    await recalculate_tournament_records(tournament_id)
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
-    season = await get_or_create_active_season(tournament_id)
+    season = await resolve_season_for_tournament(tournament_id, season_id)
     if user_id is None:
         if has_admin_access:
-            return LeagueDecksResponse(data=await get_decks(season.id))
+            return LeagueDecksResponse(data=await get_decks(season.id, only_admin_users=True))
         return LeagueDecksResponse(data=await get_decks(season.id, user_public.id))
 
     if can_manage_other_users(user_public, user_id) and not has_admin_access:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
-    return LeagueDecksResponse(data=await get_decks(season.id, user_id))
+    return LeagueDecksResponse(
+        data=await get_decks(season.id, user_id, only_admin_users=has_admin_access)
+    )
 
 
 @router.post(
@@ -184,7 +212,7 @@ async def list_decks(
 async def post_deck(
     tournament_id: TournamentId,
     body: LeagueDeckUpsertBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueDeckResponse:
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
     if can_manage_other_users(user_public, body.user_id) and not has_admin_access:
@@ -227,7 +255,7 @@ async def post_deck(
 async def submit_league_entry(
     tournament_id: TournamentId,
     body: LeagueParticipantSubmissionBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueDeckResponse:
     if not is_admin_user(user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -286,12 +314,11 @@ async def submit_league_entry(
 async def remove_deck(
     tournament_id: TournamentId,
     deck_id: DeckId,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
-    season = await get_or_create_active_season(tournament_id)
     deck = await get_deck_by_id(deck_id)
-    if deck is None or deck.season_id != season.id:
+    if deck is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Deck not found")
 
     if deck.user_id != user_public.id and not has_admin_access:
@@ -302,12 +329,24 @@ async def remove_deck(
 
 
 @router.get(
+    "/tournaments/{tournament_id}/league/seasons",
+    response_model=LeagueAdminSeasonsResponse,
+)
+async def list_league_seasons(
+    tournament_id: TournamentId,
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueAdminSeasonsResponse:
+    await get_or_create_active_season(tournament_id)
+    return LeagueAdminSeasonsResponse(data=await list_admin_seasons_for_tournament(tournament_id))
+
+
+@router.get(
     "/tournaments/{tournament_id}/league/admin/users",
     response_model=LeagueAdminUsersResponse,
 )
 async def list_league_admin_users(
     tournament_id: TournamentId,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueAdminUsersResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -323,7 +362,7 @@ async def list_league_admin_users(
 )
 async def list_admin_seasons(
     tournament_id: TournamentId,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueAdminSeasonsResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -337,7 +376,7 @@ async def list_admin_seasons(
 async def post_admin_season(
     tournament_id: TournamentId,
     body: LeagueSeasonCreateBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -358,7 +397,7 @@ async def put_admin_season(
     tournament_id: TournamentId,
     season_id: int,
     body: LeagueSeasonUpdateBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -381,7 +420,7 @@ async def put_admin_season(
 async def delete_admin_season(
     tournament_id: TournamentId,
     season_id: int,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -398,7 +437,7 @@ async def post_admin_adjust_points(
     season_id: int,
     user_id: UserId,
     body: LeagueSeasonPointAdjustmentBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -422,7 +461,7 @@ async def post_admin_adjust_points(
 async def post_tournament_application(
     tournament_id: TournamentId,
     body: LeagueTournamentApplicationBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     participant_name = (
         body.participant_name.strip() if body.participant_name is not None else user_public.name.strip()
@@ -464,9 +503,33 @@ async def post_tournament_application(
 )
 async def get_my_tournament_application(
     tournament_id: TournamentId,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueTournamentApplicationsResponse:
     data = await get_tournament_applications(tournament_id, user_public.id)
+    return LeagueTournamentApplicationsResponse(data=data)
+
+
+@router.get(
+    "/tournaments/{tournament_id}/league/next_opponent",
+    response_model=LeagueUpcomingOpponentResponse,
+)
+async def get_next_opponent(
+    tournament_id: TournamentId,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueUpcomingOpponentResponse:
+    data = await get_next_opponent_for_user_in_tournament(tournament_id, user_public.name)
+    return LeagueUpcomingOpponentResponse(data=data)
+
+
+@router.get(
+    "/tournaments/{tournament_id}/league/applications",
+    response_model=LeagueTournamentApplicationsResponse,
+)
+async def list_tournament_applications_public(
+    tournament_id: TournamentId,
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueTournamentApplicationsResponse:
+    data = await get_tournament_applications(tournament_id)
     return LeagueTournamentApplicationsResponse(data=data)
 
 
@@ -476,7 +539,7 @@ async def get_my_tournament_application(
 )
 async def list_tournament_applications(
     tournament_id: TournamentId,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueTournamentApplicationsResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -493,7 +556,7 @@ async def put_season_privileges(
     user_id: UserId,
     body: LeagueSeasonPrivilegesUpdateBody,
     season_id: int | None = Query(default=None),
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -517,7 +580,7 @@ async def post_accolade(
     tournament_id: TournamentId,
     user_id: UserId,
     body: LeagueAwardAccoladeBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -531,7 +594,7 @@ async def post_accolade(
 async def export_deck_swudb(
     tournament_id: TournamentId,
     deck_id: DeckId,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> dict:
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
     season = await get_or_create_active_season(tournament_id)
@@ -556,13 +619,13 @@ async def export_deck_swudb(
 async def import_deck_swudb(
     tournament_id: TournamentId,
     body: LeagueDeckImportSwuDbBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueDeckResponse:
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
     if can_manage_other_users(user_public, body.user_id) and not has_admin_access:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
-    season = await get_or_create_active_season(tournament_id)
+    season = await resolve_season_for_tournament(tournament_id, body.season_id)
     target_user_id = body.user_id if body.user_id is not None and has_admin_access else user_public.id
 
     mainboard = {entry.id: entry.count for entry in body.deck}
@@ -583,7 +646,7 @@ async def import_deck_swudb(
 @router.get("/tournaments/{tournament_id}/league/admin/export/standings")
 async def export_standings_template(
     tournament_id: TournamentId,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> dict:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -606,7 +669,7 @@ async def export_standings_template(
 @router.get("/tournaments/{tournament_id}/league/admin/export/season_standings.csv")
 async def export_standings_csv(
     tournament_id: TournamentId,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> Response:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -667,7 +730,7 @@ async def export_standings_csv(
 async def import_standings_template(
     tournament_id: TournamentId,
     body: LeaguePointsImportBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -694,7 +757,7 @@ async def import_standings_template(
 async def import_standings_csv(
     tournament_id: TournamentId,
     file: UploadFile = File(...),
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -781,7 +844,7 @@ async def import_standings_csv(
 @router.get("/tournaments/{tournament_id}/league/admin/export/tournament_format")
 async def export_tournament_format(
     tournament_id: TournamentId,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> dict:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
@@ -796,7 +859,7 @@ async def export_tournament_format(
 async def import_tournament_format(
     tournament_id: TournamentId,
     body: TournamentUpdateBody,
-    user_public: UserPublic = Depends(user_authenticated_for_tournament),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")

@@ -9,7 +9,7 @@ import { NuqsAdapter } from 'nuqs/adapters/react-router/v7';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { I18nextProvider } from 'react-i18next';
-import { BrowserRouter, Route, Routes } from 'react-router';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 
 import i18n from '../i18n';
 import { BracketSpotlight } from './components/modals/spotlight';
@@ -32,7 +32,7 @@ import DashboardNotFoundPage from './pages/tournaments/[id]/dashboard/dashboard_
 import CourtsPresentPage from './pages/tournaments/[id]/dashboard/present/courts';
 import StandingsPresentPage from './pages/tournaments/[id]/dashboard/present/standings';
 import DashboardStandingsPage from './pages/tournaments/[id]/dashboard/standings';
-import PlayersPage from './pages/tournaments/[id]/players';
+import TournamentEntriesPage from './pages/tournaments/[id]/entries';
 import RankingsPage from './pages/tournaments/[id]/rankings';
 import ResultsPage from './pages/tournaments/[id]/results';
 import SchedulePage from './pages/tournaments/[id]/schedule';
@@ -82,7 +82,8 @@ createRoot(document.getElementById('root')!).render(
             <BracketSpotlight />
             <Notifications />
             <Routes>
-              <Route index element={<HomePage />} />
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route path="/dashboard" element={<HomePage />} />
               <Route path="/login" element={<LoginPage />} />
               <Route path="/logout" element={<LogoutPage />} />
               <Route path="/clubs" element={<ClubsPage />} />
@@ -100,7 +101,7 @@ createRoot(document.getElementById('root')!).render(
 
               <Route path="/tournaments">
                 <Route path=":id">
-                  <Route path="players" element={<PlayersPage />} />
+                  <Route path="entries" element={<TournamentEntriesPage />} />
                   <Route path="teams" element={<TeamsPage />} />
                   <Route path="schedule" element={<SchedulePage />} />
                   <Route path="rankings" element={<RankingsPage />} />

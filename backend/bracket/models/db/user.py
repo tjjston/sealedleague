@@ -22,6 +22,10 @@ class UserBase(BaseModelORM):
     favorite_card_name: str | None = None
     favorite_card_image_url: str | None = None
     favorite_media: str | None = None
+    weapon_icon: str | None = None
+    current_leader_card_id: str | None = None
+    current_leader_name: str | None = None
+    current_leader_image_url: str | None = None
     account_type: UserAccountType
 
     @property
@@ -55,6 +59,7 @@ class UserPreferencesToUpdate(BaseModel):
     favorite_card_name: str | None = None
     favorite_card_image_url: str | None = None
     favorite_media: str | None = None
+    weapon_icon: str | None = None
 
 
 class UserPasswordToUpdate(BaseModel):
@@ -89,13 +94,24 @@ class CardCatalogEntry(BaseModelORM):
     image_url: str | None = None
 
 
+class MediaCatalogEntry(BaseModelORM):
+    title: str
+    year: str | None = None
+    media_type: str | None = None
+    imdb_id: str | None = None
+    poster_url: str | None = None
+
+
 class UserDirectoryEntry(BaseModelORM):
     user_id: UserId
     user_name: str
     avatar_url: str | None = None
     tournaments_won: int = 0
     tournaments_placed: int = 0
+    total_cards_active_season: int = 0
+    total_cards_career_pool: int = 0
     favorite_media: str | None = None
     current_leader_card_id: str | None = None
     current_leader_name: str | None = None
     current_leader_image_url: str | None = None
+    weapon_icon: str | None = None

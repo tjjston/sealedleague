@@ -4,10 +4,16 @@ export async function upsertCardPoolEntry(
   tournament_id: number,
   card_id: string,
   quantity: number,
-  user_id?: number
+  user_id?: number,
+  season_id?: number
 ) {
   return createAxios()
-    .put(`tournaments/${tournament_id}/league/card_pool`, { card_id, quantity, user_id })
+    .put(`tournaments/${tournament_id}/league/card_pool`, {
+      card_id,
+      quantity,
+      user_id,
+      season_id,
+    })
     .catch((response: any) => handleRequestError(response));
 }
 
@@ -42,6 +48,7 @@ export async function importDeckSwuDb(
     name: string;
     leader: string;
     base: string;
+    season_id?: number;
     deck: Array<{ id: string; count: number }>;
     sideboard?: Array<{ id: string; count: number }>;
     user_id?: number;

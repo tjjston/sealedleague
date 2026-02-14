@@ -1,10 +1,11 @@
 import json
 
+from heliclockter import datetime_utc
 from pydantic import BaseModel, Field, field_validator
 
 from bracket.models.db.account import UserAccountType
 from bracket.models.db.league import SeasonMembershipRole
-from bracket.utils.id_types import DeckId, TournamentId, UserId
+from bracket.utils.id_types import DeckId, MatchId, TournamentId, UserId
 
 
 class LeagueDeckUpsertBody(BaseModel):
@@ -47,6 +48,7 @@ class LeagueDeckImportCard(BaseModel):
 
 class LeagueDeckImportSwuDbBody(BaseModel):
     user_id: UserId | None = None
+    season_id: int | None = None
     name: str
     leader: str
     base: str
@@ -98,6 +100,7 @@ class LeaguePointsImportBody(BaseModel):
 
 class LeagueCardPoolUpdateBody(BaseModel):
     user_id: UserId | None = None
+    season_id: int | None = None
     card_id: str
     quantity: int = Field(ge=0, le=99)
 
@@ -131,6 +134,12 @@ class LeagueDeckView(BaseModel):
     base: str
     mainboard: dict[str, int] = Field(default_factory=dict)
     sideboard: dict[str, int] = Field(default_factory=dict)
+    tournaments_submitted: int = 0
+    wins: int = 0
+    draws: int = 0
+    losses: int = 0
+    matches: int = 0
+    win_percentage: float = 0
 
     @field_validator("mainboard", "sideboard", mode="before")
     @classmethod
@@ -145,6 +154,16 @@ class LeagueDeckView(BaseModel):
             except (TypeError, ValueError):
                 return {}
         return {}
+
+
+class LeagueUpcomingOpponentView(BaseModel):
+    tournament_id: TournamentId
+    match_id: MatchId
+    stage_item_name: str | None = None
+    start_time: datetime_utc | None = None
+    court_name: str | None = None
+    my_team_name: str | None = None
+    opponent_team_name: str | None = None
 
 
 class LeagueStandingsRow(BaseModel):
@@ -258,4 +277,7 @@ class LeagueTournamentApplicationView(BaseModel):
     tournament_id: TournamentId
     season_id: int | None = None
     deck_id: DeckId | None = None
+    deck_name: str | None = None
+    deck_leader: str | None = None
+    deck_base: str | None = None
     status: str

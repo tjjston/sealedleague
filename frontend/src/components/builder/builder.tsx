@@ -258,6 +258,10 @@ function StageItemRow({
 }) {
   const { t } = useTranslation();
   const [opened, setOpened] = useState(false);
+  const hasBracketView =
+    stageItem.type === 'SWISS' ||
+    stageItem.type === 'SINGLE_ELIMINATION' ||
+    stageItem.type === 'DOUBLE_ELIMINATION';
 
   const inputs = stageItem.inputs
     .sort((i1, i2) => (i1.slot > i2.slot ? 1 : -1))
@@ -298,8 +302,8 @@ function StageItemRow({
             rankings={rankings}
           />
           <Group gap="0rem">
-            {stageItem.type === 'SWISS' ? (
-              <Tooltip label={t('handle_swiss_system')}>
+            {hasBracketView ? (
+              <Tooltip label="View Bracket">
                 <ActionIcon
                   variant="transparent"
                   color="gray"
@@ -326,13 +330,13 @@ function StageItemRow({
                 >
                   {t('edit_stage_item_label')}
                 </Menu.Item>
-                {stageItem.type === 'SWISS' ? (
+                {hasBracketView ? (
                   <Menu.Item
                     leftSection={<BiSolidWrench size="1.5rem" />}
                     component={PreloadLink}
                     href={`/tournaments/${tournament.id}/stages/swiss/${stageItem.id}`}
                   >
-                    {t('handle_swiss_system')}
+                    View Bracket
                   </Menu.Item>
                 ) : null}
                 <Menu.Item

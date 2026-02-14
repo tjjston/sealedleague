@@ -23,6 +23,7 @@ services:
       ALLOW_DEMO_USER_REGISTRATION: false
       SERVE_FRONTEND: true
       API_PREFIX: '/api'
+      OMDB_API_KEY: ''
     build:
       context: .
       dockerfile: Dockerfile

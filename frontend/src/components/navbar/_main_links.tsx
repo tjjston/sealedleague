@@ -6,6 +6,7 @@ import {
   IconCalendar,
   IconCards,
   IconChartBar,
+  IconChecklist,
   IconHome,
   IconLogout,
   IconScoreboard,
@@ -19,6 +20,7 @@ import { useLocation } from 'react-router';
 
 import PreloadLink from '@components/utils/link';
 import { capitalize } from '@components/utils/util';
+import { getUser } from '@services/adapter';
 import classes from './_main_links.module.css';
 
 interface MainLinkProps {
@@ -70,16 +72,23 @@ function MainLink({ item, pathName }: { item: MainLinkProps; pathName: String })
 
 export function getBaseLinksDict() {
   const { t } = useTranslation();
+  const swrUserResponse = getUser();
+  const user = swrUserResponse.data?.data ?? null;
+  const currentLeader =
+    (user as any)?.current_leader_name ??
+    (user as any)?.current_leader_card_id ??
+    'No leader';
+  const accountLabel = user != null ? `Account (${user.name} | ${currentLeader})` : 'Account';
 
   return [
-    { link: '/', label: capitalize(t('tournaments_title')), links: [], icon: IconHome },
+    { link: '/dashboard', label: 'Dashboard', links: [], icon: IconHome },
     { link: '/league/deckbuilder', label: 'Deckbuilder', links: [], icon: IconBrackets },
     { link: '/league/sealed-draft', label: 'Sealed Draft', links: [], icon: IconCards },
     { link: '/league/season-standings', label: 'Season Standings', links: [], icon: IconChartBar },
     { link: '/league/players', label: 'Players', links: [], icon: IconUser },
     {
       link: '/user',
-      label: 'Account',
+      label: accountLabel,
       links: [
         { link: '/user', label: 'Profile', icon: IconUser },
         { link: '/user/settings', label: 'Settings', icon: IconSettings },
@@ -111,9 +120,9 @@ export function TournamentLinks({ tournament_id }: any) {
       link: `${tm_prefix}/stages`,
     },
     {
-      icon: IconUser,
-      label: capitalize(t('players_title')),
-      link: `${tm_prefix}/players`,
+      icon: IconChecklist,
+      label: 'Entries',
+      link: `${tm_prefix}/entries`,
     },
     {
       icon: IconUsers,

@@ -286,6 +286,7 @@ users = Table(
     Column("favorite_card_name", String, nullable=True),
     Column("favorite_card_image_url", String, nullable=True),
     Column("favorite_media", String, nullable=True),
+    Column("weapon_icon", String, nullable=True),
     Column(
         "account_type",
         Enum(

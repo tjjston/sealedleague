@@ -15,6 +15,10 @@ export default function UserPage() {
   const swrUserResponse = getUser();
   checkForAuthError(swrUserResponse);
   const user = swrUserResponse.data != null ? swrUserResponse.data.data : null;
+  const currentLeader =
+    (user as any)?.current_leader_name ??
+    (user as any)?.current_leader_card_id ??
+    'No deck leader selected';
 
   let content = user != null ? <UserForm user={user} i18n={i18n} t={t} /> : null;
 
@@ -28,7 +32,14 @@ export default function UserPage() {
 
   return (
     <Layout>
-      <Title>{t('edit_profile_title')}</Title>
+      <Group align="end" justify="space-between">
+        <Title>{t('edit_profile_title')}</Title>
+        {user != null ? (
+          <Title order={4}>
+            {user.name} | Leader: {currentLeader}
+          </Title>
+        ) : null}
+      </Group>
       {user?.account_type === 'ADMIN' ? (
         <Button mt="sm" mb="sm" variant="light" onClick={() => navigate('/admin/users')}>
           Admin Users

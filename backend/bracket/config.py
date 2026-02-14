@@ -42,6 +42,7 @@ class Config(BaseSettings):
     sentry_dsn: str | None = None
     serve_frontend: bool = False
     api_prefix: str = ""
+    omdb_api_key: str | None = None
 
     def is_cors_enabled(self) -> bool:
         return self.cors_origins != "*"

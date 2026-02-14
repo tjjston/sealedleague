@@ -6,6 +6,7 @@ import {
   Group,
   Image,
   Modal,
+  MultiSelect,
   NumberInput,
   Progress,
   ScrollArea,
@@ -19,7 +20,13 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
-import { IconPlus, IconTrash } from '@tabler/icons-react';
+import {
+  IconChevronDown,
+  IconChevronUp,
+  IconPlus,
+  IconSelector,
+  IconTrash,
+} from '@tabler/icons-react';
 import { showNotification } from '@mantine/notifications';
 import { useEffect, useMemo, useState } from 'react';
 
@@ -27,10 +34,10 @@ import { getTournamentIdFromRouter } from '@components/utils/util';
 import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
 import {
-  getLeagueAdminUsers,
   getLeagueCardPool,
   getLeagueCards,
   getLeagueDecks,
+  getLeagueSeasons,
   getTournaments,
   getUser,
 } from '@services/adapter';
@@ -72,6 +79,18 @@ type DeckGraphView =
   | 'power'
   | 'hp';
 type AlignmentFilter = 'heroic' | 'villainy' | 'neither';
+type CardSortKey =
+  | 'name'
+  | 'type'
+  | 'rarity'
+  | 'cost'
+  | 'power'
+  | 'hp'
+  | 'aspects'
+  | 'arena'
+  | 'set'
+  | 'pool';
+type SortDirection = 'asc' | 'desc';
 
 const HEROIC_ASPECT_VALUES = new Set(['heroic', 'heroism']);
 const VILLAINY_ASPECT_VALUES = new Set(['villainy']);
@@ -98,6 +117,22 @@ function aggregateCountMap(entries: Array<[string, number]>) {
     map[key] = (map[key] ?? 0) + qty;
   });
   return map;
+}
+
+function parseCardNumber(value: string | null | undefined) {
+  if (value == null) return Number.NEGATIVE_INFINITY;
+  const cleaned = String(value).trim();
+  const numeric = Number(cleaned);
+  if (Number.isFinite(numeric)) return numeric;
+  const match = cleaned.match(/\d+/);
+  return match != null ? Number(match[0]) : Number.NEGATIVE_INFINITY;
+}
+
+function compareText(a: string, b: string) {
+  return a.localeCompare(b, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
 }
 
 function GraphBars({
@@ -155,37 +190,45 @@ export default function DeckbuilderPage({
     ? Number(selectedTournamentId ?? tournaments[0]?.id ?? 0)
     : tournamentData.id;
   const hasTournament = Number.isFinite(activeTournamentId) && activeTournamentId > 0;
+  const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(null);
 
   const swrCurrentUserResponse = getUser();
-  const swrAdminUsersResponse = getLeagueAdminUsers(activeTournamentId);
-  const isAdmin = swrAdminUsersResponse.data != null;
-  const adminUsers = swrAdminUsersResponse.data?.data ?? [];
-
-  const [selectedUserId, setSelectedUserId] = useState<string | null>(null);
+  const isAdmin = String(swrCurrentUserResponse.data?.data?.account_type ?? 'REGULAR') === 'ADMIN';
+  const targetUserId = null;
+  const swrSeasonsResponse = getLeagueSeasons(hasTournament ? activeTournamentId : null);
+  const seasons = swrSeasonsResponse.data?.data ?? [];
 
   useEffect(() => {
-    const currentId = swrCurrentUserResponse.data?.data?.id;
-    if (currentId == null) return;
+    setSelectedSeasonId(null);
+  }, [activeTournamentId]);
 
-    if (!isAdmin) {
-      setSelectedUserId(String(currentId));
-      return;
+  useEffect(() => {
+    if (!hasTournament || seasons.length < 1) return;
+    const selectedExists = seasons.some((season: any) => String(season.season_id) === selectedSeasonId);
+    if (selectedExists) return;
+    const activeSeason = seasons.find((season: any) => season.is_active) ?? seasons[0];
+    if (activeSeason != null) {
+      setSelectedSeasonId(String(activeSeason.season_id));
     }
+  }, [hasTournament, seasons, selectedSeasonId]);
 
-    if (selectedUserId == null && adminUsers.length > 0) {
-      const exists = adminUsers.some((user: any) => user.user_id === currentId);
-      setSelectedUserId(String(exists ? currentId : adminUsers[0].user_id));
-    }
-  }, [swrCurrentUserResponse.data, isAdmin, selectedUserId, adminUsers]);
-
-  const targetUserId = isAdmin && selectedUserId != null ? Number(selectedUserId) : null;
+  const selectedSeasonNumber =
+    selectedSeasonId != null && selectedSeasonId !== '' ? Number(selectedSeasonId) : null;
 
   const swrCatalogResponse = getLeagueCards(hasTournament ? activeTournamentId : null, {
     limit: 5000,
     offset: 0,
   });
-  const swrCardPoolResponse = getLeagueCardPool(hasTournament ? activeTournamentId : null, targetUserId);
-  const swrDecksResponse = getLeagueDecks(hasTournament ? activeTournamentId : null, targetUserId);
+  const swrCardPoolResponse = getLeagueCardPool(
+    hasTournament ? activeTournamentId : null,
+    targetUserId,
+    selectedSeasonNumber
+  );
+  const swrDecksResponse = getLeagueDecks(
+    hasTournament ? activeTournamentId : null,
+    targetUserId,
+    selectedSeasonNumber
+  );
 
   const allCards: CardItem[] = swrCatalogResponse.data?.data?.cards ?? [];
   const decks = swrDecksResponse.data?.data ?? [];
@@ -208,14 +251,16 @@ export default function DeckbuilderPage({
   const [query, setQuery] = useState('');
   const [nameQuery, setNameQuery] = useState('');
   const [rulesQuery, setRulesQuery] = useState('');
-  const [keywordQuery, setKeywordQuery] = useState('');
-  const [traitQuery, setTraitQuery] = useState('');
+  const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
+  const [selectedTraits, setSelectedTraits] = useState<string[]>([]);
   const [aspectFilter, setAspectFilter] = useState<string | null>(null);
   const [alignmentFilter, setAlignmentFilter] = useState<AlignmentFilter | null>(null);
-  const [costQuery, setCostQuery] = useState<number | ''>('');
-  const [typeFilter, setTypeFilter] = useState<string | null>(null);
-  const [rarityFilter, setRarityFilter] = useState<string | null>(null);
-  const [setFilter, setSetFilter] = useState<string | null>(null);
+  const [cardSortKey, setCardSortKey] = useState<CardSortKey>('set');
+  const [cardSortDirection, setCardSortDirection] = useState<SortDirection>('desc');
+  const [selectedCosts, setSelectedCosts] = useState<string[]>([]);
+  const [selectedTypes, setSelectedTypes] = useState<string[]>([]);
+  const [selectedRarities, setSelectedRarities] = useState<string[]>([]);
+  const [selectedSets, setSelectedSets] = useState<string[]>([]);
   const [arenaFilter, setArenaFilter] = useState<string | null>(null);
 
   const [showCardImage, setShowCardImage] = useState(false);
@@ -269,6 +314,50 @@ export default function DeckbuilderPage({
       ]
         .sort()
         .map((value) => ({ value, label: value })),
+    [allCards]
+  );
+
+  const traitOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          allCards
+            .flatMap((card: CardItem) => card.traits ?? [])
+            .map((value) => value.trim())
+            .filter((value) => value !== '')
+        ),
+      ]
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => ({ value, label: value })),
+    [allCards]
+  );
+
+  const keywordOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          allCards
+            .flatMap((card: CardItem) => card.keywords ?? [])
+            .map((value) => value.trim())
+            .filter((value) => value !== '')
+        ),
+      ]
+        .sort((a, b) => a.localeCompare(b))
+        .map((value) => ({ value, label: value })),
+    [allCards]
+  );
+
+  const costOptions = useMemo(
+    () =>
+      [
+        ...new Set(
+          allCards
+            .map((card: CardItem) => card.cost)
+            .filter((value): value is number => value != null)
+        ),
+      ]
+        .sort((a, b) => a - b)
+        .map((value) => ({ value: String(value), label: String(value) })),
     [allCards]
   );
 
@@ -328,9 +417,13 @@ export default function DeckbuilderPage({
     const normalizedQuery = query.trim().toLowerCase();
     const normalizedName = nameQuery.trim().toLowerCase();
     const normalizedRules = rulesQuery.trim().toLowerCase();
-    const normalizedKeyword = keywordQuery.trim().toLowerCase();
-    const normalizedTrait = traitQuery.trim().toLowerCase();
     const normalizedAspectFilter = (aspectFilter ?? '').trim().toLowerCase();
+    const selectedTypeSet = new Set(selectedTypes);
+    const selectedRaritySet = new Set(selectedRarities);
+    const selectedSetSet = new Set(selectedSets);
+    const selectedCostSet = new Set(selectedCosts.map((value) => Number(value)));
+    const selectedTraitSet = new Set(selectedTraits.map((value) => value.toLowerCase()));
+    const selectedKeywordSet = new Set(selectedKeywords.map((value) => value.toLowerCase()));
 
     return allCards
       .filter((card: CardItem) => {
@@ -356,10 +449,13 @@ export default function DeckbuilderPage({
           return false;
         }
         if (normalizedRules !== '' && !rules.includes(normalizedRules)) return false;
-        if (normalizedKeyword !== '' && !keywords.some((value) => value.includes(normalizedKeyword))) {
+        if (
+          selectedKeywordSet.size > 0 &&
+          !keywords.some((value) => selectedKeywordSet.has(value))
+        ) {
           return false;
         }
-        if (normalizedTrait !== '' && !traits.some((value) => value.includes(normalizedTrait))) {
+        if (selectedTraitSet.size > 0 && !traits.some((value) => selectedTraitSet.has(value))) {
           return false;
         }
         if (normalizedAspectFilter !== '' && !aspects.includes(normalizedAspectFilter)) {
@@ -377,10 +473,12 @@ export default function DeckbuilderPage({
             return false;
           }
         }
-        if (costQuery !== '' && card.cost !== Number(costQuery)) return false;
-        if (typeFilter != null && card.type !== typeFilter) return false;
-        if (rarityFilter != null && card.rarity !== rarityFilter) return false;
-        if (setFilter != null && card.set_code !== setFilter) return false;
+        if (selectedCostSet.size > 0 && (card.cost == null || !selectedCostSet.has(card.cost))) {
+          return false;
+        }
+        if (selectedTypeSet.size > 0 && !selectedTypeSet.has(card.type)) return false;
+        if (selectedRaritySet.size > 0 && !selectedRaritySet.has(card.rarity)) return false;
+        if (selectedSetSet.size > 0 && !selectedSetSet.has(card.set_code)) return false;
         if (arenaFilter != null && !(card.arenas ?? []).includes(arenaFilter)) return false;
         if (onlyCardsInPool && (cardPoolMap[card.card_id] ?? 0) <= 0) return false;
 
@@ -391,27 +489,20 @@ export default function DeckbuilderPage({
         }
 
         return true;
-      })
-      .sort((a, b) => {
-        const nameSort = a.name.localeCompare(b.name);
-        if (nameSort !== 0) return nameSort;
-        const variantSort = (a.character_variant ?? '').localeCompare(b.character_variant ?? '');
-        if (variantSort !== 0) return variantSort;
-        return (a.cost ?? 999) - (b.cost ?? 999);
       });
   }, [
     allCards,
     query,
     nameQuery,
     rulesQuery,
-    keywordQuery,
-    traitQuery,
+    selectedKeywords,
+    selectedTraits,
     aspectFilter,
     alignmentFilter,
-    costQuery,
-    typeFilter,
-    rarityFilter,
-    setFilter,
+    selectedCosts,
+    selectedTypes,
+    selectedRarities,
+    selectedSets,
     arenaFilter,
     onlyCardsInPool,
     cardPoolMap,
@@ -419,14 +510,69 @@ export default function DeckbuilderPage({
     allowedAspects,
   ]);
 
+  const sortedFilteredCards = useMemo(() => {
+    const defaultSort = (a: CardItem, b: CardItem) => {
+      const setSort = compareText(b.set_code, a.set_code);
+      if (setSort !== 0) return setSort;
+      const numberSort = parseCardNumber(b.number) - parseCardNumber(a.number);
+      if (numberSort !== 0) return numberSort;
+      const nameSort = compareText(a.name, b.name);
+      if (nameSort !== 0) return nameSort;
+      return compareText(a.character_variant ?? '', b.character_variant ?? '');
+    };
+
+    const sorted = [...filteredCards].sort((a, b) => {
+      let sortValue = 0;
+
+      if (cardSortKey === 'name') {
+        sortValue = compareText(
+          `${a.name} ${a.character_variant ?? ''}`.trim(),
+          `${b.name} ${b.character_variant ?? ''}`.trim()
+        );
+      } else if (cardSortKey === 'type') {
+        sortValue = compareText(a.type ?? '', b.type ?? '');
+      } else if (cardSortKey === 'rarity') {
+        sortValue = compareText(a.rarity ?? '', b.rarity ?? '');
+      } else if (cardSortKey === 'cost') {
+        sortValue = (a.cost ?? -1) - (b.cost ?? -1);
+      } else if (cardSortKey === 'power') {
+        sortValue = (a.power ?? -1) - (b.power ?? -1);
+      } else if (cardSortKey === 'hp') {
+        sortValue = (a.hp ?? -1) - (b.hp ?? -1);
+      } else if (cardSortKey === 'aspects') {
+        sortValue = compareText((a.aspects ?? []).join(', '), (b.aspects ?? []).join(', '));
+      } else if (cardSortKey === 'arena') {
+        sortValue = compareText((a.arenas ?? []).join(', '), (b.arenas ?? []).join(', '));
+      } else if (cardSortKey === 'set') {
+        sortValue = compareText(a.set_code, b.set_code);
+        if (sortValue === 0) {
+          sortValue = parseCardNumber(a.number) - parseCardNumber(b.number);
+        }
+      } else if (cardSortKey === 'pool') {
+        sortValue = (cardPoolMap[a.card_id] ?? 0) - (cardPoolMap[b.card_id] ?? 0);
+      }
+
+      if (sortValue === 0) return defaultSort(a, b);
+      return cardSortDirection === 'asc' ? sortValue : -sortValue;
+    });
+
+    return sorted;
+  }, [filteredCards, cardSortKey, cardSortDirection, cardPoolMap]);
+
   const visibleFilteredCards = useMemo(
-    () => filteredCards.slice(0, MAX_RENDERED_CARD_ROWS),
-    [filteredCards]
+    () => sortedFilteredCards.slice(0, MAX_RENDERED_CARD_ROWS),
+    [sortedFilteredCards]
   );
 
   async function addToPool(cardId: string, nextQuantity: number) {
     if (!hasTournament) return;
-    await upsertCardPoolEntry(activeTournamentId, cardId, nextQuantity, targetUserId ?? undefined);
+    await upsertCardPoolEntry(
+      activeTournamentId,
+      cardId,
+      nextQuantity,
+      targetUserId ?? undefined,
+      selectedSeasonNumber ?? undefined
+    );
     await swrCardPoolResponse.mutate();
   }
 
@@ -467,6 +613,7 @@ export default function DeckbuilderPage({
     await saveDeck(activeTournamentId, {
       user_id: targetUserId ?? undefined,
       tournament_id: activeTournamentId,
+      season_id: selectedSeasonNumber ?? undefined,
       name: deckName,
       leader: leaderCard.card_id,
       base: baseCard.card_id,
@@ -502,6 +649,7 @@ export default function DeckbuilderPage({
       const sideboard = Array.isArray(parsed.sideboard) ? parsed.sideboard : [];
       await importDeckSwuDb(activeTournamentId, {
         user_id: targetUserId ?? undefined,
+        season_id: selectedSeasonNumber ?? undefined,
         name: parsed.name ?? `Imported Deck ${new Date().toISOString()}`,
         leader,
         base,
@@ -629,6 +777,7 @@ export default function DeckbuilderPage({
   async function onSubmitEntry() {
     if (!hasTournament || leaderCard == null || baseCard == null) return;
     await submitLeagueEntry(activeTournamentId, {
+      season_id: selectedSeasonNumber ?? undefined,
       deck_name: deckName,
       leader: leaderCard.card_id,
       base: baseCard.card_id,
@@ -642,6 +791,21 @@ export default function DeckbuilderPage({
       title: 'Tournament entry submitted',
       message: 'You have been entered with your selected deck.',
     });
+  }
+
+  function toggleCardSort(nextKey: CardSortKey) {
+    if (cardSortKey === nextKey) {
+      setCardSortDirection(cardSortDirection === 'asc' ? 'desc' : 'asc');
+      return;
+    }
+    setCardSortKey(nextKey);
+    setCardSortDirection('asc');
+  }
+
+  function sortIndicatorFor(key: CardSortKey) {
+    if (cardSortKey !== key) return <IconSelector size={14} stroke={1.8} />;
+    if (cardSortDirection === 'asc') return <IconChevronUp size={14} stroke={1.8} />;
+    return <IconChevronDown size={14} stroke={1.8} />;
   }
 
   const content = (
@@ -660,46 +824,41 @@ export default function DeckbuilderPage({
         <Title order={2}>Deckbuilder</Title>
         <Text c="dimmed">
           Search by name, keyword, trait, cost, type, aspect, alignment, set, rules, and arena.
-          Card pools remain user-specific.
+          Card pools remain user-specific per season.
         </Text>
-        {standalone && (
+        {(standalone || seasons.length > 0) && (
           <Card withBorder>
-            <Select
-              label="Tournament"
-              value={selectedTournamentId}
-              onChange={(value) => {
-                setSelectedTournamentId(value);
-                if (value != null) {
-                  window.localStorage.setItem('league_default_tournament_id', value);
-                }
-              }}
-              allowDeselect={false}
-              data={tournaments.map((t: any) => ({ value: String(t.id), label: t.name }))}
-            />
+            <Stack>
+              {standalone && (
+                <Select
+                  label="Tournament"
+                  value={selectedTournamentId}
+                  onChange={(value) => {
+                    setSelectedTournamentId(value);
+                    if (value != null) {
+                      window.localStorage.setItem('league_default_tournament_id', value);
+                    }
+                  }}
+                  allowDeselect={false}
+                  data={tournaments.map((t: any) => ({ value: String(t.id), label: t.name }))}
+                />
+              )}
+              {seasons.length > 0 && (
+                <Select
+                  label="Season"
+                  value={selectedSeasonId}
+                  onChange={setSelectedSeasonId}
+                  allowDeselect={false}
+                  data={seasons.map((season: any) => ({
+                    value: String(season.season_id),
+                    label: `${season.name}${season.is_active ? ' (Active)' : ''}`,
+                  }))}
+                />
+              )}
+            </Stack>
           </Card>
         )}
         {!hasTournament && <Text c="dimmed">No tournament selected.</Text>}
-
-        {isAdmin && (
-          <Card withBorder>
-            <Group>
-              <Select
-                label="Deck Owner"
-                value={selectedUserId}
-                onChange={setSelectedUserId}
-                allowDeselect={false}
-                data={adminUsers.map((user: any) => ({
-                  value: String(user.user_id),
-                  label: `${user.user_name} (${user.user_email})`,
-                }))}
-                style={{ minWidth: 340 }}
-              />
-              <Text size="sm" c="dimmed" mt="1.6rem">
-                Admin mode: edit card pool and decks for this player.
-              </Text>
-            </Group>
-          </Card>
-        )}
 
         <Grid>
           <Grid.Col span={{ base: 12, md: 8 }}>
@@ -715,16 +874,56 @@ export default function DeckbuilderPage({
                   />
                 </Group>
                 <Group grow>
-                  <TextInput
-                    label="Keyword"
-                    value={keywordQuery}
-                    onChange={(e) => setKeywordQuery(e.currentTarget.value)}
-                  />
-                  <TextInput
-                    label="Trait"
-                    value={traitQuery}
-                    onChange={(e) => setTraitQuery(e.currentTarget.value)}
-                  />
+                  <Stack gap={4}>
+                    <MultiSelect
+                      label="Keywords"
+                      data={keywordOptions}
+                      value={selectedKeywords}
+                      onChange={setSelectedKeywords}
+                      searchable
+                      clearable
+                      maxDropdownHeight={220}
+                    />
+                    <Group gap={6}>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={() => setSelectedKeywords(keywordOptions.map((option) => option.value))}
+                      >
+                        Select all
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={() => setSelectedKeywords([])}
+                      >
+                        Clear
+                      </Button>
+                    </Group>
+                  </Stack>
+                  <Stack gap={4}>
+                    <MultiSelect
+                      label="Traits"
+                      data={traitOptions}
+                      value={selectedTraits}
+                      onChange={setSelectedTraits}
+                      searchable
+                      clearable
+                      maxDropdownHeight={220}
+                    />
+                    <Group gap={6}>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={() => setSelectedTraits(traitOptions.map((option) => option.value))}
+                      >
+                        Select all
+                      </Button>
+                      <Button size="xs" variant="subtle" onClick={() => setSelectedTraits([])}>
+                        Clear
+                      </Button>
+                    </Group>
+                  </Stack>
                   <Select
                     label="Aspect"
                     data={aspectOptions}
@@ -747,28 +946,98 @@ export default function DeckbuilderPage({
                 </Group>
                 <Group grow>
                   <Select label="Arena" data={arenaOptions} value={arenaFilter} onChange={setArenaFilter} clearable />
-                  <NumberInput
-                    label="Cost"
-                    min={0}
-                    max={20}
-                    value={costQuery}
-                    onChange={(value) => setCostQuery(value === '' ? '' : Number(value))}
-                  />
-                  <Select
-                    label="Card Type"
-                    data={typeOptions}
-                    value={typeFilter}
-                    onChange={setTypeFilter}
-                    clearable
-                  />
-                  <Select
-                    label="Rarity"
-                    data={rarityOptions}
-                    value={rarityFilter}
-                    onChange={setRarityFilter}
-                    clearable
-                  />
-                  <Select label="Set" data={setOptions} value={setFilter} onChange={setSetFilter} clearable />
+                  <Stack gap={4}>
+                    <MultiSelect
+                      label="Costs"
+                      data={costOptions}
+                      value={selectedCosts}
+                      onChange={setSelectedCosts}
+                      clearable
+                      searchable
+                      maxDropdownHeight={220}
+                    />
+                    <Group gap={6}>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={() => setSelectedCosts(costOptions.map((option) => option.value))}
+                      >
+                        Select all
+                      </Button>
+                      <Button size="xs" variant="subtle" onClick={() => setSelectedCosts([])}>
+                        Clear
+                      </Button>
+                    </Group>
+                  </Stack>
+                  <Stack gap={4}>
+                    <MultiSelect
+                      label="Card Types"
+                      data={typeOptions}
+                      value={selectedTypes}
+                      onChange={setSelectedTypes}
+                      searchable
+                      clearable
+                      maxDropdownHeight={220}
+                    />
+                    <Group gap={6}>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={() => setSelectedTypes(typeOptions.map((option) => option.value))}
+                      >
+                        Select all
+                      </Button>
+                      <Button size="xs" variant="subtle" onClick={() => setSelectedTypes([])}>
+                        Clear
+                      </Button>
+                    </Group>
+                  </Stack>
+                  <Stack gap={4}>
+                    <MultiSelect
+                      label="Rarities"
+                      data={rarityOptions}
+                      value={selectedRarities}
+                      onChange={setSelectedRarities}
+                      searchable
+                      clearable
+                      maxDropdownHeight={220}
+                    />
+                    <Group gap={6}>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={() => setSelectedRarities(rarityOptions.map((option) => option.value))}
+                      >
+                        Select all
+                      </Button>
+                      <Button size="xs" variant="subtle" onClick={() => setSelectedRarities([])}>
+                        Clear
+                      </Button>
+                    </Group>
+                  </Stack>
+                  <Stack gap={4}>
+                    <MultiSelect
+                      label="Sets"
+                      data={setOptions}
+                      value={selectedSets}
+                      onChange={setSelectedSets}
+                      searchable
+                      clearable
+                      maxDropdownHeight={220}
+                    />
+                    <Group gap={6}>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={() => setSelectedSets(setOptions.map((option) => option.value))}
+                      >
+                        Select all
+                      </Button>
+                      <Button size="xs" variant="subtle" onClick={() => setSelectedSets([])}>
+                        Clear
+                      </Button>
+                    </Group>
+                  </Stack>
                 </Group>
                 <Group>
                   <Switch
@@ -777,7 +1046,7 @@ export default function DeckbuilderPage({
                     onChange={(event) => setOnlyLegalCards(event.currentTarget.checked)}
                   />
                   <Switch
-                    label={isAdmin ? 'Only cards in selected player pool' : 'Only cards in my pool'}
+                    label="Only cards in my pool"
                     checked={onlyCardsInPool}
                     onChange={(event) => setOnlyCardsInPool(event.currentTarget.checked)}
                   />
@@ -799,16 +1068,66 @@ export default function DeckbuilderPage({
                     <Table.Thead>
                       <Table.Tr>
                         {showCardImage && <Table.Th>Image</Table.Th>}
-                        <Table.Th>Name</Table.Th>
-                        <Table.Th>Type</Table.Th>
-                        <Table.Th>Rarity</Table.Th>
-                        <Table.Th>Cost</Table.Th>
-                        <Table.Th>Power</Table.Th>
-                        <Table.Th>HP</Table.Th>
-                        <Table.Th>Aspects</Table.Th>
-                        <Table.Th>Arena</Table.Th>
-                        <Table.Th>Set</Table.Th>
-                        <Table.Th>Pool</Table.Th>
+                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('name')}>
+                          <Group gap={4} wrap="nowrap">
+                            <Text size="sm" fw={600}>Name</Text>
+                            {sortIndicatorFor('name')}
+                          </Group>
+                        </Table.Th>
+                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('type')}>
+                          <Group gap={4} wrap="nowrap">
+                            <Text size="sm" fw={600}>Type</Text>
+                            {sortIndicatorFor('type')}
+                          </Group>
+                        </Table.Th>
+                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('rarity')}>
+                          <Group gap={4} wrap="nowrap">
+                            <Text size="sm" fw={600}>Rarity</Text>
+                            {sortIndicatorFor('rarity')}
+                          </Group>
+                        </Table.Th>
+                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('cost')}>
+                          <Group gap={4} wrap="nowrap">
+                            <Text size="sm" fw={600}>Cost</Text>
+                            {sortIndicatorFor('cost')}
+                          </Group>
+                        </Table.Th>
+                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('power')}>
+                          <Group gap={4} wrap="nowrap">
+                            <Text size="sm" fw={600}>Power</Text>
+                            {sortIndicatorFor('power')}
+                          </Group>
+                        </Table.Th>
+                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('hp')}>
+                          <Group gap={4} wrap="nowrap">
+                            <Text size="sm" fw={600}>HP</Text>
+                            {sortIndicatorFor('hp')}
+                          </Group>
+                        </Table.Th>
+                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('aspects')}>
+                          <Group gap={4} wrap="nowrap">
+                            <Text size="sm" fw={600}>Aspects</Text>
+                            {sortIndicatorFor('aspects')}
+                          </Group>
+                        </Table.Th>
+                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('arena')}>
+                          <Group gap={4} wrap="nowrap">
+                            <Text size="sm" fw={600}>Arena</Text>
+                            {sortIndicatorFor('arena')}
+                          </Group>
+                        </Table.Th>
+                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('set')}>
+                          <Group gap={4} wrap="nowrap">
+                            <Text size="sm" fw={600}>Set</Text>
+                            {sortIndicatorFor('set')}
+                          </Group>
+                        </Table.Th>
+                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('pool')}>
+                          <Group gap={4} wrap="nowrap">
+                            <Text size="sm" fw={600}>Pool</Text>
+                            {sortIndicatorFor('pool')}
+                          </Group>
+                        </Table.Th>
                         <Table.Th></Table.Th>
                       </Table.Tr>
                     </Table.Thead>
@@ -1075,6 +1394,11 @@ export default function DeckbuilderPage({
                             <Text fw={600}>{deck.name}</Text>
                             <Text size="xs" c="dimmed">
                               {leaderLabel} / {baseLabel}
+                            </Text>
+                            <Text size="xs" c="dimmed">
+                              Record: {deck.wins ?? 0}-{deck.draws ?? 0}-{deck.losses ?? 0} (
+                              {deck.matches ?? 0} matches, {(deck.win_percentage ?? 0).toFixed(2)}% win rate,{' '}
+                              {deck.tournaments_submitted ?? 0} tournaments)
                             </Text>
                             {isAdmin && (
                               <Text size="xs" c="dimmed">

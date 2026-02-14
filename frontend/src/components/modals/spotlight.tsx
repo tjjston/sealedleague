@@ -3,6 +3,7 @@ import { Spotlight, SpotlightActionData } from '@mantine/spotlight';
 import {
   IconBrackets,
   IconCalendarEvent,
+  IconChecklist,
   IconHome,
   IconScoreboard,
   IconSearch,
@@ -27,7 +28,7 @@ export function BracketSpotlight() {
       id: 'home',
       title: t('home_title'),
       description: t('home_spotlight_description'),
-      onClick: () => navigate('/'),
+      onClick: () => navigate('/dashboard'),
       leftSection: <IconHome size="1.2rem" />,
     },
     {
@@ -69,11 +70,11 @@ export function BracketSpotlight() {
       leftSection: <IconUsers size="1.2rem" />,
     },
     {
-      id: 'players',
-      title: t('players_title'),
-      description: t('players_spotlight_description'),
-      onClick: () => navigate(`/tournaments/${tournamentId}/players`),
-      leftSection: <IconUsers size="1.2rem" />,
+      id: 'entries',
+      title: 'Entries',
+      description: 'View deck submissions for this event',
+      onClick: () => navigate(`/tournaments/${tournamentId}/entries`),
+      leftSection: <IconChecklist size="1.2rem" />,
     },
     {
       id: 'stages',

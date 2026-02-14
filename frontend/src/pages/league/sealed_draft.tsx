@@ -28,6 +28,7 @@ import { saveDeck, simulateSealedDraft } from '@services/league';
 type CardItem = {
   card_id: string;
   set_code: string;
+  number?: string;
   name: string;
   character_variant?: string | null;
   type: string;
@@ -49,6 +50,15 @@ function countCards(deck: Record<string, number>) {
 
 function normalizeSet(values: string[] | undefined) {
   return new Set((values ?? []).map((value) => value.toLowerCase()));
+}
+
+function parseCardNumber(value: string | null | undefined) {
+  if (value == null) return Number.NEGATIVE_INFINITY;
+  const cleaned = String(value).trim();
+  const numeric = Number(cleaned);
+  if (Number.isFinite(numeric)) return numeric;
+  const match = cleaned.match(/\d+/);
+  return match != null ? Number(match[0]) : Number.NEGATIVE_INFINITY;
 }
 
 function triggerDownload(filename: string, content: string, type: string) {
@@ -252,6 +262,13 @@ export default function SealedDraftSimulationPage() {
         return true;
       })
       .sort((a, b) => {
+        const setSort = b.set_code.localeCompare(a.set_code, undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        });
+        if (setSort !== 0) return setSort;
+        const numberSort = parseCardNumber(b.number) - parseCardNumber(a.number);
+        if (numberSort !== 0) return numberSort;
         const byName = a.name.localeCompare(b.name);
         if (byName !== 0) return byName;
         return (a.character_variant ?? '').localeCompare(b.character_variant ?? '');

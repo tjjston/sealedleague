@@ -8,17 +8,18 @@ import { useNavigate } from 'react-router';
 import { PasswordStrength } from '@components/utils/password';
 import { UserPublic } from '@openapi';
 import { performLogoutAndRedirect } from '@services/local_storage';
-import { getBaseApiUrl, getUserCardCatalog } from '@services/adapter';
+import { getBaseApiUrl, getUserCardCatalog, getUserMediaCatalog } from '@services/adapter';
 import { updatePassword, updateUser, updateUserPreferences, uploadUserAvatar } from '@services/user';
 
-const FAVORITE_MEDIA_OPTIONS = [
-  { value: 'Movies', label: 'Movies' },
-  { value: 'Live-Action Series', label: 'Live-Action Series' },
-  { value: 'Animated Series', label: 'Animated Series' },
-  { value: 'Books', label: 'Books' },
-  { value: 'Comics', label: 'Comics' },
-  { value: 'Video Games', label: 'Video Games' },
-  { value: 'Neither', label: 'Neither' },
+const WEAPON_ICON_OPTIONS = [
+  { value: 'blaster_pistol', label: '🔫 Blaster Pistol' },
+  { value: 'blaster_rifle', label: '🛡️ Blaster Rifle' },
+  { value: 'lightsaber_blue', label: '🔵 Blue Lightsaber' },
+  { value: 'lightsaber_red', label: '🔴 Red Lightsaber' },
+  { value: 'lightsaber_green', label: '🟢 Green Lightsaber' },
+  { value: 'lightsaber_purple', label: '🟣 Purple Lightsaber' },
+  { value: 'wrist_rockets', label: '🚀 Wrist Rockets' },
+  { value: 'electrostaff', label: '⚡ Electrostaff' },
 ];
 
 export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; i18n: any }) {
@@ -31,13 +32,17 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
   const [favoriteCardImageUrl, setFavoriteCardImageUrl] = useState<string | null>(
     (user as any).favorite_card_image_url ?? null
   );
+  const [favoriteMediaSearch, setFavoriteMediaSearch] = useState('');
   const [favoriteMedia, setFavoriteMedia] = useState<string | null>(
     (user as any).favorite_media ?? null
   );
+  const [weaponIcon, setWeaponIcon] = useState<string | null>((user as any).weapon_icon ?? null);
   const [avatarUrl, setAvatarUrl] = useState<string>((user as any).avatar_url ?? '');
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const swrCardCatalogResponse = getUserCardCatalog(favoriteCardSearch, 120);
+  const swrMediaCatalogResponse = getUserMediaCatalog(favoriteMediaSearch, 50);
   const cardCatalog = swrCardCatalogResponse.data?.data ?? [];
+  const mediaCatalog = swrMediaCatalogResponse.data?.data ?? [];
   const details_form = useForm({
     initialValues: {
       name: user != null ? user.name : '',
@@ -65,16 +70,50 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
     setFavoriteCardName((user as any).favorite_card_name ?? null);
     setFavoriteCardImageUrl((user as any).favorite_card_image_url ?? null);
     setFavoriteMedia((user as any).favorite_media ?? null);
+    setWeaponIcon((user as any).weapon_icon ?? null);
     setAvatarUrl((user as any).avatar_url ?? '');
   }, [user]);
 
   const favoriteCardOptions = useMemo(
-    () =>
-      cardCatalog.map((card: any) => ({
+    () => {
+      const options = cardCatalog.map((card: any) => ({
         value: card.card_id,
         label: `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''} (${String(card.set_code || '').toUpperCase()})`,
-      })),
-    [cardCatalog]
+      }));
+      if (
+        favoriteCardId != null &&
+        favoriteCardId !== '' &&
+        !options.some((option: any) => option.value === favoriteCardId)
+      ) {
+        options.unshift({
+          value: favoriteCardId,
+          label: favoriteCardName ?? favoriteCardId,
+        });
+      }
+      return options;
+    },
+    [cardCatalog, favoriteCardId, favoriteCardName]
+  );
+
+  const favoriteMediaOptions = useMemo(
+    () => {
+      const options = mediaCatalog.map((media: any) => ({
+        value: `${media.title}${media.year ? ` (${media.year})` : ''}`,
+        label: `${media.title}${media.year ? ` (${media.year})` : ''}${media.media_type ? ` - ${String(media.media_type).toUpperCase()}` : ''}`,
+      }));
+      if (
+        favoriteMedia != null &&
+        favoriteMedia !== '' &&
+        !options.some((option: any) => option.value === favoriteMedia)
+      ) {
+        options.unshift({
+          value: favoriteMedia,
+          label: favoriteMedia,
+        });
+      }
+      return options;
+    },
+    [mediaCatalog, favoriteMedia]
   );
 
   const locales = [
@@ -186,12 +225,25 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
 
         <Select
           mt="1.0rem"
+          searchable
+          clearable
           label="Favorite Star Wars Media"
           value={favoriteMedia}
           onChange={setFavoriteMedia}
-          data={FAVORITE_MEDIA_OPTIONS}
-          searchable
+          data={favoriteMediaOptions}
+          onSearchChange={setFavoriteMediaSearch}
+          searchValue={favoriteMediaSearch}
+          nothingFoundMessage="No media found"
+        />
+        <Select
+          mt="1.0rem"
           clearable
+          searchable
+          label="Weapon Icon"
+          value={weaponIcon}
+          onChange={setWeaponIcon}
+          data={WEAPON_ICON_OPTIONS}
+          nothingFoundMessage="No icons found"
         />
 
         <TextInput
@@ -233,6 +285,7 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
               favorite_card_name: favoriteCardName,
               favorite_card_image_url: favoriteCardImageUrl,
               favorite_media: favoriteMedia,
+              weapon_icon: weaponIcon,
             });
           }}
         >

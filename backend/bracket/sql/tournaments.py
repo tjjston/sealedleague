@@ -35,7 +35,7 @@ async def sql_get_tournament_by_endpoint_name(endpoint_name: str) -> Tournament 
 
 
 async def sql_get_tournaments(
-    club_ids: tuple[int, ...],
+    club_ids: tuple[int, ...] | None = None,
     endpoint_name: str | None = None,
     filter_: Literal["ALL", "OPEN", "ARCHIVED"] = "ALL",
 ) -> list[Tournament]:
@@ -43,10 +43,13 @@ async def sql_get_tournaments(
         SELECT t.*, c.name AS club_name
         FROM tournaments t
         JOIN clubs c ON c.id = t.club_id
-        WHERE t.club_id = any(:club_ids)
+        WHERE TRUE
         """
+    params: dict[str, Any] = {}
 
-    params: dict[str, Any] = {"club_ids": club_ids}
+    if club_ids is not None:
+        query += "AND t.club_id = any(:club_ids)"
+        params["club_ids"] = club_ids
 
     if endpoint_name is not None:
         query += "AND t.dashboard_endpoint = :endpoint_name"

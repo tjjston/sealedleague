@@ -1,6 +1,5 @@
 import { showNotification } from '@mantine/notifications';
 import axios, { AxiosError, AxiosInstance, AxiosResponse } from 'axios';
-import { useNavigate } from 'react-router';
 import useSWR, { SWRResponse } from 'swr';
 
 import { SchedulerSettings } from '@components/utils/match';
@@ -245,12 +244,23 @@ export function getUserDirectory(): SWRResponse<any> {
 }
 
 export function getUserCardCatalog(query: string, limit: number = 100): SWRResponse<any> {
-  const params = new URLSearchParams();
-  if (query.trim() !== '') {
-    params.set('query', query.trim());
+  if (query.trim() === '') {
+    return useSWR(null, fetcher);
   }
+  const params = new URLSearchParams();
+  params.set('query', query.trim());
   params.set('limit', String(limit));
   return useSWR(`users/card_catalog?${params.toString()}`, fetcher);
+}
+
+export function getUserMediaCatalog(query: string, limit: number = 25): SWRResponse<any> {
+  if (query.trim() === '') {
+    return useSWR(null, fetcher);
+  }
+  const params = new URLSearchParams();
+  params.set('query', query.trim());
+  params.set('limit', String(limit));
+  return useSWR(`users/media_catalog?${params.toString()}`, fetcher);
 }
 
 export function getUserCareer(user_id: number | null): SWRResponse<any> {
@@ -302,24 +312,39 @@ export function getLeagueCards(
 
 export function getLeagueCardPool(
   tournament_id: number | null,
-  user_id?: number | null
+  user_id?: number | null,
+  season_id?: number | null
 ): SWRResponse<any> {
   if (tournament_id == null || tournament_id <= 0) {
     return useSWR(null, fetcher);
   }
-  const suffix = user_id == null ? '' : `?user_id=${user_id}`;
+  const params = new URLSearchParams();
+  if (user_id != null) params.set('user_id', String(user_id));
+  if (season_id != null) params.set('season_id', String(season_id));
+  const suffix = params.toString() === '' ? '' : `?${params.toString()}`;
   return useSWR(`tournaments/${tournament_id}/league/card_pool${suffix}`, fetcher);
 }
 
 export function getLeagueDecks(
   tournament_id: number | null,
-  user_id?: number | null
+  user_id?: number | null,
+  season_id?: number | null
 ): SWRResponse<any> {
   if (tournament_id == null || tournament_id <= 0) {
     return useSWR(null, fetcher);
   }
-  const suffix = user_id == null ? '' : `?user_id=${user_id}`;
+  const params = new URLSearchParams();
+  if (user_id != null) params.set('user_id', String(user_id));
+  if (season_id != null) params.set('season_id', String(season_id));
+  const suffix = params.toString() === '' ? '' : `?${params.toString()}`;
   return useSWR(`tournaments/${tournament_id}/league/decks${suffix}`, fetcher);
+}
+
+export function getLeagueSeasons(tournament_id: number | null): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  return useSWR(`tournaments/${tournament_id}/league/seasons`, fetcher);
 }
 
 export function getLeagueSeasonStandings(tournament_id: number | null): SWRResponse<any> {
@@ -352,17 +377,26 @@ export function getLeagueAdminSeasons(tournament_id: number | null): SWRResponse
 
 export function getTournamentApplications(
   tournament_id: number | null,
-  admin: boolean = false
+  scope: 'me' | 'all' | 'admin' = 'me'
 ): SWRResponse<any> {
   if (tournament_id == null || tournament_id <= 0) {
     return useSWR(null, fetcher);
   }
   return useSWR(
-    admin
+    scope === 'admin'
       ? `tournaments/${tournament_id}/league/admin/applications`
-      : `tournaments/${tournament_id}/league/applications/me`,
+      : scope === 'all'
+        ? `tournaments/${tournament_id}/league/applications`
+        : `tournaments/${tournament_id}/league/applications/me`,
     fetcher
   );
+}
+
+export function getLeagueNextOpponent(tournament_id: number | null): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  return useSWR(`tournaments/${tournament_id}/league/next_opponent`, fetcher);
 }
 
 export function getUpcomingMatches(
@@ -403,8 +437,8 @@ export async function removeTeamLogo(tournament_id: number, team_id: number) {
 
 export function checkForAuthError(response: any) {
   if (typeof window !== 'undefined' && !tokenPresent()) {
-    const navigate = useNavigate();
-    navigate('/login');
+    window.location.href = '/login';
+    return;
   }
 
   // We send a simple GET `/clubs` request to test whether we really should log out. // Next
@@ -425,6 +459,9 @@ export function checkForAuthError(response: any) {
       .catch((error: any) => {
         if (error.toJSON().status === 401) {
           performLogout();
+          if (typeof window !== 'undefined') {
+            window.location.href = '/login';
+          }
         }
       });
   }

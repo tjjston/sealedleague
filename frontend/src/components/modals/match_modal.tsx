@@ -45,6 +45,8 @@ function MatchModalForm({
   swrUpcomingMatchesResponse,
   setOpened,
   round,
+  allowAdvancedSettings,
+  allowDelete,
 }: {
   tournamentData: TournamentMinimal;
   match: MatchWithDetails | null;
@@ -52,6 +54,8 @@ function MatchModalForm({
   swrUpcomingMatchesResponse: SWRResponse | null;
   setOpened: any;
   round: RoundWithMatches | null;
+  allowAdvancedSettings: boolean;
+  allowDelete: boolean;
 }) {
   if (match == null) {
     return null;
@@ -121,65 +125,69 @@ function MatchModalForm({
           placeholder={`${t('score_of_label')} ${team2Name}`}
           {...form.getInputProps('stage_item_input2_score')}
         />
-        <Divider mt="lg" />
+        {allowAdvancedSettings ? (
+          <>
+            <Divider mt="lg" />
 
-        <Text size="sm" mt="lg">
-          {t('custom_match_duration_label')}
-        </Text>
-        <Grid align="center">
-          <Grid.Col span={{ sm: 8 }}>
-            <NumberInput
-              disabled={!customDurationEnabled}
-              rightSection={<Text>{t('minutes')}</Text>}
-              placeholder={`${match.duration_minutes}`}
-              rightSectionWidth={92}
-              {...form.getInputProps('custom_duration_minutes')}
-            />
-          </Grid.Col>
-          <Grid.Col span={{ sm: 4 }}>
-            <Center>
-              <Checkbox
-                checked={customDurationEnabled}
-                label={t('customize_checkbox_label')}
-                onChange={(event) => {
-                  setCustomDurationEnabled(event.currentTarget.checked);
-                }}
-              />
-            </Center>
-          </Grid.Col>
-        </Grid>
+            <Text size="sm" mt="lg">
+              {t('custom_match_duration_label')}
+            </Text>
+            <Grid align="center">
+              <Grid.Col span={{ sm: 8 }}>
+                <NumberInput
+                  disabled={!customDurationEnabled}
+                  rightSection={<Text>{t('minutes')}</Text>}
+                  placeholder={`${match.duration_minutes}`}
+                  rightSectionWidth={92}
+                  {...form.getInputProps('custom_duration_minutes')}
+                />
+              </Grid.Col>
+              <Grid.Col span={{ sm: 4 }}>
+                <Center>
+                  <Checkbox
+                    checked={customDurationEnabled}
+                    label={t('customize_checkbox_label')}
+                    onChange={(event) => {
+                      setCustomDurationEnabled(event.currentTarget.checked);
+                    }}
+                  />
+                </Center>
+              </Grid.Col>
+            </Grid>
 
-        <Text size="sm" mt="lg">
-          {t('custom_match_margin_label')}
-        </Text>
-        <Grid align="center">
-          <Grid.Col span={{ sm: 8 }}>
-            <NumberInput
-              disabled={!customMarginEnabled}
-              placeholder={`${match.margin_minutes}`}
-              rightSection={<Text>{t('minutes')}</Text>}
-              rightSectionWidth={92}
-              {...form.getInputProps('custom_margin_minutes')}
-            />
-          </Grid.Col>
-          <Grid.Col span={{ sm: 4 }}>
-            <Center>
-              <Checkbox
-                checked={customMarginEnabled}
-                label={t('customize_checkbox_label')}
-                onChange={(event) => {
-                  setCustomMarginEnabled(event.currentTarget.checked);
-                }}
-              />
-            </Center>
-          </Grid.Col>
-        </Grid>
+            <Text size="sm" mt="lg">
+              {t('custom_match_margin_label')}
+            </Text>
+            <Grid align="center">
+              <Grid.Col span={{ sm: 8 }}>
+                <NumberInput
+                  disabled={!customMarginEnabled}
+                  placeholder={`${match.margin_minutes}`}
+                  rightSection={<Text>{t('minutes')}</Text>}
+                  rightSectionWidth={92}
+                  {...form.getInputProps('custom_margin_minutes')}
+                />
+              </Grid.Col>
+              <Grid.Col span={{ sm: 4 }}>
+                <Center>
+                  <Checkbox
+                    checked={customMarginEnabled}
+                    label={t('customize_checkbox_label')}
+                    onChange={(event) => {
+                      setCustomMarginEnabled(event.currentTarget.checked);
+                    }}
+                  />
+                </Center>
+              </Grid.Col>
+            </Grid>
+          </>
+        ) : null}
 
         <Button fullWidth style={{ marginTop: 20 }} color="green" type="submit">
           {t('save_button')}
         </Button>
       </form>
-      {round && round.is_draft && (
+      {allowDelete && round && round.is_draft && (
         <MatchDeleteButton
           swrStagesResponse={swrStagesResponse}
           swrUpcomingMatchesResponse={swrUpcomingMatchesResponse}
@@ -199,6 +207,8 @@ export default function MatchModal({
   opened,
   setOpened,
   round,
+  allowAdvancedSettings = true,
+  allowDelete = true,
 }: {
   tournamentData: TournamentMinimal;
   match: MatchWithDetails | null;
@@ -207,6 +217,8 @@ export default function MatchModal({
   opened: boolean;
   setOpened: any;
   round: RoundWithMatches | null;
+  allowAdvancedSettings?: boolean;
+  allowDelete?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -220,6 +232,8 @@ export default function MatchModal({
           match={match}
           setOpened={setOpened}
           round={round}
+          allowAdvancedSettings={allowAdvancedSettings}
+          allowDelete={allowDelete}
         />
       </Modal>
     </>

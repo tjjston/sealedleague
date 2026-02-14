@@ -47,6 +47,7 @@ export async function updateUserPreferences(
     favorite_card_name: string | null;
     favorite_card_image_url: string | null;
     favorite_media: string | null;
+    weapon_icon: string | null;
   }
 ) {
   return createAxios()

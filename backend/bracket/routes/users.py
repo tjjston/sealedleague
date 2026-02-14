@@ -1,5 +1,10 @@
 import os
+import json
+import asyncio
 from uuid import uuid4
+from urllib.error import URLError, HTTPError
+from urllib.parse import urlencode
+from urllib.request import urlopen
 
 import aiofiles
 import aiofiles.os
@@ -14,6 +19,7 @@ from bracket.models.db.account import UserAccountType
 from bracket.models.db.user import (
     CardCatalogEntry,
     DemoUserToRegister,
+    MediaCatalogEntry,
     UserDirectoryEntry,
     UserAccountTypeToUpdate,
     UserInsertable,
@@ -33,6 +39,7 @@ from bracket.routes.auth import (
 from bracket.routes.models import (
     CardCatalogResponse,
     LeaguePlayerCareerProfileResponse,
+    MediaCatalogResponse,
     SuccessResponse,
     TokenResponse,
     UserDirectoryResponse,
@@ -46,6 +53,7 @@ from bracket.sql.users import (
     get_user_directory,
     get_users,
     get_user_by_id,
+    get_latest_leader_card_id_for_user,
     update_user_account_type,
     update_user_preferences,
     update_user,
@@ -62,6 +70,43 @@ from bracket.utils.types import assert_some
 
 router = APIRouter(prefix=config.api_prefix)
 
+_STAR_WARS_MEDIA_FALLBACK: list[dict[str, str]] = [
+    {"title": "Star Wars: Episode IV - A New Hope", "year": "1977", "media_type": "movie"},
+    {"title": "Star Wars: Episode V - The Empire Strikes Back", "year": "1980", "media_type": "movie"},
+    {"title": "Star Wars: Episode VI - Return of the Jedi", "year": "1983", "media_type": "movie"},
+    {"title": "Star Wars: Episode I - The Phantom Menace", "year": "1999", "media_type": "movie"},
+    {"title": "Star Wars: Episode II - Attack of the Clones", "year": "2002", "media_type": "movie"},
+    {"title": "Star Wars: Episode III - Revenge of the Sith", "year": "2005", "media_type": "movie"},
+    {"title": "Star Wars: The Clone Wars", "year": "2008", "media_type": "movie"},
+    {"title": "Star Wars: The Force Awakens", "year": "2015", "media_type": "movie"},
+    {"title": "Rogue One: A Star Wars Story", "year": "2016", "media_type": "movie"},
+    {"title": "Star Wars: The Last Jedi", "year": "2017", "media_type": "movie"},
+    {"title": "Solo: A Star Wars Story", "year": "2018", "media_type": "movie"},
+    {"title": "Star Wars: The Rise of Skywalker", "year": "2019", "media_type": "movie"},
+    {"title": "The Mandalorian", "year": "2019", "media_type": "series"},
+    {"title": "The Book of Boba Fett", "year": "2021", "media_type": "series"},
+    {"title": "Obi-Wan Kenobi", "year": "2022", "media_type": "series"},
+    {"title": "Andor", "year": "2022", "media_type": "series"},
+    {"title": "Ahsoka", "year": "2023", "media_type": "series"},
+    {"title": "Skeleton Crew", "year": "2024", "media_type": "series"},
+    {"title": "Star Wars: The Clone Wars", "year": "2008", "media_type": "series"},
+    {"title": "Star Wars Rebels", "year": "2014", "media_type": "series"},
+    {"title": "Star Wars Resistance", "year": "2018", "media_type": "series"},
+    {"title": "Star Wars: The Bad Batch", "year": "2021", "media_type": "series"},
+    {"title": "Tales of the Jedi", "year": "2022", "media_type": "series"},
+    {"title": "Tales of the Empire", "year": "2024", "media_type": "series"},
+    {"title": "Star Wars: Visions", "year": "2021", "media_type": "series"},
+    {"title": "Star Wars Jedi: Fallen Order", "year": "2019", "media_type": "game"},
+    {"title": "Star Wars Jedi: Survivor", "year": "2023", "media_type": "game"},
+    {"title": "Star Wars: Knights of the Old Republic", "year": "2003", "media_type": "game"},
+    {"title": "Star Wars: Knights of the Old Republic II", "year": "2004", "media_type": "game"},
+    {"title": "Star Wars: The Old Republic", "year": "2011", "media_type": "game"},
+    {"title": "LEGO Star Wars: The Skywalker Saga", "year": "2022", "media_type": "game"},
+    {"title": "Star Wars Outlaws", "year": "2024", "media_type": "game"},
+    {"title": "Star Wars Battlefront II", "year": "2017", "media_type": "game"},
+    {"title": "Star Wars: Squadrons", "year": "2020", "media_type": "game"},
+]
+
 
 @router.get("/users", response_model=UsersResponse)
 async def list_users(user_public: UserPublic = Depends(user_authenticated)) -> UsersResponse:
@@ -72,7 +117,30 @@ async def list_users(user_public: UserPublic = Depends(user_authenticated)) -> U
 
 @router.get("/users/directory", response_model=UserDirectoryResponse)
 async def list_user_directory(_: UserPublic = Depends(user_authenticated)) -> UserDirectoryResponse:
-    entries = await get_user_directory()
+    try:
+        entries = await get_user_directory()
+    except Exception:
+        fallback_users = await get_users()
+        return UserDirectoryResponse(
+            data=[
+                UserDirectoryEntry(
+                    user_id=user.id,
+                    user_name=user.name,
+                    avatar_url=user.avatar_url,
+                    tournaments_won=0,
+                    tournaments_placed=0,
+                    total_cards_active_season=0,
+                    total_cards_career_pool=0,
+                    favorite_media=user.favorite_media,
+                    current_leader_card_id=None,
+                    current_leader_name=None,
+                    current_leader_image_url=None,
+                    weapon_icon=user.weapon_icon,
+                )
+                for user in fallback_users
+            ]
+        )
+
     leader_ids = sorted(
         {
             entry.current_leader_card_id.lower()
@@ -82,8 +150,25 @@ async def list_user_directory(_: UserPublic = Depends(user_authenticated)) -> Us
     )
     card_lookup: dict[str, dict] = {}
     if len(leader_ids) > 0:
-        cards = [normalize_card_for_deckbuilding(card) for card in fetch_swu_cards_cached(DEFAULT_SWU_SET_CODES)]
-        card_lookup = {str(card["card_id"]).lower(): card for card in cards}
+        set_codes = sorted(
+            {
+                leader_id.split("-", 1)[0].strip().lower()
+                for leader_id in leader_ids
+                if "-" in leader_id and leader_id.split("-", 1)[0].strip() != ""
+            }
+        )
+        if len(set_codes) > 0:
+            try:
+                raw_cards = await asyncio.to_thread(
+                    fetch_swu_cards_cached,
+                    set_codes,
+                    10,
+                    900,
+                )
+                cards = [normalize_card_for_deckbuilding(card) for card in raw_cards]
+                card_lookup = {str(card["card_id"]).lower(): card for card in cards}
+            except Exception:
+                card_lookup = {}
 
     result: list[UserDirectoryEntry] = []
     for entry in entries:
@@ -99,10 +184,13 @@ async def list_user_directory(_: UserPublic = Depends(user_authenticated)) -> Us
                 avatar_url=avatar_url,
                 tournaments_won=entry.tournaments_won,
                 tournaments_placed=entry.tournaments_placed,
+                total_cards_active_season=entry.total_cards_active_season,
+                total_cards_career_pool=entry.total_cards_career_pool,
                 favorite_media=entry.favorite_media,
                 current_leader_card_id=entry.current_leader_card_id,
                 current_leader_name=None if leader_card is None else str(leader_card.get("name") or ""),
                 current_leader_image_url=None if leader_card is None else leader_card.get("image_url"),
+                weapon_icon=entry.weapon_icon,
             )
         )
     return UserDirectoryResponse(data=result)
@@ -115,7 +203,15 @@ async def get_card_catalog(
     limit: int = Query(default=100, ge=1, le=500),
 ) -> CardCatalogResponse:
     normalized_query = (query or "").strip().lower()
-    cards = [normalize_card_for_deckbuilding(card) for card in fetch_swu_cards_cached(DEFAULT_SWU_SET_CODES)]
+    if normalized_query == "":
+        return CardCatalogResponse(data=[])
+
+    try:
+        raw_cards = await asyncio.to_thread(fetch_swu_cards_cached, DEFAULT_SWU_SET_CODES)
+    except (URLError, HTTPError, TimeoutError, ValueError, OSError):
+        return CardCatalogResponse(data=[])
+
+    cards = [normalize_card_for_deckbuilding(card) for card in raw_cards]
     filtered = [
         card
         for card in cards
@@ -141,9 +237,122 @@ async def get_card_catalog(
     )
 
 
+def _search_star_wars_media_fallback(query: str, limit: int) -> list[MediaCatalogEntry]:
+    normalized_query = query.strip().lower()
+    results = []
+    for item in _STAR_WARS_MEDIA_FALLBACK:
+        title = item["title"]
+        media_type = item["media_type"]
+        year = item["year"]
+        if normalized_query != "" and normalized_query not in title.lower():
+            continue
+        results.append(
+            MediaCatalogEntry(
+                title=title,
+                year=year,
+                media_type=media_type,
+                imdb_id=None,
+                poster_url=None,
+            )
+        )
+    return results[:limit]
+
+
+def _search_star_wars_media_omdb(query: str, limit: int) -> list[MediaCatalogEntry]:
+    if config.omdb_api_key is None or config.omdb_api_key.strip() == "":
+        return _search_star_wars_media_fallback(query, limit)
+
+    normalized_query = query.strip().lower()
+    if normalized_query == "":
+        return _search_star_wars_media_fallback(query, limit)
+    search_terms = (
+        [f"star wars {normalized_query}".strip()]
+        if normalized_query != ""
+        else ["star wars"]
+    )
+    pages_per_term = 1
+
+    def search_omdb_page(search_term: str, page: int) -> list[dict]:
+        params = urlencode(
+            {"apikey": config.omdb_api_key.strip(), "s": search_term, "page": str(page)}
+        )
+        url = f"https://www.omdbapi.com/?{params}"
+        with urlopen(url, timeout=10) as response:  # noqa: S310 controlled host
+            payload = json.loads(response.read().decode("utf-8"))
+        items = payload.get("Search", [])
+        return items if isinstance(items, list) else []
+
+    entries: list[MediaCatalogEntry] = []
+    dedupe_keys: set[str] = set()
+    try:
+        for term in search_terms:
+            for page in range(1, pages_per_term + 1):
+                items = search_omdb_page(term, page)
+                if len(items) < 1:
+                    break
+                for item in items:
+                    title = str(item.get("Title", "")).strip()
+                    if title == "":
+                        continue
+                    if normalized_query != "" and normalized_query not in title.lower():
+                        continue
+
+                    media_type = str(item.get("Type", "")).strip().lower() or None
+                    imdb_id = str(item.get("imdbID", "")).strip() or None
+                    dedupe_key = imdb_id or f"{title.lower()}::{str(item.get('Year', '')).strip()}::{media_type or ''}"
+                    if dedupe_key in dedupe_keys:
+                        continue
+                    dedupe_keys.add(dedupe_key)
+
+                    entries.append(
+                        MediaCatalogEntry(
+                            title=title,
+                            year=str(item.get("Year", "")).strip() or None,
+                            media_type=media_type,
+                            imdb_id=imdb_id,
+                            poster_url=str(item.get("Poster", "")).strip() or None,
+                        )
+                    )
+    except (URLError, HTTPError, TimeoutError, ValueError, OSError):
+        return _search_star_wars_media_fallback(query, limit)
+
+    filtered = [
+        entry
+        for entry in entries
+        if entry.media_type is None or entry.media_type in {"movie", "series", "game"}
+    ]
+    filtered.sort(
+        key=lambda entry: (
+            str(entry.media_type or ""),
+            str(entry.title).lower(),
+            str(entry.year or ""),
+        )
+    )
+
+    if len(filtered) < 1:
+        return _search_star_wars_media_fallback(query, limit)
+    return filtered[:limit]
+
+
+@router.get("/users/media_catalog", response_model=MediaCatalogResponse)
+async def get_media_catalog(
+    _: UserPublic = Depends(user_authenticated),
+    query: str | None = Query(default=None),
+    limit: int = Query(default=25, ge=1, le=100),
+) -> MediaCatalogResponse:
+    normalized_query = (query or "").strip()
+    if normalized_query == "":
+        return MediaCatalogResponse(data=_search_star_wars_media_fallback("", limit))
+    data = _search_star_wars_media_omdb(normalized_query, limit)
+    return MediaCatalogResponse(data=data)
+
+
 @router.get("/users/me", response_model=UserPublicResponse)
 async def get_user(user_public: UserPublic = Depends(user_authenticated)) -> UserPublicResponse:
-    return UserPublicResponse(data=user_public)
+    leader_card_id = await get_latest_leader_card_id_for_user(user_public.id)
+    return UserPublicResponse(
+        data=user_public.model_copy(update={"current_leader_card_id": leader_card_id})
+    )
 
 
 @router.get("/users/{user_id}", response_model=UserPublicResponse)
@@ -243,6 +452,7 @@ async def upload_user_avatar(
             favorite_card_name=user.favorite_card_name,
             favorite_card_image_url=user.favorite_card_image_url,
             favorite_media=user.favorite_media,
+            weapon_icon=user.weapon_icon,
         ),
     )
 
