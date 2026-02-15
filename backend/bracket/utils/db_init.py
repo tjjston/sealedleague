@@ -131,13 +131,19 @@ async def init_db_when_empty() -> UserId | None:
     )
     admin_exists = False
     if config.admin_email and users_table_exists:
-        admin_exists = (
-            await database.fetch_val(
-                "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
-                values={"email": config.admin_email},
+        try:
+            admin_exists = (
+                await database.fetch_val(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
+                    values={"email": config.admin_email},
+                )
+                is True
             )
-            is True
-        )
+        except Exception as exc:
+            # Fail-safe for partially initialized schemas where `users` is not available yet.
+            logger.warning("Admin existence check skipped during bootstrap: %s", exc)
+            users_table_exists = False
+            admin_exists = False
     should_bootstrap = (table_count <= 1 and environment != Environment.CI) or (
         environment is Environment.DEVELOPMENT and (not users_table_exists or not admin_exists)
     )
@@ -147,13 +153,17 @@ async def init_db_when_empty() -> UserId | None:
             metadata.create_all(engine)
             alembic_stamp_head()
 
-            admin_exists_after_create = (
-                await database.fetch_val(
-                    "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
-                    values={"email": config.admin_email},
+            try:
+                admin_exists_after_create = (
+                    await database.fetch_val(
+                        "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
+                        values={"email": config.admin_email},
+                    )
+                    is True
                 )
-                is True
-            )
+            except Exception as exc:
+                logger.warning("Admin existence re-check failed after bootstrap: %s", exc)
+                admin_exists_after_create = False
             if not admin_exists_after_create:
                 logger.warning("Empty db detected, creating admin user...")
                 return await create_admin_user()
