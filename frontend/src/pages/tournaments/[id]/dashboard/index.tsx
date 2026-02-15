@@ -1,4 +1,4 @@
-import { Alert, Badge, Card, Center, Flex, Grid, Group, Stack, Text } from '@mantine/core';
+import { Alert, Badge, Card, Center, Flex, Grid, Group, Stack, Text, Title } from '@mantine/core';
 import { AiOutlineHourglass } from '@react-icons/all-files/ai/AiOutlineHourglass';
 import { IconAlertCircle } from '@tabler/icons-react';
 import React from 'react';
@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { DashboardFooter } from '@components/dashboard/footer';
 import { DoubleHeader, getTournamentHeadTitle } from '@components/dashboard/layout';
 import { NoContent } from '@components/no_content/empty_table_info';
+import RequestErrorAlert from '@components/utils/error_alert';
 import { Time, compareDateTime, formatTime } from '@components/utils/datetime';
 import { formatMatchInput1, formatMatchInput2 } from '@components/utils/match';
 import { Translator } from '@components/utils/types';
@@ -209,9 +210,37 @@ export default function DashboardSchedulePage() {
     : [];
   const matchesLookup = responseIsValid(swrStagesResponse) ? getMatchLookup(swrStagesResponse) : [];
 
-  // TODO: show loading icon.
-  if (!responseIsValid(swrStagesResponse)) return null;
-  if (!responseIsValid(swrCourtsResponse)) return null;
+  if (swrStagesResponse.error || swrCourtsResponse.error) {
+    return (
+      <>
+        <DoubleHeader tournamentData={tournamentDataFull} />
+        <Center mt="lg">
+          <Stack style={{ maxWidth: '48rem', width: '100%' }} px="1rem">
+            <Title order={4}>Dashboard Schedule</Title>
+            {swrStagesResponse.error != null ? (
+              <RequestErrorAlert error={swrStagesResponse.error} />
+            ) : null}
+            {swrCourtsResponse.error != null ? (
+              <RequestErrorAlert error={swrCourtsResponse.error} />
+            ) : null}
+          </Stack>
+        </Center>
+        <DashboardFooter />
+      </>
+    );
+  }
+
+  if (!responseIsValid(swrStagesResponse) || !responseIsValid(swrCourtsResponse)) {
+    return (
+      <>
+        <DoubleHeader tournamentData={tournamentDataFull} />
+        <Center mt="lg">
+          <Text c="dimmed">Loading dashboard schedule…</Text>
+        </Center>
+        <DashboardFooter />
+      </>
+    );
+  }
 
   return (
     <>

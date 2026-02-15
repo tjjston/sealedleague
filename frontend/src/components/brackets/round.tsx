@@ -23,7 +23,10 @@ export default function RoundComponent({
   readOnly: boolean;
   displaySettings: BracketDisplaySettings;
 }) {
-  const matches = round.matches
+  const safeMatches = Array.isArray((round as any)?.matches)
+    ? ((round as any).matches as MatchWithDetails[]).filter((match) => match != null)
+    : [];
+  const matches = safeMatches
     .sort((m1, m2) =>
       (m1.court ? m1.court.name : 'y') > (m2.court ? m2.court.name : 'z') ? 1 : -1
     )

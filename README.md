@@ -47,6 +47,43 @@ docker compose down
 docker compose down -v
 ```
 
+## Seed sample league data
+
+Create a fresh active season plus a synthetic previous season (for draft order/card-base testing):
+
+```bash
+docker compose exec sealedleague sh -lc "\
+  cd /app && \
+  PYTHONPATH=/app uv run --no-dev --locked \
+  python scripts/seed_league_sample_data.py --tournament-id 5 \
+"
+```
+
+Optional season name:
+
+```bash
+docker compose exec sealedleague sh -lc "\
+  cd /app && \
+  PYTHONPATH=/app uv run --no-dev --locked \
+  python scripts/seed_league_sample_data.py --tournament-id 5 --season-name 'Season Sample Seed' \
+"
+```
+
+Create 10 sample users, set their password, generate 120-card pools/decks, and seed a "Season 1"
+dataset with 3 weekly round-robin events plus a Swiss + single-elimination finals:
+
+```bash
+docker compose exec sealedleague sh -lc "\
+  cd /app && \
+  PYTHONPATH=/app uv run --no-dev --locked \
+  python scripts/seed_league_sample_data.py \
+    --tournament-id 5 \
+    --season-name 'Season Sample Seed' \
+    --sample-users 10 \
+    --sample-password 'sample-pass-123' \
+"
+```
+
 ## Development (without Docker)
 
 Prerequisites:

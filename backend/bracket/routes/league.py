@@ -10,6 +10,7 @@ from bracket.models.db.user import UserPublic
 from bracket.models.league import (
     LeagueAwardAccoladeBody,
     LeagueSeasonCreateBody,
+    LeagueSeasonDraftPickBody,
     LeagueSeasonPointAdjustmentBody,
     LeagueSeasonUpdateBody,
     LeagueTournamentApplicationBody,
@@ -31,9 +32,11 @@ from bracket.routes.models import (
     LeagueDecksResponse,
     LeagueSeasonHistoryResponse,
     LeagueSeasonStandingsResponse,
+    LeagueSeasonDraftResponse,
     SuccessResponse,
 )
 from bracket.sql.league import (
+    apply_season_draft_pick,
     create_season,
     delete_season,
     delete_deck,
@@ -43,6 +46,7 @@ from bracket.sql.league import (
     get_decks,
     get_league_admin_users,
     get_league_standings,
+    get_season_draft_view,
     get_season_by_id,
     get_tournament_applications,
     get_next_opponent_for_user_in_tournament,
@@ -367,6 +371,59 @@ async def list_admin_seasons(
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
     return LeagueAdminSeasonsResponse(data=await list_admin_seasons_for_tournament(tournament_id))
+
+
+@router.get(
+    "/tournaments/{tournament_id}/league/admin/season_draft",
+    response_model=LeagueSeasonDraftResponse,
+)
+async def get_admin_season_draft(
+    tournament_id: TournamentId,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueSeasonDraftResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    return LeagueSeasonDraftResponse(data=await get_season_draft_view(tournament_id))
+
+
+@router.post(
+    "/tournaments/{tournament_id}/league/admin/season_draft/pick",
+    response_model=SuccessResponse,
+)
+async def post_admin_season_draft_pick(
+    tournament_id: TournamentId,
+    body: LeagueSeasonDraftPickBody,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> SuccessResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+
+    from_season = await get_season_by_id(body.from_season_id)
+    to_season = await get_season_by_id(body.to_season_id)
+    if from_season is None or to_season is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Season not found")
+
+    from_tournaments = await get_tournament_ids_for_season(from_season.id)
+    to_tournaments = await get_tournament_ids_for_season(to_season.id)
+    if int(tournament_id) not in {int(value) for value in from_tournaments}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Previous season does not belong to this tournament")
+    if int(tournament_id) not in {int(value) for value in to_tournaments}:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Target season does not belong to this tournament")
+    if int(from_season.id) == int(to_season.id):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Draft requires two different seasons")
+
+    try:
+        await apply_season_draft_pick(
+            tournament_id=tournament_id,
+            from_season_id=from_season.id,
+            to_season_id=to_season.id,
+            target_user_id=body.target_user_id,
+            source_user_id=body.source_user_id,
+            changed_by_user_id=user_public.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return SuccessResponse()
 
 
 @router.post(

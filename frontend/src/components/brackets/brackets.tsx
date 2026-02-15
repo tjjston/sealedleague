@@ -81,6 +81,14 @@ export function RoundsGridCols({
   displaySettings: BracketDisplaySettings;
 }) {
   const { t } = useTranslation();
+  const safeRounds = Array.isArray((stageItem as any)?.rounds)
+    ? ((stageItem as any).rounds as any[])
+        .filter((round: any) => round != null)
+        .map((round: any) => ({
+          ...round,
+          matches: Array.isArray(round?.matches) ? round.matches.filter((match: any) => match != null) : [],
+        }))
+    : [];
 
   if (swrStagesResponse.isLoading) {
     return <LoadingSkeleton />;
@@ -89,7 +97,7 @@ export function RoundsGridCols({
     return <NoRoundsAlert readOnly={readOnly} />;
   }
 
-  let result: React.JSX.Element[] | React.JSX.Element = stageItem.rounds
+  let result: React.JSX.Element[] | React.JSX.Element = safeRounds
     .sort((r1: any, r2: any) => (r1.name > r2.name ? 1 : -1))
     .filter(
       (round: RoundWithMatches) =>
@@ -108,12 +116,12 @@ export function RoundsGridCols({
     ));
 
   if (result.length < 1) {
-    if (stageItem.rounds.length < 1) {
+    if (safeRounds.length < 1) {
       result = (
         <Container mt="1rem">
           <Stack align="center">
             <NoContent title={t('no_round_description')} />
-            {stageItem.rounds.length < 1 && (
+            {safeRounds.length < 1 && (
               <AddRoundButton
                 t={t}
                 tournamentData={tournamentData}

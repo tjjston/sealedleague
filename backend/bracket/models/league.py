@@ -239,6 +239,51 @@ class LeaguePlayerCareerProfile(BaseModel):
     favorite_card: LeagueFavoriteCard | None = None
 
 
+class LeagueDistributionBucket(BaseModel):
+    label: str
+    count: int
+
+
+class LeagueSeasonDraftOrderItem(BaseModel):
+    pick_number: int
+    user_id: UserId
+    user_name: str
+    previous_points: float = 0
+    previous_wins: int = 0
+    previous_draws: int = 0
+    previous_losses: int = 0
+    previous_matches: int = 0
+    picked_source_user_id: UserId | None = None
+    picked_source_user_name: str | None = None
+
+
+class LeagueSeasonDraftCardBase(BaseModel):
+    source_user_id: UserId
+    source_user_name: str
+    total_cards: int = 0
+    previous_points: float = 0
+    previous_wins: int = 0
+    previous_draws: int = 0
+    previous_losses: int = 0
+    previous_matches: int = 0
+    by_cost: list[LeagueDistributionBucket] = Field(default_factory=list)
+    by_type: list[LeagueDistributionBucket] = Field(default_factory=list)
+    by_aspect: list[LeagueDistributionBucket] = Field(default_factory=list)
+    by_trait: list[LeagueDistributionBucket] = Field(default_factory=list)
+    by_rarity: list[LeagueDistributionBucket] = Field(default_factory=list)
+    claimed_by_user_id: UserId | None = None
+    claimed_by_user_name: str | None = None
+
+
+class LeagueSeasonDraftView(BaseModel):
+    from_season_id: int | None = None
+    from_season_name: str | None = None
+    to_season_id: int | None = None
+    to_season_name: str | None = None
+    draft_order: list[LeagueSeasonDraftOrderItem] = Field(default_factory=list)
+    card_bases: list[LeagueSeasonDraftCardBase] = Field(default_factory=list)
+
+
 class LeagueSeasonCreateBody(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     is_active: bool = False
@@ -268,6 +313,13 @@ class LeagueTournamentApplicationBody(BaseModel):
     deck_id: DeckId | None = None
     participant_name: str | None = None
     leader_image_url: str | None = None
+
+
+class LeagueSeasonDraftPickBody(BaseModel):
+    from_season_id: int
+    to_season_id: int
+    target_user_id: UserId
+    source_user_id: UserId
 
 
 class LeagueTournamentApplicationView(BaseModel):

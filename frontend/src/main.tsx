@@ -26,6 +26,7 @@ import LeagueDeckbuilderEntryPage from './pages/league/deckbuilder';
 import LeaguePlayersPage from './pages/league/players';
 import LeaguePlayerProfilePage from './pages/league/player_profile';
 import SealedDraftSimulationPage from './pages/league/sealed_draft';
+import LeagueSeasonDraftPage from './pages/league/season_draft';
 import LeagueSeasonStandingsEntryPage from './pages/league/season_standings';
 import DashboardSchedulePage from './pages/tournaments/[id]/dashboard';
 import DashboardNotFoundPage from './pages/tournaments/[id]/dashboard/dashboard_404';
@@ -97,6 +98,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/league/players" element={<LeaguePlayersPage />} />
               <Route path="/league/players/:user_id" element={<LeaguePlayerProfilePage />} />
               <Route path="/league/sealed-draft" element={<SealedDraftSimulationPage />} />
+              <Route path="/league/season-draft" element={<LeagueSeasonDraftPage />} />
               <Route path="/league/season-standings" element={<LeagueSeasonStandingsEntryPage />} />
 
               <Route path="/tournaments">

@@ -25,6 +25,7 @@ import {
 } from '@services/adapter';
 import {
   createLeagueSeason,
+  deleteLeagueSeason,
   exportSeasonStandingsCsv,
   importSeasonStandingsCsv,
   updateLeagueSeason,
@@ -61,6 +62,28 @@ export default function SeasonStandingsPage({
   const cumulativeRows = swrStandingsResponse.data?.data?.cumulative ?? [];
   const [importFile, setImportFile] = useState<File | null>(null);
   const [seasonName, setSeasonName] = useState('');
+  const [seasonNameDrafts, setSeasonNameDrafts] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    const rows = (adminSeasons.length > 0
+      ? adminSeasons.map((season: any) => ({
+          season_id: Number(season.season_id),
+          season_name: String(season.name ?? ''),
+        }))
+      : seasons.map((season: any) => ({
+          season_id: Number(season.season_id),
+          season_name: String(season.season_name ?? ''),
+        }))) as Array<{ season_id: number; season_name: string }>;
+    setSeasonNameDrafts((previous) => {
+      const next = { ...previous };
+      rows.forEach((row) => {
+        if (next[row.season_id] == null || next[row.season_id] === '') {
+          next[row.season_id] = row.season_name;
+        }
+      });
+      return next;
+    });
+  }, [adminSeasons, seasons]);
 
   function StandingsTable({ rows }: { rows: any[] }) {
     return (
@@ -149,14 +172,14 @@ export default function SeasonStandingsPage({
               </Button>
             </Group>
             <Table>
-              <Table.Thead>
-                <Table.Tr>
-                  <Table.Th>Season</Table.Th>
-                  <Table.Th>Status</Table.Th>
-                  <Table.Th></Table.Th>
-                </Table.Tr>
-              </Table.Thead>
-              <Table.Tbody>
+                <Table.Thead>
+                  <Table.Tr>
+                    <Table.Th>Season</Table.Th>
+                    <Table.Th>Status</Table.Th>
+                    <Table.Th>Actions</Table.Th>
+                  </Table.Tr>
+                </Table.Thead>
+                <Table.Tbody>
                 {(adminSeasons.length > 0
                   ? adminSeasons.map((season: any) => ({
                       season_id: season.season_id,
@@ -166,32 +189,91 @@ export default function SeasonStandingsPage({
                   : seasons
                 ).map((season: any) => (
                   <Table.Tr key={season.season_id}>
-                    <Table.Td>{season.season_name}</Table.Td>
+                    <Table.Td>
+                      <TextInput
+                        size="xs"
+                        value={seasonNameDrafts[season.season_id] ?? season.season_name}
+                        onChange={(event) =>
+                          setSeasonNameDrafts((previous) => ({
+                            ...previous,
+                            [season.season_id]: event.currentTarget.value,
+                          }))
+                        }
+                      />
+                    </Table.Td>
                     <Table.Td>
                       {season.is_active ? <Badge color="green">Active</Badge> : <Badge>Inactive</Badge>}
                     </Table.Td>
                     <Table.Td>
-                      {!season.is_active && (
+                      <Group>
                         <Button
                           size="xs"
                           variant="light"
+                          disabled={
+                            (seasonNameDrafts[season.season_id] ?? season.season_name).trim() === '' ||
+                            (seasonNameDrafts[season.season_id] ?? season.season_name).trim() ===
+                              String(season.season_name ?? '').trim()
+                          }
                           onClick={async () => {
                             if (activeTournamentId <= 0) return;
+                            const nextName = (seasonNameDrafts[season.season_id] ?? season.season_name).trim();
+                            if (nextName === '') return;
                             await updateLeagueSeason(activeTournamentId, season.season_id, {
-                              is_active: true,
+                              name: nextName,
                             });
                             await swrAdminSeasonsResponse.mutate();
                             await swrStandingsResponse.mutate();
-                            showNotification({
-                              color: 'green',
-                              title: 'Active season updated',
-                              message: '',
-                            });
+                            showNotification({ color: 'green', title: 'Season renamed', message: '' });
                           }}
                         >
-                          Set Active
+                          Save Name
                         </Button>
-                      )}
+                        {!season.is_active && (
+                          <Button
+                            size="xs"
+                            variant="light"
+                            onClick={async () => {
+                              if (activeTournamentId <= 0) return;
+                              await updateLeagueSeason(activeTournamentId, season.season_id, {
+                                is_active: true,
+                              });
+                              await swrAdminSeasonsResponse.mutate();
+                              await swrStandingsResponse.mutate();
+                              showNotification({
+                                color: 'green',
+                                title: 'Active season updated',
+                                message: '',
+                              });
+                            }}
+                          >
+                            Set Active
+                          </Button>
+                        )}
+                        <Button
+                          size="xs"
+                          color="red"
+                          variant="light"
+                          disabled={season.is_active}
+                          onClick={async () => {
+                            if (activeTournamentId <= 0) return;
+                            const confirmed = window.confirm(
+                              `Delete ${season.season_name}? This cannot be undone.`
+                            );
+                            if (!confirmed) return;
+                            await deleteLeagueSeason(activeTournamentId, season.season_id);
+                            setSeasonNameDrafts((previous) => {
+                              const next = { ...previous };
+                              delete next[season.season_id];
+                              return next;
+                            });
+                            await swrAdminSeasonsResponse.mutate();
+                            await swrStandingsResponse.mutate();
+                            showNotification({ color: 'green', title: 'Season deleted', message: '' });
+                          }}
+                        >
+                          Delete
+                        </Button>
+                      </Group>
                     </Table.Td>
                   </Table.Tr>
                 ))}

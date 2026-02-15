@@ -144,6 +144,20 @@ export async function deleteLeagueSeason(tournament_id: number, season_id: numbe
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function submitSeasonDraftPick(
+  tournament_id: number,
+  body: {
+    from_season_id: number;
+    to_season_id: number;
+    target_user_id: number;
+    source_user_id: number;
+  }
+) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/league/admin/season_draft/pick`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function adjustSeasonUserPoints(
   tournament_id: number,
   season_id: number,

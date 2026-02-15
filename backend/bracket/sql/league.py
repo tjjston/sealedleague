@@ -1,3 +1,4 @@
+import asyncio
 from collections import Counter
 from collections.abc import Sequence
 from heliclockter import datetime_utc
@@ -11,7 +12,11 @@ from bracket.models.league import (
     LeagueAspectUsage,
     LeagueAdminUserView,
     LeagueFavoriteCard,
+    LeagueDistributionBucket,
     LeaguePlayerCareerProfile,
+    LeagueSeasonDraftCardBase,
+    LeagueSeasonDraftOrderItem,
+    LeagueSeasonDraftView,
     LeagueUpcomingOpponentView,
     LeagueSeasonRecord,
     LeagueSeasonAdminView,
@@ -198,6 +203,7 @@ async def set_season_tournaments(season_id: int, tournament_ids: list[Tournament
 async def get_league_standings(
     tournament_id: TournamentId, season_id: int | None
 ) -> list[LeagueStandingsRow]:
+    include_live_points = season_id is None
     season_filter = (
         "AND spl.season_id = :season_id"
         if season_id is not None
@@ -276,7 +282,7 @@ async def get_league_standings(
                     ),
                     0
                 )
-                + COALESCE(lmp.live_points, 0)
+                + {live_points_expression}
             ) AS points,
             COALESCE(
                 ARRAY_AGG(REPLACE(spl.reason, 'ACCOLADE:', ''))
@@ -335,6 +341,7 @@ async def get_league_standings(
         membership_filter=membership_filter,
         season_filter=season_filter,
         tournament_scope_filter=tournament_scope_filter,
+        live_points_expression="COALESCE(lmp.live_points, 0)" if include_live_points else "0",
     )
     values: dict[str, int] = {"tournament_id": tournament_id}
     if season_id is not None:
@@ -525,6 +532,360 @@ async def upsert_card_pool_entry(season_id: int, user_id: UserId, card_id: str, 
     )
 
 
+def _distribution_buckets(counter: Counter[str]) -> list[LeagueDistributionBucket]:
+    return [
+        LeagueDistributionBucket(label=label, count=count)
+        for label, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))
+    ]
+
+
+def _parse_pool_draft_reason(reason: str) -> tuple[int, int, int] | None:
+    # Format: POOL_DRAFT_PICK:from=<season_id>:source=<source_user_id>:target=<target_user_id>
+    if not reason.startswith("POOL_DRAFT_PICK:"):
+        return None
+    values: dict[str, int] = {}
+    for chunk in reason.split(":")[1:]:
+        if "=" not in chunk:
+            continue
+        key, value = chunk.split("=", 1)
+        try:
+            values[key.strip()] = int(value.strip())
+        except ValueError:
+            return None
+    if "from" not in values or "source" not in values or "target" not in values:
+        return None
+    return values["from"], values["source"], values["target"]
+
+
+async def _get_draft_pick_mappings(from_season_id: int, to_season_id: int) -> dict[int, int]:
+    rows = await database.fetch_all(
+        """
+        SELECT reason, created
+        FROM season_points_ledger
+        WHERE season_id = :to_season_id
+          AND reason LIKE :reason_prefix
+        ORDER BY created ASC
+        """,
+        values={
+            "to_season_id": to_season_id,
+            "reason_prefix": f"POOL_DRAFT_PICK:from={from_season_id}:%",
+        },
+    )
+    target_to_source: dict[int, int] = {}
+    for row in rows:
+        parsed = _parse_pool_draft_reason(str(row._mapping["reason"] or ""))
+        if parsed is None:
+            continue
+        parsed_from_season_id, source_user_id, target_user_id = parsed
+        if parsed_from_season_id != from_season_id:
+            continue
+        target_to_source[target_user_id] = source_user_id
+    return target_to_source
+
+
+async def apply_season_draft_pick(
+    tournament_id: TournamentId,
+    from_season_id: int,
+    to_season_id: int,
+    target_user_id: UserId,
+    source_user_id: UserId,
+    changed_by_user_id: UserId,
+) -> None:
+    existing_mappings = await _get_draft_pick_mappings(from_season_id, to_season_id)
+    source_to_target = {source: target for target, source in existing_mappings.items()}
+    already_claimed_by = source_to_target.get(int(source_user_id))
+    if already_claimed_by is not None and already_claimed_by != int(target_user_id):
+        raise ValueError("This card base has already been drafted by another player.")
+
+    source_rows = await database.fetch_all(
+        """
+        SELECT card_id, quantity
+        FROM card_pool_entries
+        WHERE season_id = :from_season_id
+          AND user_id = :source_user_id
+        ORDER BY card_id ASC
+        """,
+        values={"from_season_id": from_season_id, "source_user_id": source_user_id},
+    )
+    if len(source_rows) < 1:
+        raise ValueError("Selected card base has no cards in the previous season.")
+
+    old_source_for_target = existing_mappings.get(int(target_user_id))
+    async with database.transaction():
+        if old_source_for_target is not None:
+            await database.execute(
+                """
+                DELETE FROM season_points_ledger
+                WHERE season_id = :to_season_id
+                  AND reason = :reason
+                """,
+                values={
+                    "to_season_id": to_season_id,
+                    "reason": (
+                        f"POOL_DRAFT_PICK:from={from_season_id}:"
+                        f"source={old_source_for_target}:target={int(target_user_id)}"
+                    ),
+                },
+            )
+
+        await database.execute(
+            """
+            DELETE FROM card_pool_entries
+            WHERE season_id = :to_season_id
+              AND user_id = :target_user_id
+            """,
+            values={"to_season_id": to_season_id, "target_user_id": target_user_id},
+        )
+
+        for source_row in source_rows:
+            quantity = int(source_row._mapping["quantity"] or 0)
+            if quantity <= 0:
+                continue
+            await database.execute(
+                """
+                INSERT INTO card_pool_entries (season_id, user_id, card_id, quantity, created)
+                VALUES (:season_id, :user_id, :card_id, :quantity, :created)
+                ON CONFLICT (season_id, user_id, card_id)
+                DO UPDATE SET quantity = EXCLUDED.quantity
+                """,
+                values={
+                    "season_id": to_season_id,
+                    "user_id": target_user_id,
+                    "card_id": str(source_row._mapping["card_id"]),
+                    "quantity": quantity,
+                    "created": datetime_utc.now(),
+                },
+            )
+
+        await database.execute(
+            """
+            INSERT INTO season_points_ledger (
+                season_id,
+                user_id,
+                changed_by_user_id,
+                tournament_id,
+                points_delta,
+                reason,
+                created
+            )
+            VALUES (
+                :season_id,
+                :user_id,
+                :changed_by_user_id,
+                :tournament_id,
+                0,
+                :reason,
+                :created
+            )
+            """,
+            values={
+                "season_id": to_season_id,
+                "user_id": target_user_id,
+                "changed_by_user_id": changed_by_user_id,
+                "tournament_id": tournament_id,
+                "reason": (
+                    f"POOL_DRAFT_PICK:from={from_season_id}:"
+                    f"source={int(source_user_id)}:target={int(target_user_id)}"
+                ),
+                "created": datetime_utc.now(),
+            },
+        )
+
+
+async def get_season_draft_view(tournament_id: TournamentId) -> LeagueSeasonDraftView:
+    seasons = await get_seasons_for_tournament(tournament_id)
+    if len(seasons) < 2:
+        return LeagueSeasonDraftView()
+
+    ordered = sorted(seasons, key=lambda season: season.created)
+    active = next((season for season in reversed(ordered) if season.is_active), ordered[-1])
+    active_index = next(
+        (index for index, season in enumerate(ordered) if int(season.id) == int(active.id)),
+        len(ordered) - 1,
+    )
+    if active_index < 1:
+        return LeagueSeasonDraftView(
+            to_season_id=int(active.id),
+            to_season_name=active.name,
+        )
+    previous = ordered[active_index - 1]
+
+    standings = await get_league_standings(tournament_id, previous.id)
+    standings_by_user_id = {int(row.user_id): row for row in standings}
+    user_ids = [int(row.user_id) for row in standings]
+    user_names = {int(row.user_id): row.user_name for row in standings}
+
+    tournament_ids = await get_tournament_ids_for_season(previous.id)
+    records_by_user_id: dict[int, tuple[int, int, int]] = {}
+    if len(tournament_ids) > 0 and len(user_ids) > 0:
+        tournaments_csv = ",".join(str(int(value)) for value in tournament_ids)
+        user_ids_csv = ",".join(str(int(value)) for value in user_ids)
+        record_rows = await database.fetch_all(
+            f"""
+            SELECT
+                u.id AS user_id,
+                COALESCE(SUM(p.wins), 0) AS wins,
+                COALESCE(SUM(p.draws), 0) AS draws,
+                COALESCE(SUM(p.losses), 0) AS losses
+            FROM users u
+            LEFT JOIN players p
+              ON lower(trim(p.name)) = lower(trim(u.name))
+             AND p.tournament_id IN ({tournaments_csv})
+            WHERE u.id IN ({user_ids_csv})
+            GROUP BY u.id
+            """
+        )
+        for row in record_rows:
+            records_by_user_id[int(row._mapping["user_id"])] = (
+                int(row._mapping["wins"] or 0),
+                int(row._mapping["draws"] or 0),
+                int(row._mapping["losses"] or 0),
+            )
+
+    picks_by_target = await _get_draft_pick_mappings(previous.id, active.id)
+    picks_by_source = {source: target for target, source in picks_by_target.items()}
+
+    card_pool_entries = await get_card_pool_entries(previous.id, None)
+    pool_by_source: dict[int, list[LeagueCardPoolEntryView]] = {}
+    for entry in card_pool_entries:
+        pool_by_source.setdefault(int(entry.user_id), []).append(entry)
+
+    set_codes = sorted(
+        {
+            str(entry.card_id).split("-", 1)[0].strip().lower()
+            for entry in card_pool_entries
+            if "-" in str(entry.card_id)
+        }
+    )
+    card_lookup: dict[str, dict] = {}
+    if len(set_codes) > 0:
+        try:
+            cards_raw = await asyncio.to_thread(fetch_swu_cards_cached, set_codes, 8, 1800)
+            cards = [normalize_card_for_deckbuilding(card) for card in cards_raw]
+            card_lookup = {str(card["card_id"]).lower(): card for card in cards}
+        except Exception:
+            card_lookup = {}
+
+    source_user_ids = sorted(pool_by_source.keys())
+    unknown_source_user_ids = [user_id for user_id in source_user_ids if user_id not in user_names]
+    if len(unknown_source_user_ids) > 0:
+        unknown_ids_csv = ",".join(str(user_id) for user_id in unknown_source_user_ids)
+        unknown_rows = await database.fetch_all(
+            f"""
+            SELECT id, name
+            FROM users
+            WHERE id IN ({unknown_ids_csv})
+            """
+        )
+        for row in unknown_rows:
+            user_names[int(row._mapping["id"])] = str(row._mapping["name"])
+
+    card_bases: list[LeagueSeasonDraftCardBase] = []
+    for source_user_id, entries in pool_by_source.items():
+        by_cost: Counter[str] = Counter()
+        by_type: Counter[str] = Counter()
+        by_aspect: Counter[str] = Counter()
+        by_trait: Counter[str] = Counter()
+        by_rarity: Counter[str] = Counter()
+        total_cards = 0
+
+        for entry in entries:
+            quantity = int(entry.quantity)
+            if quantity <= 0:
+                continue
+            total_cards += quantity
+            card = card_lookup.get(str(entry.card_id).lower())
+            if card is None:
+                by_type["Unknown"] += quantity
+                by_rarity["Unknown"] += quantity
+                by_cost["-"] += quantity
+                continue
+
+            by_cost[str(card.get("cost") if card.get("cost") is not None else "-")] += quantity
+            by_type[str(card.get("type") or "Unknown")] += quantity
+            by_rarity[str(card.get("rarity") or "Unknown")] += quantity
+
+            for aspect in card.get("aspects", []) or []:
+                label = str(aspect).strip()
+                if label != "":
+                    by_aspect[label] += quantity
+            for trait in card.get("traits", []) or []:
+                label = str(trait).strip()
+                if label != "":
+                    by_trait[label] += quantity
+
+        wins, draws, losses = records_by_user_id.get(source_user_id, (0, 0, 0))
+        target_user_id = picks_by_source.get(source_user_id)
+        standings_row = standings_by_user_id.get(source_user_id)
+        previous_points = float(standings_row.points) if standings_row is not None else 0
+        card_bases.append(
+            LeagueSeasonDraftCardBase(
+                source_user_id=source_user_id,
+                source_user_name=user_names.get(source_user_id, f"User {source_user_id}"),
+                total_cards=total_cards,
+                previous_points=previous_points,
+                previous_wins=wins,
+                previous_draws=draws,
+                previous_losses=losses,
+                previous_matches=wins + draws + losses,
+                by_cost=_distribution_buckets(by_cost),
+                by_type=_distribution_buckets(by_type),
+                by_aspect=_distribution_buckets(by_aspect),
+                by_trait=_distribution_buckets(by_trait),
+                by_rarity=_distribution_buckets(by_rarity),
+                claimed_by_user_id=None if target_user_id is None else UserId(target_user_id),
+                claimed_by_user_name=None if target_user_id is None else user_names.get(target_user_id),
+            )
+        )
+
+    ordered_for_draft = sorted(
+        standings,
+        key=lambda row: (
+            float(row.points),
+            row.user_name.lower(),
+        ),
+    )
+    draft_order: list[LeagueSeasonDraftOrderItem] = []
+    for index, row in enumerate(ordered_for_draft):
+        user_id = int(row.user_id)
+        wins, draws, losses = records_by_user_id.get(user_id, (0, 0, 0))
+        picked_source_user_id = picks_by_target.get(user_id)
+        draft_order.append(
+            LeagueSeasonDraftOrderItem(
+                pick_number=index + 1,
+                user_id=user_id,
+                user_name=row.user_name,
+                previous_points=float(row.points),
+                previous_wins=wins,
+                previous_draws=draws,
+                previous_losses=losses,
+                previous_matches=wins + draws + losses,
+                picked_source_user_id=(
+                    None if picked_source_user_id is None else UserId(picked_source_user_id)
+                ),
+                picked_source_user_name=(
+                    None if picked_source_user_id is None else user_names.get(picked_source_user_id)
+                ),
+            )
+        )
+
+    card_bases.sort(
+        key=lambda item: (
+            -item.previous_points,
+            item.source_user_name.lower(),
+        )
+    )
+
+    return LeagueSeasonDraftView(
+        from_season_id=int(previous.id),
+        from_season_name=previous.name,
+        to_season_id=int(active.id),
+        to_season_name=active.name,
+        draft_order=draft_order,
+        card_bases=card_bases,
+    )
+
+
 async def get_decks(
     season_id: int,
     user_id: UserId | None = None,
@@ -611,96 +972,57 @@ async def upsert_deck(
     sideboard: dict[str, int],
 ) -> LeagueDeckView:
     now = datetime_utc.now()
-    async with database.transaction():
-        existing = await database.fetch_one(
-            """
-            SELECT id
-            FROM decks
-            WHERE season_id = :season_id
-              AND user_id = :user_id
-            ORDER BY updated DESC
-            LIMIT 1
-            """,
-            values={"season_id": season_id, "user_id": user_id},
+    row = await database.fetch_one(
+        """
+        INSERT INTO decks (
+            season_id,
+            user_id,
+            tournament_id,
+            name,
+            leader,
+            base,
+            mainboard,
+            sideboard,
+            created,
+            updated
         )
-        if existing is None:
-            row = await database.fetch_one(
-                """
-                INSERT INTO decks (
-                    season_id,
-                    user_id,
-                    tournament_id,
-                    name,
-                    leader,
-                    base,
-                    mainboard,
-                    sideboard,
-                    created,
-                    updated
-                )
-                VALUES (
-                    :season_id,
-                    :user_id,
-                    :tournament_id,
-                    :name,
-                    :leader,
-                    :base,
-                    :mainboard,
-                    :sideboard,
-                    :created,
-                    :updated
-                )
-                RETURNING id
-                """,
-                values={
-                    "season_id": season_id,
-                    "user_id": user_id,
-                    "tournament_id": tournament_id,
-                    "name": name,
-                    "leader": leader,
-                    "base": base,
-                    "mainboard": json.dumps(mainboard),
-                    "sideboard": json.dumps(sideboard),
-                    "created": now,
-                    "updated": now,
-                },
-            )
-            deck_id = int(assert_some(row)._mapping["id"])
-        else:
-            deck_id = int(existing._mapping["id"])
-            await database.execute(
-                """
-                UPDATE decks
-                SET
-                    tournament_id = :tournament_id,
-                    name = :name,
-                    leader = :leader,
-                    base = :base,
-                    mainboard = :mainboard,
-                    sideboard = :sideboard,
-                    updated = :updated
-                WHERE id = :deck_id
-                """,
-                values={
-                    "deck_id": deck_id,
-                    "tournament_id": tournament_id,
-                    "name": name,
-                    "leader": leader,
-                    "base": base,
-                    "mainboard": json.dumps(mainboard),
-                    "sideboard": json.dumps(sideboard),
-                    "updated": now,
-                },
-            )
-            await database.execute(
-                """
-                DELETE FROM decks
-                WHERE season_id = :season_id
-                  AND user_id = :user_id
-                  AND id != :deck_id
-                """,
-                values={"season_id": season_id, "user_id": user_id, "deck_id": deck_id},
-            )
+        VALUES (
+            :season_id,
+            :user_id,
+            :tournament_id,
+            :name,
+            :leader,
+            :base,
+            :mainboard,
+            :sideboard,
+            :created,
+            :updated
+        )
+        ON CONFLICT (season_id, user_id, name)
+        DO UPDATE
+        SET
+            tournament_id = EXCLUDED.tournament_id,
+            leader = EXCLUDED.leader,
+            base = EXCLUDED.base,
+            mainboard = EXCLUDED.mainboard,
+            sideboard = EXCLUDED.sideboard,
+            updated = EXCLUDED.updated
+        RETURNING id
+        """,
+        values={
+            "season_id": season_id,
+            "user_id": user_id,
+            "tournament_id": tournament_id,
+            "name": name,
+            "leader": leader,
+            "base": base,
+            "mainboard": json.dumps(mainboard),
+            "sideboard": json.dumps(sideboard),
+            "created": now,
+            "updated": now,
+        },
+    )
+    deck_id = int(assert_some(row)._mapping["id"])
 
     row = await database.fetch_one(
         """
@@ -1312,7 +1634,7 @@ def _get_card_lookup(card_ids: Sequence[str]) -> dict[str, dict]:
     if len(card_ids) < 1:
         return {}
 
-    cards_raw = fetch_swu_cards_cached(DEFAULT_SWU_SET_CODES)
+    cards_raw = fetch_swu_cards_cached(DEFAULT_SWU_SET_CODES, timeout_s=8, cache_ttl_s=1800)
     cards = [normalize_card_for_deckbuilding(card) for card in cards_raw]
     by_id = {str(card["card_id"]).lower(): card for card in cards}
     return {
@@ -1402,7 +1724,7 @@ async def get_user_career_profile(
                 card_counts[normalized_card_id] += amount_int
                 card_ids.add(normalized_card_id)
 
-    card_lookup = _get_card_lookup(list(card_ids))
+    card_lookup = await asyncio.to_thread(_get_card_lookup, list(card_ids))
     for row in deck_rows:
         leader = str(row._mapping["leader"] or "").strip().lower()
         base = str(row._mapping["base"] or "").strip().lower()

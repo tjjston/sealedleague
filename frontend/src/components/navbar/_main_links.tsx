@@ -84,6 +84,7 @@ export function getBaseLinksDict() {
     { link: '/dashboard', label: 'Dashboard', links: [], icon: IconHome },
     { link: '/league/deckbuilder', label: 'Deckbuilder', links: [], icon: IconBrackets },
     { link: '/league/sealed-draft', label: 'Sealed Draft', links: [], icon: IconCards },
+    { link: '/league/season-draft', label: 'Season Draft', links: [], icon: IconChecklist },
     { link: '/league/season-standings', label: 'Season Standings', links: [], icon: IconChartBar },
     { link: '/league/players', label: 'Players', links: [], icon: IconUser },
     {

@@ -24,6 +24,7 @@ const WEAPON_ICON_OPTIONS = [
 
 export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; i18n: any }) {
   const navigate = useNavigate();
+  const [favoriteCardSearchInput, setFavoriteCardSearchInput] = useState('');
   const [favoriteCardSearch, setFavoriteCardSearch] = useState('');
   const [favoriteCardId, setFavoriteCardId] = useState<string | null>((user as any).favorite_card_id ?? null);
   const [favoriteCardName, setFavoriteCardName] = useState<string | null>(
@@ -32,6 +33,7 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
   const [favoriteCardImageUrl, setFavoriteCardImageUrl] = useState<string | null>(
     (user as any).favorite_card_image_url ?? null
   );
+  const [favoriteMediaSearchInput, setFavoriteMediaSearchInput] = useState('');
   const [favoriteMediaSearch, setFavoriteMediaSearch] = useState('');
   const [favoriteMedia, setFavoriteMedia] = useState<string | null>(
     (user as any).favorite_media ?? null
@@ -48,11 +50,13 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
       name: user != null ? user.name : '',
       email: user != null ? user.email : '',
       password: '',
+      language: i18n.language,
     },
 
     validate: {
       name: (value) => (value !== '' ? null : t('empty_name_validation')),
       email: (value) => (value !== '' ? null : t('empty_email_validation')),
+      password: (value) => (value === '' || value.length >= 8 ? null : t('too_short_password_validation')),
     },
   });
   const password_form = useForm({
@@ -73,6 +77,20 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
     setWeaponIcon((user as any).weapon_icon ?? null);
     setAvatarUrl((user as any).avatar_url ?? '');
   }, [user]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setFavoriteCardSearch(favoriteCardSearchInput.trim());
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [favoriteCardSearchInput]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setFavoriteMediaSearch(favoriteMediaSearchInput.trim());
+    }, 250);
+    return () => window.clearTimeout(timeoutId);
+  }, [favoriteMediaSearchInput]);
 
   const favoriteCardOptions = useMemo(
     () => {
@@ -132,12 +150,13 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
   ];
 
   const changeLanguage = (newLocale: string | null) => {
+    if (newLocale == null || newLocale === '') return;
     i18n.changeLanguage(newLocale);
     navigate(`/user?lng=${newLocale}`);
   };
 
   return (
-    <Tabs defaultValue="details">
+    <Tabs defaultValue="profile">
       <Tabs.List>
         <Tabs.Tab value="details" leftSection={<IconUser size="1.0rem" />}>
           {t('edit_details_tab_title')}
@@ -155,7 +174,18 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
       <Tabs.Panel value="details" pt="xs">
         <form
           onSubmit={details_form.onSubmit(async (values) => {
-            if (user != null) await updateUser(user.id, values);
+            if (user == null) return;
+            await updateUser(user.id, {
+              name: values.name,
+              email: values.email,
+            } as any);
+            if ((values.password ?? '').trim() !== '') {
+              await updatePassword(user.id, values.password);
+              details_form.setFieldValue('password', '');
+            }
+            if ((values.language ?? '') !== '' && values.language !== i18n.language) {
+              changeLanguage(values.language);
+            }
           })}
         >
           <TextInput
@@ -170,6 +200,15 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
             label={t('email_input_label')}
             type="email"
             {...details_form.getInputProps('email')}
+          />
+          <PasswordStrength form={details_form} />
+          <Select
+            allowDeselect={false}
+            mt="1.0rem"
+            value={details_form.values.language}
+            label={t('language')}
+            data={locales}
+            onChange={(value) => details_form.setFieldValue('language', value ?? i18n.language)}
           />
           <Button fullWidth style={{ marginTop: 20 }} color="green" type="submit">
             {t('save_button')}
@@ -190,8 +229,8 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
         <TextInput
           mt="1.0rem"
           label="Favorite Card Search"
-          value={favoriteCardSearch}
-          onChange={(event) => setFavoriteCardSearch(event.currentTarget.value)}
+          value={favoriteCardSearchInput}
+          onChange={(event) => setFavoriteCardSearchInput(event.currentTarget.value)}
           placeholder="Search by card name"
         />
         <Select
@@ -231,10 +270,17 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
           value={favoriteMedia}
           onChange={setFavoriteMedia}
           data={favoriteMediaOptions}
-          onSearchChange={setFavoriteMediaSearch}
-          searchValue={favoriteMediaSearch}
+          onSearchChange={setFavoriteMediaSearchInput}
+          searchValue={favoriteMediaSearchInput}
           nothingFoundMessage="No media found"
         />
+        <Text size="xs" c="dimmed" mt={4}>
+          Includes a curated fallback list aligned with IMDb list{' '}
+          <a href="https://www.imdb.com/list/ls510243088/" target="_blank" rel="noreferrer">
+            ls510243088
+          </a>
+          .
+        </Text>
         <Select
           mt="1.0rem"
           clearable
@@ -245,6 +291,12 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
           data={WEAPON_ICON_OPTIONS}
           nothingFoundMessage="No icons found"
         />
+        <Text size="xs" c="dimmed" mt={4}>
+          Additional icon set reference:{' '}
+          <a href="https://icons8.com/icons/set/star-wars" target="_blank" rel="noreferrer">
+            Icons8 Star Wars
+          </a>
+        </Text>
 
         <TextInput
           mt="1.0rem"

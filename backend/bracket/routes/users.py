@@ -1,13 +1,16 @@
 import os
 import json
 import asyncio
+import time
 from uuid import uuid4
+from threading import Lock
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
 import aiofiles
 import aiofiles.os
+import aiohttp
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from heliclockter import datetime_utc, timedelta
@@ -105,7 +108,70 @@ _STAR_WARS_MEDIA_FALLBACK: list[dict[str, str]] = [
     {"title": "Star Wars Outlaws", "year": "2024", "media_type": "game"},
     {"title": "Star Wars Battlefront II", "year": "2017", "media_type": "game"},
     {"title": "Star Wars: Squadrons", "year": "2020", "media_type": "game"},
+    {"title": "The Acolyte", "year": "2024", "media_type": "series"},
+    {"title": "Caravan of Courage: An Ewok Adventure", "year": "1984", "media_type": "movie"},
+    {"title": "Ewoks: The Battle for Endor", "year": "1985", "media_type": "movie"},
+    {"title": "The Star Wars Holiday Special", "year": "1978", "media_type": "movie"},
+    {"title": "Star Wars: Droids", "year": "1985", "media_type": "series"},
+    {"title": "Ewoks", "year": "1985", "media_type": "series"},
+    {"title": "Clone Wars", "year": "2003", "media_type": "series"},
+    {"title": "Star Wars: Forces of Destiny", "year": "2017", "media_type": "series"},
+    {"title": "Star Wars: Young Jedi Adventures", "year": "2023", "media_type": "series"},
+    {"title": "LEGO Star Wars: Rebuild the Galaxy", "year": "2024", "media_type": "series"},
+    {"title": "LEGO Star Wars: Terrifying Tales", "year": "2021", "media_type": "movie"},
+    {"title": "LEGO Star Wars: Summer Vacation", "year": "2022", "media_type": "movie"},
+    {"title": "The LEGO Star Wars Holiday Special", "year": "2020", "media_type": "movie"},
+    {"title": "LEGO Star Wars: Droid Tales", "year": "2015", "media_type": "series"},
+    {"title": "LEGO Star Wars: The Yoda Chronicles", "year": "2013", "media_type": "series"},
+    {"title": "Star Wars: Republic Commando", "year": "2005", "media_type": "game"},
+    {"title": "Star Wars: Empire at War", "year": "2006", "media_type": "game"},
+    {"title": "Star Wars: Dark Forces", "year": "1995", "media_type": "game"},
+    {"title": "Star Wars Jedi Knight: Dark Forces II", "year": "1997", "media_type": "game"},
+    {"title": "Star Wars Jedi Knight II: Jedi Outcast", "year": "2002", "media_type": "game"},
+    {"title": "Star Wars Jedi Knight: Jedi Academy", "year": "2003", "media_type": "game"},
+    {"title": "Star Wars: Rogue Squadron", "year": "1998", "media_type": "game"},
+    {"title": "Star Wars: Bounty Hunter", "year": "2002", "media_type": "game"},
+    {"title": "Star Wars: Racer Revenge", "year": "2002", "media_type": "game"},
+    {"title": "Star Wars Battlefront", "year": "2004", "media_type": "game"},
+    {"title": "Star Wars Battlefront II", "year": "2005", "media_type": "game"},
 ]
+
+_CARD_CATALOG_CACHE_LOCK = Lock()
+_CARD_CATALOG_CACHE: tuple[float, list[dict]] | None = None
+_CARD_CATALOG_CACHE_TTL_S = 1800
+_SWAPI_FILMS_CACHE_LOCK = asyncio.Lock()
+_SWAPI_FILMS_CACHE: tuple[float, list[MediaCatalogEntry]] | None = None
+_SWAPI_FILMS_CACHE_TTL_S = 21600
+
+
+def _get_cached_normalized_card_catalog() -> list[dict]:
+    global _CARD_CATALOG_CACHE
+    now = time.monotonic()
+    cached = _CARD_CATALOG_CACHE
+    if cached is not None and now - cached[0] < _CARD_CATALOG_CACHE_TTL_S:
+        return cached[1]
+
+    with _CARD_CATALOG_CACHE_LOCK:
+        cached = _CARD_CATALOG_CACHE
+        now = time.monotonic()
+        if cached is not None and now - cached[0] < _CARD_CATALOG_CACHE_TTL_S:
+            return cached[1]
+
+        raw_cards = fetch_swu_cards_cached(
+            DEFAULT_SWU_SET_CODES,
+            timeout_s=12,
+            cache_ttl_s=_CARD_CATALOG_CACHE_TTL_S,
+        )
+        normalized = [normalize_card_for_deckbuilding(card) for card in raw_cards]
+        normalized.sort(
+            key=lambda card: (
+                str(card.get("name", "")).lower(),
+                str(card.get("character_variant", "")).lower(),
+                str(card.get("card_id", "")).lower(),
+            )
+        )
+        _CARD_CATALOG_CACHE = (time.monotonic(), normalized)
+        return normalized
 
 
 @router.get("/users", response_model=UsersResponse)
@@ -207,11 +273,9 @@ async def get_card_catalog(
         return CardCatalogResponse(data=[])
 
     try:
-        raw_cards = await asyncio.to_thread(fetch_swu_cards_cached, DEFAULT_SWU_SET_CODES)
+        cards = await asyncio.to_thread(_get_cached_normalized_card_catalog)
     except (URLError, HTTPError, TimeoutError, ValueError, OSError):
         return CardCatalogResponse(data=[])
-
-    cards = [normalize_card_for_deckbuilding(card) for card in raw_cards]
     filtered = [
         card
         for card in cards
@@ -220,7 +284,6 @@ async def get_card_catalog(
         or normalized_query in str(card.get("character_variant", "")).lower()
         or normalized_query in str(card.get("card_id", "")).lower()
     ]
-    filtered.sort(key=lambda card: str(card.get("name", "")).lower())
     return CardCatalogResponse(
         data=[
             CardCatalogEntry(
@@ -256,6 +319,70 @@ def _search_star_wars_media_fallback(query: str, limit: int) -> list[MediaCatalo
             )
         )
     return results[:limit]
+
+
+async def _fetch_swapi_films() -> list[MediaCatalogEntry]:
+    entries: list[MediaCatalogEntry] = []
+    next_url: str | None = "https://swapi.dev/api/films/"
+    timeout = aiohttp.ClientTimeout(total=6)
+
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        while next_url is not None and next_url != "":
+            async with session.get(next_url) as response:
+                if response.status != 200:
+                    break
+                payload = await response.json()
+
+            results = payload.get("results", [])
+            if not isinstance(results, list):
+                break
+
+            for item in results:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title", "")).strip()
+                if title == "":
+                    continue
+                release_date = str(item.get("release_date", "")).strip()
+                year = release_date[:4] if len(release_date) >= 4 else None
+                resource_url = str(item.get("url", "")).strip() or None
+                entries.append(
+                    MediaCatalogEntry(
+                        title=title,
+                        year=year,
+                        media_type="movie",
+                        imdb_id=resource_url,
+                        poster_url=None,
+                    )
+                )
+
+            next_field = payload.get("next")
+            next_url = str(next_field).strip() if isinstance(next_field, str) else None
+
+    entries.sort(key=lambda entry: (str(entry.year or ""), str(entry.title).lower()))
+    return entries
+
+
+async def _get_swapi_films_cached() -> list[MediaCatalogEntry]:
+    global _SWAPI_FILMS_CACHE
+    now = time.monotonic()
+    cached = _SWAPI_FILMS_CACHE
+    if cached is not None and now - cached[0] < _SWAPI_FILMS_CACHE_TTL_S:
+        return cached[1]
+
+    async with _SWAPI_FILMS_CACHE_LOCK:
+        now = time.monotonic()
+        cached = _SWAPI_FILMS_CACHE
+        if cached is not None and now - cached[0] < _SWAPI_FILMS_CACHE_TTL_S:
+            return cached[1]
+
+        try:
+            films = await _fetch_swapi_films()
+        except (aiohttp.ClientError, TimeoutError, ValueError, OSError):
+            films = []
+
+        _SWAPI_FILMS_CACHE = (time.monotonic(), films)
+        return films
 
 
 def _search_star_wars_media_omdb(query: str, limit: int) -> list[MediaCatalogEntry]:
@@ -340,11 +467,33 @@ async def get_media_catalog(
     query: str | None = Query(default=None),
     limit: int = Query(default=25, ge=1, le=100),
 ) -> MediaCatalogResponse:
-    normalized_query = (query or "").strip()
-    if normalized_query == "":
-        return MediaCatalogResponse(data=_search_star_wars_media_fallback("", limit))
-    data = _search_star_wars_media_omdb(normalized_query, limit)
-    return MediaCatalogResponse(data=data)
+    normalized_query = (query or "").strip().lower()
+    fallback = _search_star_wars_media_fallback(normalized_query, max(limit * 4, 100))
+    swapi_films = await _get_swapi_films_cached()
+    filtered_swapi_films = [
+        entry
+        for entry in swapi_films
+        if normalized_query == "" or normalized_query in str(entry.title).lower()
+    ]
+
+    media_type_order = {"movie": 0, "series": 1, "game": 2}
+    combined: list[MediaCatalogEntry] = []
+    seen_keys: set[str] = set()
+    for entry in [*filtered_swapi_films, *fallback]:
+        key = f"{str(entry.title).strip().lower()}::{str(entry.year or '').strip()}::{str(entry.media_type or '').strip().lower()}"
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        combined.append(entry)
+
+    combined.sort(
+        key=lambda entry: (
+            media_type_order.get(str(entry.media_type or "").lower(), 99),
+            str(entry.title).lower(),
+            str(entry.year or ""),
+        )
+    )
+    return MediaCatalogResponse(data=combined[:limit])
 
 
 @router.get("/users/me", response_model=UserPublicResponse)

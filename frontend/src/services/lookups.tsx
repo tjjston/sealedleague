@@ -27,68 +27,88 @@ export function getStageItemLookup(swrStagesResponse: SWRResponse) {
   let result: any[] = [];
   if (swrStagesResponse?.data == null) return Object.fromEntries(result);
 
-  swrStagesResponse.data.data.map((stage: StageWithStageItems) =>
-    stage.stage_items.forEach((stage_item) => {
-      result = result.concat([[stage_item.id, stage_item]]);
-    })
-  );
+  (swrStagesResponse.data.data ?? []).forEach((stage: StageWithStageItems) => {
+    const stageItems = Array.isArray((stage as any)?.stage_items) ? (stage as any).stage_items : [];
+    stageItems
+      .filter((stageItem: any) => stageItem != null && stageItem.id != null)
+      .forEach((stage_item: any) => {
+        result = result.concat([[stage_item.id, stage_item]]);
+      });
+  });
   return Object.fromEntries(result);
 }
 
 export function getStageItemList(swrStagesResponse: SWRResponse) {
   let result: any[] = [];
 
-  swrStagesResponse.data.data.map((stage: StageWithStageItems) =>
-    stage.stage_items.forEach((stage_item) => {
-      result = result.concat([[stage_item]]);
-    })
-  );
+  (swrStagesResponse?.data?.data ?? []).forEach((stage: StageWithStageItems) => {
+    const stageItems = Array.isArray((stage as any)?.stage_items) ? (stage as any).stage_items : [];
+    stageItems
+      .filter((stageItem: any) => stageItem != null)
+      .forEach((stage_item: any) => {
+        result = result.concat([[stage_item]]);
+      });
+  });
   return result;
 }
 
 export function getStageItemTeamIdsLookup(swrStagesResponse: SWRResponse) {
   let result: any[] = [];
 
-  swrStagesResponse.data.data.map((stage: StageWithStageItems) =>
-    stage.stage_items.forEach((stageItem) => {
-      const teamIds = stageItem.inputs.map((input) => input.team_id);
-      result = result.concat([[stageItem.id, teamIds]]);
-    })
-  );
+  (swrStagesResponse?.data?.data ?? []).forEach((stage: StageWithStageItems) => {
+    const stageItems = Array.isArray((stage as any)?.stage_items) ? (stage as any).stage_items : [];
+    stageItems
+      .filter((stageItem: any) => stageItem != null && stageItem.id != null)
+      .forEach((stageItem: any) => {
+        const inputs = Array.isArray(stageItem.inputs) ? stageItem.inputs : [];
+        const teamIds = inputs.map((input: any) => input?.team_id).filter((teamId: any) => teamId != null);
+        result = result.concat([[stageItem.id, teamIds]]);
+      });
+  });
   return Object.fromEntries(result);
 }
 
 export function getStageItemTeamsLookup(swrStagesResponse: SWRResponse) {
   let result: any[] = [];
 
-  swrStagesResponse.data.data.map((stage: StageWithStageItems) =>
-    stage.stage_items
-      .sort((si1, si2) => (si1.name > si2.name ? 1 : -1))
-      .forEach((stageItem) => {
-        const teams_with_inputs = stageItem.inputs.filter(
-          (input) => 'team' in input && input.team != null
-        );
+  (swrStagesResponse?.data?.data ?? []).forEach((stage: StageWithStageItems) => {
+    const stageItems = Array.isArray((stage as any)?.stage_items) ? (stage as any).stage_items : [];
+    stageItems
+      .filter((stageItem: any) => stageItem != null && stageItem.id != null)
+      .sort((si1: any, si2: any) => (si1.name > si2.name ? 1 : -1))
+      .forEach((stageItem: any) => {
+        const inputs = Array.isArray(stageItem.inputs) ? stageItem.inputs : [];
+        const teams_with_inputs = inputs.filter((input: any) => input != null && input.team != null);
 
         if (teams_with_inputs.length > 0) {
           result = result.concat([[stageItem.id, teams_with_inputs]]);
         }
-      })
-  );
+      });
+  });
   return Object.fromEntries(result);
 }
 
 export function getMatchLookup(swrStagesResponse: SWRResponse) {
   let result: any[] = [];
 
-  swrStagesResponse.data.data.map((stage: StageWithStageItems) =>
-    stage.stage_items.forEach((stageItem) => {
-      stageItem.rounds.forEach((round) => {
-        round.matches.forEach((match) => {
-          result = result.concat([[match.id, { match, stageItem }]]);
-        });
+  (swrStagesResponse?.data?.data ?? []).forEach((stage: StageWithStageItems) => {
+    const stageItems = Array.isArray((stage as any)?.stage_items) ? (stage as any).stage_items : [];
+    stageItems
+      .filter((stageItem: any) => stageItem != null && stageItem.id != null)
+      .forEach((stageItem: any) => {
+        const rounds = Array.isArray(stageItem.rounds) ? stageItem.rounds : [];
+        rounds
+          .filter((round: any) => round != null)
+          .forEach((round: any) => {
+            const matches = Array.isArray(round.matches) ? round.matches : [];
+            matches
+              .filter((match: any) => match != null && match.id != null)
+              .forEach((match: any) => {
+                result = result.concat([[match.id, { match, stageItem }]]);
+              });
+          });
       });
-    })
-  );
+  });
   return Object.fromEntries(result);
 }
 

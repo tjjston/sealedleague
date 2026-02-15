@@ -20,6 +20,7 @@ import { useTranslation } from 'react-i18next';
 import { RoundsGridCols } from '@components/brackets/brackets';
 import MatchModal from '@components/modals/match_modal';
 import { NoContent } from '@components/no_content/empty_table_info';
+import RequestErrorAlert from '@components/utils/error_alert';
 import { Time, formatTime } from '@components/utils/datetime';
 import { formatMatchInput1, formatMatchInput2 } from '@components/utils/match';
 import { Translator } from '@components/utils/types';
@@ -48,16 +49,18 @@ function ScheduleRow({
   const winColor = '#2a8f37';
   const drawColor = '#656565';
   const loseColor = '#af4034';
+  const team1Score = Number(data?.match?.stage_item_input1_score ?? 0);
+  const team2Score = Number(data?.match?.stage_item_input2_score ?? 0);
   const team1_color =
-    data.match.stage_item_input1_score > data.match.stage_item_input2_score
+    team1Score > team2Score
       ? winColor
-      : data.match.stage_item_input1_score === data.match.stage_item_input2_score
+      : team1Score === team2Score
         ? drawColor
         : loseColor;
   const team2_color =
-    data.match.stage_item_input2_score > data.match.stage_item_input1_score
+    team2Score > team1Score
       ? winColor
-      : data.match.stage_item_input1_score === data.match.stage_item_input2_score
+      : team1Score === team2Score
         ? drawColor
         : loseColor;
 
@@ -160,6 +163,35 @@ function ScheduleRow({
   );
 }
 
+class SectionErrorBoundary extends React.Component<
+  { title: string; children: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { title: string; children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(_error: Error, _errorInfo: React.ErrorInfo) {
+    // Prevent full-page crash if one section receives malformed API data.
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <Alert icon={<IconAlertCircle size={16} />} color="red" radius="md">
+          {this.props.title}
+        </Alert>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function Schedule({
   t,
   stageItemsLookup,
@@ -175,18 +207,26 @@ function Schedule({
   canEditMatch: (match: any) => boolean;
   winnerByStageItemId: Record<number, string>;
 }) {
-  const matches: any[] = Object.values(matchesLookup);
+  const matches: any[] = Object.values(matchesLookup ?? {}).filter(
+    (value: any) => value != null && value.match != null && value.stageItem != null
+  );
   const sortedMatches = matches
-    .filter((m1: any) => m1.match.start_time != null)
-    .sort((m1: any, m2: any) => (m1.match.court?.name > m2.match.court?.name ? 1 : -1))
-    .sort((m1: any, m2: any) => (m1.match.start_time > m2.match.start_time ? 1 : -1));
+    .filter((entry: any) => entry?.match?.start_time != null)
+    .sort((left: any, right: any) => {
+      const leftCourt = String(left?.match?.court?.name ?? '');
+      const rightCourt = String(right?.match?.court?.name ?? '');
+      if (leftCourt !== rightCourt) return leftCourt.localeCompare(rightCourt);
+      const leftTime = String(left?.match?.start_time ?? '');
+      const rightTime = String(right?.match?.start_time ?? '');
+      return leftTime.localeCompare(rightTime);
+    });
 
   const rows: React.JSX.Element[] = [];
 
   for (let c = 0; c < sortedMatches.length; c += 1) {
     const data = sortedMatches[c];
 
-    if (c < 1 || sortedMatches[c - 1].match.start_time) {
+    if (c < 1 || sortedMatches[c - 1]?.match?.start_time) {
       const startTime = formatTime(data.match.start_time);
 
       if (c < 1 || startTime !== formatTime(sortedMatches[c - 1].match.start_time)) {
@@ -224,7 +264,7 @@ function Schedule({
   }
 
   const noItemsAlert =
-    matchesLookup.length < 1 ? (
+    sortedMatches.length < 1 ? (
       <Alert
         icon={<IconAlertCircle size={16} />}
         title={t('no_matches_title')}
@@ -253,7 +293,7 @@ export default function ResultsPage() {
   const { t } = useTranslation();
   const { tournamentData } = getTournamentIdFromRouter();
   const swrCurrentUserResponse = getUser();
-  const swrStagesResponse = getStages(tournamentData.id);
+  const swrStagesResponse = getStages(tournamentData.id, true);
   const swrCourtsResponse = getCourts(tournamentData.id);
 
   const stageItemsLookup = responseIsValid(swrStagesResponse)
@@ -324,8 +364,24 @@ export default function ResultsPage() {
     eliminationStageItems[0] ??
     null;
 
-  if (!responseIsValid(swrStagesResponse)) return null;
-  if (!responseIsValid(swrCourtsResponse)) return null;
+  if (swrStagesResponse.error || swrCourtsResponse.error) {
+    return (
+      <TournamentLayout tournament_id={tournamentData.id}>
+        <Title>{t('results_title')}</Title>
+        {swrStagesResponse.error != null ? <RequestErrorAlert error={swrStagesResponse.error} /> : null}
+        {swrCourtsResponse.error != null ? <RequestErrorAlert error={swrCourtsResponse.error} /> : null}
+      </TournamentLayout>
+    );
+  }
+
+  if (!responseIsValid(swrStagesResponse) || !responseIsValid(swrCourtsResponse)) {
+    return (
+      <TournamentLayout tournament_id={tournamentData.id}>
+        <Title>{t('results_title')}</Title>
+        <Text c="dimmed">Loading results…</Text>
+      </TournamentLayout>
+    );
+  }
 
   const currentUser = swrCurrentUserResponse.data?.data ?? null;
   const currentUserName = String(currentUser?.name ?? '').trim().toLowerCase();
@@ -398,58 +454,62 @@ export default function ResultsPage() {
         </Card>
       ) : null}
       {activeBracketStageItem != null ? (
-        <Card withBorder mt="sm">
-          <Stack>
-            <Group justify="space-between">
-              <Title order={4}>Elimination Bracket</Title>
-              <Group>
-                {eliminationStageItems.map((stageItem: any) => (
-                  <Button
-                    key={stageItem.id}
-                    size="xs"
-                    variant={stageItem.id === activeBracketStageItem.id ? 'filled' : 'outline'}
-                    onClick={() => setSelectedBracketStageItemId(stageItem.id)}
-                  >
-                    {stageItem.name}
-                    {winnerByStageItemId[stageItem.id] != null
-                      ? ` | Winner: ${winnerByStageItemId[stageItem.id]}`
-                      : ''}
-                  </Button>
-                ))}
+        <SectionErrorBoundary title="Could not render elimination bracket.">
+          <Card withBorder mt="sm">
+            <Stack>
+              <Group justify="space-between">
+                <Title order={4}>Elimination Bracket</Title>
+                <Group>
+                  {eliminationStageItems.map((stageItem: any) => (
+                    <Button
+                      key={stageItem.id}
+                      size="xs"
+                      variant={stageItem.id === activeBracketStageItem.id ? 'filled' : 'outline'}
+                      onClick={() => setSelectedBracketStageItemId(stageItem.id)}
+                    >
+                      {stageItem.name}
+                      {winnerByStageItemId[stageItem.id] != null
+                        ? ` | Winner: ${winnerByStageItemId[stageItem.id]}`
+                        : ''}
+                    </Button>
+                  ))}
+                </Group>
               </Group>
-            </Group>
-            {winnerByStageItemId[activeBracketStageItem.id] != null ? (
-              <Badge size="lg" color="yellow" variant="light">
-                Winner: {winnerByStageItemId[activeBracketStageItem.id]}
-              </Badge>
-            ) : null}
-            <RoundsGridCols
-              tournamentData={tournamentData}
-              swrStagesResponse={swrStagesResponse as any}
-              readOnly
-              stageItem={activeBracketStageItem}
-              displaySettings={{
-                matchVisibility: 'all',
-                setMatchVisibility: () => {},
-                teamNamesDisplay: 'team-names',
-                setTeamNamesDisplay: () => {},
-                showManualSchedulingOptions: 'false',
-                setShowManualSchedulingOptions: () => {},
-              }}
-              swrUpcomingMatchesResponse={null}
-            />
-          </Stack>
-        </Card>
+              {winnerByStageItemId[activeBracketStageItem.id] != null ? (
+                <Badge size="lg" color="yellow" variant="light">
+                  Winner: {winnerByStageItemId[activeBracketStageItem.id]}
+                </Badge>
+              ) : null}
+              <RoundsGridCols
+                tournamentData={tournamentData}
+                swrStagesResponse={swrStagesResponse as any}
+                readOnly
+                stageItem={activeBracketStageItem}
+                displaySettings={{
+                  matchVisibility: 'all',
+                  setMatchVisibility: () => {},
+                  teamNamesDisplay: 'team-names',
+                  setTeamNamesDisplay: () => {},
+                  showManualSchedulingOptions: 'false',
+                  setShowManualSchedulingOptions: () => {},
+                }}
+                swrUpcomingMatchesResponse={null}
+              />
+            </Stack>
+          </Card>
+        </SectionErrorBoundary>
       ) : null}
       <Center mt="1rem">
-        <Schedule
-          t={t}
-          matchesLookup={matchesLookup}
-          stageItemsLookup={stageItemsLookup}
-          openMatchModal={openMatchModal}
-          canEditMatch={canEditMatch}
-          winnerByStageItemId={winnerByStageItemId}
-        />
+        <SectionErrorBoundary title="Could not render tournament schedule.">
+          <Schedule
+            t={t}
+            matchesLookup={matchesLookup}
+            stageItemsLookup={stageItemsLookup}
+            openMatchModal={openMatchModal}
+            canEditMatch={canEditMatch}
+            winnerByStageItemId={winnerByStageItemId}
+          />
+        </SectionErrorBoundary>
       </Center>
     </TournamentLayout>
   );

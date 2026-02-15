@@ -250,17 +250,22 @@ export function getUserCardCatalog(query: string, limit: number = 100): SWRRespo
   const params = new URLSearchParams();
   params.set('query', query.trim());
   params.set('limit', String(limit));
-  return useSWR(`users/card_catalog?${params.toString()}`, fetcher);
+  return useSWR(`users/card_catalog?${params.toString()}`, fetcher, {
+    revalidateOnFocus: false,
+    dedupingInterval: 3_000,
+  });
 }
 
 export function getUserMediaCatalog(query: string, limit: number = 25): SWRResponse<any> {
-  if (query.trim() === '') {
-    return useSWR(null, fetcher);
-  }
   const params = new URLSearchParams();
-  params.set('query', query.trim());
+  if (query.trim() !== '') {
+    params.set('query', query.trim());
+  }
   params.set('limit', String(limit));
-  return useSWR(`users/media_catalog?${params.toString()}`, fetcher);
+  return useSWR(`users/media_catalog?${params.toString()}`, fetcher, {
+    revalidateOnFocus: false,
+    dedupingInterval: 3_000,
+  });
 }
 
 export function getUserCareer(user_id: number | null): SWRResponse<any> {
@@ -373,6 +378,13 @@ export function getLeagueAdminSeasons(tournament_id: number | null): SWRResponse
     return useSWR(null, fetcher);
   }
   return useSWR(`tournaments/${tournament_id}/league/admin/seasons`, fetcher);
+}
+
+export function getLeagueSeasonDraft(tournament_id: number | null): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  return useSWR(`tournaments/${tournament_id}/league/admin/season_draft`, fetcher);
 }
 
 export function getTournamentApplications(

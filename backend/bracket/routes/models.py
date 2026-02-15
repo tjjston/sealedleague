@@ -11,6 +11,7 @@ from bracket.models.league import (
     LeagueAdminUserView,
     LeagueCardPoolEntryView,
     LeagueDeckView,
+    LeagueSeasonDraftView,
     LeagueSeasonHistoryView,
     LeagueTournamentApplicationView,
     LeagueStandingsRow,
@@ -184,4 +185,8 @@ class LeagueUpcomingOpponentResponse(DataResponse[LeagueUpcomingOpponentView | N
 
 
 class LeaguePlayerCareerProfileResponse(DataResponse[LeaguePlayerCareerProfile]):
+    pass
+
+
+class LeagueSeasonDraftResponse(DataResponse[LeagueSeasonDraftView]):
     pass

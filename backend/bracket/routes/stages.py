@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from starlette import status
 
@@ -50,7 +52,16 @@ async def get_stages(
             detail="Can't view draft rounds when not authorized",
         )
 
-    stages_ = await get_full_tournament_details(tournament_id, no_draft_rounds=no_draft_rounds)
+    try:
+        stages_ = await asyncio.wait_for(
+            get_full_tournament_details(tournament_id, no_draft_rounds=no_draft_rounds),
+            timeout=45,
+        )
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Fetching stage data timed out. Please retry.",
+        ) from exc
     return StagesWithStageItemsResponse(data=stages_)
 
 

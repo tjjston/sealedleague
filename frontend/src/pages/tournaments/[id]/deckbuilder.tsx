@@ -135,6 +135,13 @@ function compareText(a: string, b: string) {
   });
 }
 
+function normalizeCardIdLookupKey(value: string | null | undefined) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-');
+}
+
 function GraphBars({
   data,
   total,
@@ -241,6 +248,13 @@ export default function DeckbuilderPage({
     }, {});
   }, [allCards]);
 
+  const cardIdByLookupKey = useMemo(() => {
+    return (allCards as CardItem[]).reduce((result: Record<string, string>, card: CardItem) => {
+      result[normalizeCardIdLookupKey(card.card_id)] = card.card_id;
+      return result;
+    }, {});
+  }, [allCards]);
+
   const cardPoolMap = useMemo(() => {
     return (cardPoolEntries as any[]).reduce((result: Record<string, number>, entry: any) => {
       result[entry.card_id] = entry.quantity;
@@ -266,6 +280,7 @@ export default function DeckbuilderPage({
   const [showCardImage, setShowCardImage] = useState(false);
   const [onlyLegalCards, setOnlyLegalCards] = useState(false);
   const [onlyCardsInPool, setOnlyCardsInPool] = useState(false);
+  const [showPoolWarnings, setShowPoolWarnings] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [previewImageLabel, setPreviewImageLabel] = useState<string>('');
 
@@ -564,6 +579,44 @@ export default function DeckbuilderPage({
     [sortedFilteredCards]
   );
 
+  const deckUsageByCard = useMemo(() => {
+    const usage: Record<string, { main: number; side: number; total: number }> = {};
+    Object.entries(mainboard).forEach(([cardId, qty]) => {
+      usage[cardId] = {
+        main: qty,
+        side: usage[cardId]?.side ?? 0,
+        total: qty + (usage[cardId]?.side ?? 0),
+      };
+    });
+    Object.entries(sideboard).forEach(([cardId, qty]) => {
+      usage[cardId] = {
+        main: usage[cardId]?.main ?? 0,
+        side: qty,
+        total: (usage[cardId]?.main ?? 0) + qty,
+      };
+    });
+    return usage;
+  }, [mainboard, sideboard]);
+
+  const poolViolations = useMemo(() => {
+    const violations: Array<{
+      card_id: string;
+      used: number;
+      pool: number;
+      reason: 'missing' | 'excess';
+    }> = [];
+    Object.entries(deckUsageByCard).forEach(([cardId, usage]) => {
+      if (usage.total <= 0) return;
+      const poolQty = cardPoolMap[cardId] ?? 0;
+      if (poolQty <= 0) {
+        violations.push({ card_id: cardId, used: usage.total, pool: 0, reason: 'missing' });
+      } else if (usage.total > poolQty) {
+        violations.push({ card_id: cardId, used: usage.total, pool: poolQty, reason: 'excess' });
+      }
+    });
+    return violations;
+  }, [deckUsageByCard, cardPoolMap]);
+
   async function addToPool(cardId: string, nextQuantity: number) {
     if (!hasTournament) return;
     await upsertCardPoolEntry(
@@ -609,6 +662,14 @@ export default function DeckbuilderPage({
 
   async function onSaveDeck() {
     if (!hasTournament || leaderCard == null || baseCard == null) return;
+    if (poolViolations.length > 0) {
+      const missingCount = poolViolations.filter((item) => item.reason === 'missing').length;
+      const excessCount = poolViolations.filter((item) => item.reason === 'excess').length;
+      const proceed = window.confirm(
+        `This deck has ${poolViolations.length} card-pool issue(s): ${missingCount} missing card(s) and ${excessCount} over-limit card(s). Do you want to proceed?`
+      );
+      if (!proceed) return;
+    }
 
     await saveDeck(activeTournamentId, {
       user_id: targetUserId ?? undefined,
@@ -643,14 +704,67 @@ export default function DeckbuilderPage({
     if (!hasTournament) return;
     try {
       const parsed = JSON.parse(swudbImportJson);
-      const leader = parsed.leader?.id ?? parsed.leader;
-      const base = parsed.base?.id ?? parsed.base;
-      const deck = Array.isArray(parsed.deck) ? parsed.deck : [];
-      const sideboard = Array.isArray(parsed.sideboard) ? parsed.sideboard : [];
+      const resolveCardId = (rawId: unknown) => {
+        const asString = String(rawId ?? '').trim();
+        if (asString === '') return '';
+        const mapped = cardIdByLookupKey[normalizeCardIdLookupKey(asString)];
+        return mapped ?? asString;
+      };
+      const sanitizeEntries = (entries: unknown) =>
+        (Array.isArray(entries) ? entries : [])
+          .map((entry: any) => {
+            const id = resolveCardId(entry?.id);
+            const count = Number(entry?.count ?? 0);
+            return {
+              id,
+              count: Number.isFinite(count) ? Math.max(0, Math.trunc(count)) : 0,
+            };
+          })
+          .filter((entry) => entry.id !== '' && entry.count > 0);
+
+      const leader = resolveCardId(parsed?.leader?.id ?? parsed?.leader);
+      const base = resolveCardId(parsed?.base?.id ?? parsed?.base);
+      if (leader === '' || base === '') {
+        showNotification({
+          color: 'red',
+          title: 'Import failed',
+          message: 'Missing leader or base in SWUDB JSON.',
+        });
+        return;
+      }
+
+      const deck = sanitizeEntries(parsed?.deck);
+      const sideboard = sanitizeEntries(parsed?.sideboard);
+      const importedName =
+        String(parsed?.metadata?.name ?? parsed?.name ?? '').trim() ||
+        `Imported Deck ${new Date().toISOString()}`;
+
+      setDeckName(importedName);
+      setLeaderCardId(leader);
+      setBaseCardId(base);
+      setMainboard(
+        deck.reduce(
+          (result: Record<string, number>, entry: { id: string; count: number }) => ({
+            ...result,
+            [entry.id]: entry.count,
+          }),
+          {}
+        )
+      );
+      setSideboard(
+        sideboard.reduce(
+          (result: Record<string, number>, entry: { id: string; count: number }) => ({
+            ...result,
+            [entry.id]: entry.count,
+          }),
+          {}
+        )
+      );
+
       await importDeckSwuDb(activeTournamentId, {
         user_id: targetUserId ?? undefined,
         season_id: selectedSeasonNumber ?? undefined,
-        name: parsed.name ?? `Imported Deck ${new Date().toISOString()}`,
+        name: importedName,
         leader,
         base,
         deck,
@@ -1055,6 +1169,11 @@ export default function DeckbuilderPage({
                     checked={showCardImage}
                     onChange={(event) => setShowCardImage(event.currentTarget.checked)}
                   />
+                  <Switch
+                    label="Highlight pool issues in deck (red missing, yellow over limit)"
+                    checked={showPoolWarnings}
+                    onChange={(event) => setShowPoolWarnings(event.currentTarget.checked)}
+                  />
                 </Group>
 
                 <ScrollArea h={500}>
@@ -1128,15 +1247,28 @@ export default function DeckbuilderPage({
                             {sortIndicatorFor('pool')}
                           </Group>
                         </Table.Th>
+                        <Table.Th>Main</Table.Th>
+                        <Table.Th>Side</Table.Th>
                         <Table.Th></Table.Th>
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
                       {visibleFilteredCards.map((card: CardItem) => {
                         const currentQty = cardPoolMap[card.card_id] ?? 0;
+                        const mainQty = mainboard[card.card_id] ?? 0;
+                        const sideQty = sideboard[card.card_id] ?? 0;
+                        const totalQty = mainQty + sideQty;
                         const cardIsLeaderOrBase = isLeaderOrBase(card);
+                        const rowHighlightColor =
+                          showPoolWarnings && totalQty > 0
+                            ? currentQty <= 0
+                              ? 'rgba(255, 0, 0, 0.12)'
+                              : totalQty > currentQty
+                                ? 'rgba(255, 215, 0, 0.20)'
+                                : undefined
+                            : undefined;
                         return (
-                          <Table.Tr key={card.card_id}>
+                          <Table.Tr key={card.card_id} style={rowHighlightColor ? { backgroundColor: rowHighlightColor } : undefined}>
                             {showCardImage && (
                               <Table.Td>
                                 {card.image_url != null ? (
@@ -1195,6 +1327,8 @@ export default function DeckbuilderPage({
                                 }}
                               />
                             </Table.Td>
+                            <Table.Td>{mainQty}</Table.Td>
+                            <Table.Td>{sideQty}</Table.Td>
                             <Table.Td>
                               <Group gap={4} justify="flex-end">
                                 <ActionIcon
@@ -1304,8 +1438,22 @@ export default function DeckbuilderPage({
                       )}
                       {deckRows.map((row) => {
                         const card = cardsById[row.card_id];
+                        const usage = deckUsageByCard[row.card_id];
+                        const totalQty = usage?.total ?? row.qty;
+                        const poolQty = cardPoolMap[row.card_id] ?? 0;
+                        const rowHighlightColor =
+                          showPoolWarnings && totalQty > 0
+                            ? poolQty <= 0
+                              ? 'rgba(255, 0, 0, 0.12)'
+                              : totalQty > poolQty
+                                ? 'rgba(255, 215, 0, 0.20)'
+                                : undefined
+                            : undefined;
                         return (
-                          <Table.Tr key={`${row.side}-${row.card_id}`}>
+                          <Table.Tr
+                            key={`${row.side}-${row.card_id}`}
+                            style={rowHighlightColor ? { backgroundColor: rowHighlightColor } : undefined}
+                          >
                             <Table.Td>{row.side}</Table.Td>
                             <Table.Td>{row.qty}</Table.Td>
                             <Table.Td>
@@ -1348,6 +1496,11 @@ export default function DeckbuilderPage({
                 <Button onClick={onSaveDeck} disabled={leaderCardId == null || baseCardId == null}>
                   Save Deck
                 </Button>
+                {poolViolations.length > 0 && (
+                  <Text size="sm" c="yellow">
+                    Save warning: {poolViolations.length} card-pool issue(s) detected ({poolViolations.filter((item) => item.reason === 'missing').length} missing, {poolViolations.filter((item) => item.reason === 'excess').length} over limit).
+                  </Text>
+                )}
                 {isAdmin ? (
                   <Button
                     variant="outline"
