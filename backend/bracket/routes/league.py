@@ -2,6 +2,7 @@ import io
 import csv
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from heliclockter import datetime_utc
 from starlette.responses import Response
 from starlette import status
 
@@ -30,6 +31,7 @@ from bracket.routes.models import (
     LeagueCardPoolEntriesResponse,
     LeagueDeckResponse,
     LeagueDecksResponse,
+    LeagueRecalculateResponse,
     LeagueSeasonHistoryResponse,
     LeagueSeasonStandingsResponse,
     LeagueSeasonDraftResponse,
@@ -70,7 +72,7 @@ from bracket.utils.id_types import DeckId, TournamentId, UserId
 from bracket.utils.logging import logger
 from bracket.sql.tournaments import sql_get_tournament, sql_update_tournament
 from bracket.models.db.tournament import TournamentUpdateBody
-from bracket.sql.players import recalculate_tournament_records
+from bracket.sql.players import ensure_tournament_records_fresh, recalculate_tournament_records
 
 router = APIRouter(prefix=config.api_prefix)
 
@@ -112,7 +114,7 @@ async def get_season_standings(
     tournament_id: TournamentId,
     _: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueSeasonStandingsResponse:
-    await recalculate_tournament_records(tournament_id)
+    await ensure_tournament_records_fresh(tournament_id)
     season = await get_or_create_active_season(tournament_id)
     standings = await get_league_standings(tournament_id, season.id)
     return LeagueSeasonStandingsResponse(data=standings)
@@ -126,7 +128,7 @@ async def get_season_history(
     tournament_id: TournamentId,
     _: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueSeasonHistoryResponse:
-    await recalculate_tournament_records(tournament_id)
+    await ensure_tournament_records_fresh(tournament_id)
     seasons = await get_seasons_for_tournament(tournament_id)
     season_views = []
     for season in seasons:
@@ -193,7 +195,7 @@ async def list_decks(
     season_id: int | None = Query(default=None),
     user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueDecksResponse:
-    await recalculate_tournament_records(tournament_id)
+    await ensure_tournament_records_fresh(tournament_id)
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
     season = await resolve_season_for_tournament(tournament_id, season_id)
     if user_id is None:
@@ -206,6 +208,27 @@ async def list_decks(
 
     return LeagueDecksResponse(
         data=await get_decks(season.id, user_id, only_admin_users=has_admin_access)
+    )
+
+
+@router.post(
+    "/tournaments/{tournament_id}/league/recalculate_records",
+    response_model=LeagueRecalculateResponse,
+)
+async def post_recalculate_records(
+    tournament_id: TournamentId,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueRecalculateResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+
+    duration_ms = await recalculate_tournament_records(tournament_id)
+    return LeagueRecalculateResponse(
+        data={
+            "success": True,
+            "recalculated_at": datetime_utc.now().isoformat(),
+            "duration_ms": duration_ms,
+        }
     )
 
 

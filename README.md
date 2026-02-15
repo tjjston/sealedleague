@@ -168,7 +168,7 @@ ENVIRONMENT=DEVELOPMENT uv run gunicorn \
   -k bracket.uvicorn.RestartableUvicornWorker \
   bracket.app:app \
   --bind localhost:8400 \
-  --workers 1 \
+  --workers 2 \
   --reload
 
 # Frontend
@@ -208,7 +208,20 @@ uv run ./cli.py register-user
 ### App feels frozen or blank on pages
 
 - Check logs: `docker compose logs sealedleague --tail=200`
-- If worker timeouts repeat, rebuild/restart the app container
+- If worker timeouts repeat, verify worker config in `docker-compose.yml`:
+  - `GUNICORN_CMD_ARGS` should include `--workers 2`
+  - Keep `--timeout 120` during local debugging of heavy endpoints
+- Rebuild/restart after config or image changes:
+  - `docker compose up -d --build --force-recreate sealedleague`
+
+### Timeout and latency runbook
+
+- Watch timeout errors:
+  - `docker compose logs sealedleague --tail=200 | rg "WORKER TIMEOUT|SIGKILL|SIGABRT"`
+- Sample API latency metrics:
+  - `curl -s http://localhost:8400/api/metrics | rg "bracket_response_time\\{.*(season_history|season_standings)"`
+- Force an admin recalc when standings look stale:
+  - `POST /api/tournaments/{id}/league/recalculate_records`
 
 ### Slow first card loads
 

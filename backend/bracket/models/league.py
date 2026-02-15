@@ -192,6 +192,12 @@ class LeagueSeasonHistoryView(BaseModel):
     cumulative: list[LeagueStandingsRow] = Field(default_factory=list)
 
 
+class LeagueRecalculateView(BaseModel):
+    success: bool = True
+    recalculated_at: str
+    duration_ms: int = 0
+
+
 class LeagueAdminUserView(BaseModel):
     user_id: UserId
     user_name: str

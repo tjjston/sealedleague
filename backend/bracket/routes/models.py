@@ -13,6 +13,7 @@ from bracket.models.league import (
     LeagueDeckView,
     LeagueSeasonDraftView,
     LeagueSeasonHistoryView,
+    LeagueRecalculateView,
     LeagueTournamentApplicationView,
     LeagueStandingsRow,
     LeaguePlayerCareerProfile,
@@ -161,6 +162,10 @@ class LeagueSeasonStandingsResponse(DataResponse[list[LeagueStandingsRow]]):
 
 
 class LeagueSeasonHistoryResponse(DataResponse[LeagueSeasonHistoryView]):
+    pass
+
+
+class LeagueRecalculateResponse(DataResponse[LeagueRecalculateView]):
     pass
 
 

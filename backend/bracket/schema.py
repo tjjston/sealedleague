@@ -1,4 +1,4 @@
-from sqlalchemy import Column, ForeignKey, Integer, String, Table, UniqueConstraint, func
+from sqlalchemy import Column, ForeignKey, Index, Integer, String, Table, UniqueConstraint, func
 from sqlalchemy.orm import declarative_base  # type: ignore[attr-defined]
 from sqlalchemy.sql.sqltypes import JSON, BigInteger, Boolean, DateTime, Enum, Float, Text
 
@@ -62,6 +62,14 @@ season_tournaments = Table(
     Column("season_id", BigInteger, ForeignKey("seasons.id", ondelete="CASCADE"), index=True, nullable=False),
     Column("tournament_id", BigInteger, ForeignKey("tournaments.id", ondelete="CASCADE"), index=True, nullable=False),
     UniqueConstraint("season_id", "tournament_id"),
+)
+
+tournament_record_cache_state = Table(
+    "tournament_record_cache_state",
+    metadata,
+    Column("tournament_id", BigInteger, ForeignKey("tournaments.id", ondelete="CASCADE"), primary_key=True),
+    Column("last_recalculated", DateTimeTZ, nullable=True),
+    Column("updated", DateTimeTZ, nullable=False, server_default=func.now()),
 )
 
 season_memberships = Table(
@@ -205,7 +213,7 @@ rounds = Table(
     Column("name", Text, nullable=False),
     Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
     Column("is_draft", Boolean, nullable=False),
-    Column("stage_item_id", BigInteger, ForeignKey("stage_items.id"), nullable=False),
+    Column("stage_item_id", BigInteger, ForeignKey("stage_items.id"), nullable=False, index=True),
 )
 
 
@@ -219,9 +227,9 @@ matches = Table(
     Column("margin_minutes", Integer, nullable=True),
     Column("custom_duration_minutes", Integer, nullable=True),
     Column("custom_margin_minutes", Integer, nullable=True),
-    Column("round_id", BigInteger, ForeignKey("rounds.id"), nullable=False),
-    Column("stage_item_input1_id", BigInteger, ForeignKey("stage_item_inputs.id"), nullable=True),
-    Column("stage_item_input2_id", BigInteger, ForeignKey("stage_item_inputs.id"), nullable=True),
+    Column("round_id", BigInteger, ForeignKey("rounds.id"), nullable=False, index=True),
+    Column("stage_item_input1_id", BigInteger, ForeignKey("stage_item_inputs.id"), nullable=True, index=True),
+    Column("stage_item_input2_id", BigInteger, ForeignKey("stage_item_inputs.id"), nullable=True, index=True),
     Column("stage_item_input1_conflict", Boolean, nullable=False),
     Column("stage_item_input2_conflict", Boolean, nullable=False),
     Column(
@@ -272,6 +280,11 @@ players = Table(
     Column("losses", Integer, nullable=False),
     Column("active", Boolean, nullable=False, index=True, server_default="t"),
 )
+Index(
+    "ix_players_tournament_id_name_normalized",
+    players.c.tournament_id,
+    func.lower(func.trim(players.c.name)),
+)
 
 users = Table(
     "users",
@@ -321,8 +334,8 @@ players_x_teams = Table(
     "players_x_teams",
     metadata,
     Column("id", BigInteger, primary_key=True, index=True),
-    Column("player_id", BigInteger, ForeignKey("players.id", ondelete="CASCADE"), nullable=False),
-    Column("team_id", BigInteger, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False),
+    Column("player_id", BigInteger, ForeignKey("players.id", ondelete="CASCADE"), nullable=False, index=True),
+    Column("team_id", BigInteger, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True),
 )
 
 courts = Table(

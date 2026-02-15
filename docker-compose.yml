@@ -14,7 +14,7 @@ services:
         condition: service_healthy
     environment:
       ENVIRONMENT: DEVELOPMENT
-      GUNICORN_CMD_ARGS: --log-level warning --timeout 120 --graceful-timeout 30 --keep-alive 5
+      GUNICORN_CMD_ARGS: --workers 2 --log-level warning --timeout 120 --graceful-timeout 30 --keep-alive 5 --max-requests 1000 --max-requests-jitter 100
       CORS_ORIGINS: http://localhost:8400
       PG_DSN: postgresql://sealedleague_dev:sealedleague_dev@postgres:5432/sealedleague_dev
       JWT_SECRET: sealedleague-local-dev-secret-0123456789abcdef

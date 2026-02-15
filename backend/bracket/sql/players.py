@@ -1,14 +1,20 @@
+import time
 from decimal import Decimal
 
-from heliclockter import datetime_utc
+from heliclockter import datetime_utc, timedelta
 
+from bracket.config import config
 from bracket.database import database
 from bracket.logic.ranking.statistics import START_ELO
 from bracket.models.db.player import Player, PlayerBody, PlayerToInsert
 from bracket.schema import players
 from bracket.utils.id_types import PlayerId, TournamentId
+from bracket.utils.logging import logger
 from bracket.utils.pagination import PaginationPlayers
 from bracket.utils.types import dict_without_none
+
+_RECORDS_RECALC_WARN_MS = 3_000
+_RECORDS_RECALC_LOCK_SALT = 2_740_142_607_033_214_976
 
 
 async def get_all_players_in_tournament(
@@ -113,8 +119,85 @@ async def insert_player(player_body: PlayerBody, tournament_id: TournamentId) ->
     )
 
 
-async def recalculate_tournament_records(tournament_id: TournamentId) -> None:
+def _records_recalc_lock_key(tournament_id: TournamentId) -> int:
+    return _RECORDS_RECALC_LOCK_SALT + int(tournament_id)
+
+
+def _records_cache_is_fresh(last_recalculated: datetime_utc | None) -> bool:
+    if last_recalculated is None:
+        return False
+    max_age_seconds = max(int(config.records_recalc_max_age_seconds), 0)
+    if max_age_seconds <= 0:
+        return False
+    return (datetime_utc.now() - last_recalculated) < timedelta(seconds=max_age_seconds)
+
+
+async def _get_last_recalculated(tournament_id: TournamentId) -> datetime_utc | None:
+    row = await database.fetch_one(
+        """
+        SELECT last_recalculated
+        FROM tournament_record_cache_state
+        WHERE tournament_id = :tournament_id
+        """,
+        values={"tournament_id": tournament_id},
+    )
+    if row is None:
+        return None
+    return row._mapping["last_recalculated"]
+
+
+async def _set_tournament_records_recalculated_now(tournament_id: TournamentId) -> datetime_utc:
+    recalculated_at = datetime_utc.now()
+    await database.execute(
+        """
+        INSERT INTO tournament_record_cache_state (tournament_id, last_recalculated, updated)
+        VALUES (:tournament_id, :last_recalculated, :updated)
+        ON CONFLICT (tournament_id)
+        DO UPDATE
+        SET
+            last_recalculated = EXCLUDED.last_recalculated,
+            updated = EXCLUDED.updated
+        """,
+        values={
+            "tournament_id": tournament_id,
+            "last_recalculated": recalculated_at,
+            "updated": recalculated_at,
+        },
+    )
+    return recalculated_at
+
+
+async def _try_acquire_recalc_advisory_lock(tournament_id: TournamentId) -> bool:
+    lock_acquired = await database.fetch_val(
+        "SELECT pg_try_advisory_xact_lock(:lock_key)",
+        values={"lock_key": _records_recalc_lock_key(tournament_id)},
+    )
+    return bool(lock_acquired)
+
+
+async def ensure_tournament_records_fresh(tournament_id: TournamentId) -> bool:
+    last_recalculated = await _get_last_recalculated(tournament_id)
+    if _records_cache_is_fresh(last_recalculated):
+        return False
+
     async with database.transaction():
+        if not await _try_acquire_recalc_advisory_lock(tournament_id):
+            return False
+
+        last_recalculated = await _get_last_recalculated(tournament_id)
+        if _records_cache_is_fresh(last_recalculated):
+            return False
+
+        await recalculate_tournament_records(tournament_id, manage_transaction=False)
+        return True
+
+
+async def recalculate_tournament_records(
+    tournament_id: TournamentId, *, manage_transaction: bool = True
+) -> int:
+    started_at = time.monotonic()
+
+    async def recalculate_inside_transaction() -> None:
         await database.execute(
             """
             WITH played_matches AS (
@@ -160,58 +243,24 @@ async def recalculate_tournament_records(tournament_id: TournamentId) -> None:
                     SUM(losses) AS losses
                 FROM team_match_rows
                 GROUP BY team_id
+            ),
+            scoped_team_stats AS (
+                SELECT
+                    t.id AS team_id,
+                    ts.wins,
+                    ts.draws,
+                    ts.losses
+                FROM teams t
+                LEFT JOIN team_stats ts ON ts.team_id = t.id
+                WHERE t.tournament_id = :tournament_id
             )
             UPDATE teams t
             SET
-                wins = COALESCE(ts.wins, 0),
-                draws = COALESCE(ts.draws, 0),
-                losses = COALESCE(ts.losses, 0)
-            FROM team_stats ts
-            WHERE t.id = ts.team_id
-              AND t.tournament_id = :tournament_id
-            """,
-            values={"tournament_id": tournament_id},
-        )
-
-        await database.execute(
-            """
-            UPDATE teams t
-            SET wins = 0, draws = 0, losses = 0
-            WHERE t.tournament_id = :tournament_id
-              AND t.id NOT IN (
-                SELECT DISTINCT team_id
-                FROM (
-                    SELECT sii1.team_id AS team_id
-                    FROM matches m
-                    JOIN rounds r ON r.id = m.round_id
-                    JOIN stage_items si ON si.id = r.stage_item_id
-                    JOIN stages s ON s.id = si.stage_id
-                    JOIN stage_item_inputs sii1 ON sii1.id = m.stage_item_input1_id
-                    JOIN stage_item_inputs sii2 ON sii2.id = m.stage_item_input2_id
-                    WHERE s.tournament_id = :tournament_id
-                      AND sii1.team_id IS NOT NULL
-                      AND sii2.team_id IS NOT NULL
-                      AND NOT (
-                        m.stage_item_input1_score = 0
-                        AND m.stage_item_input2_score = 0
-                      )
-                    UNION ALL
-                    SELECT sii2.team_id AS team_id
-                    FROM matches m
-                    JOIN rounds r ON r.id = m.round_id
-                    JOIN stage_items si ON si.id = r.stage_item_id
-                    JOIN stages s ON s.id = si.stage_id
-                    JOIN stage_item_inputs sii1 ON sii1.id = m.stage_item_input1_id
-                    JOIN stage_item_inputs sii2 ON sii2.id = m.stage_item_input2_id
-                    WHERE s.tournament_id = :tournament_id
-                      AND sii1.team_id IS NOT NULL
-                      AND sii2.team_id IS NOT NULL
-                      AND NOT (
-                        m.stage_item_input1_score = 0
-                        AND m.stage_item_input2_score = 0
-                      )
-                ) played_team_ids
-              )
+                wins = COALESCE(sts.wins, 0),
+                draws = COALESCE(sts.draws, 0),
+                losses = COALESCE(sts.losses, 0)
+            FROM scoped_team_stats sts
+            WHERE t.id = sts.team_id
             """,
             values={"tournament_id": tournament_id},
         )
@@ -243,3 +292,19 @@ async def recalculate_tournament_records(tournament_id: TournamentId) -> None:
             """,
             values={"tournament_id": tournament_id},
         )
+        await _set_tournament_records_recalculated_now(tournament_id)
+
+    if manage_transaction:
+        async with database.transaction():
+            await recalculate_inside_transaction()
+    else:
+        await recalculate_inside_transaction()
+
+    duration_ms = int((time.monotonic() - started_at) * 1000)
+    if duration_ms >= _RECORDS_RECALC_WARN_MS:
+        logger.warning(
+            "Tournament record recalculation was slow: tournament_id=%s duration_ms=%s",
+            int(tournament_id),
+            duration_ms,
+        )
+    return duration_ms

@@ -257,10 +257,12 @@ export function getUserCardCatalog(query: string, limit: number = 100): SWRRespo
 }
 
 export function getUserMediaCatalog(query: string, limit: number = 25): SWRResponse<any> {
-  const params = new URLSearchParams();
-  if (query.trim() !== '') {
-    params.set('query', query.trim());
+  const normalized = query.trim();
+  if (normalized.length < 2) {
+    return useSWR(null, fetcher);
   }
+  const params = new URLSearchParams();
+  params.set('query', normalized);
   params.set('limit', String(limit));
   return useSWR(`users/media_catalog?${params.toString()}`, fetcher, {
     revalidateOnFocus: false,

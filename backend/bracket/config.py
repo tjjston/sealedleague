@@ -43,6 +43,7 @@ class Config(BaseSettings):
     serve_frontend: bool = False
     api_prefix: str = ""
     omdb_api_key: str | None = None
+    records_recalc_max_age_seconds: int = 60
 
     def is_cors_enabled(self) -> bool:
         return self.cors_origins != "*"

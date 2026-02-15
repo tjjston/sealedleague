@@ -468,6 +468,9 @@ async def get_media_catalog(
     limit: int = Query(default=25, ge=1, le=100),
 ) -> MediaCatalogResponse:
     normalized_query = (query or "").strip().lower()
+    if normalized_query == "":
+        return MediaCatalogResponse(data=_search_star_wars_media_fallback("", limit))
+
     fallback = _search_star_wars_media_fallback(normalized_query, max(limit * 4, 100))
     swapi_films = await _get_swapi_films_cached()
     filtered_swapi_films = [

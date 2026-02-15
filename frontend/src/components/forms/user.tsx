@@ -88,7 +88,7 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setFavoriteMediaSearch(favoriteMediaSearchInput.trim());
-    }, 250);
+    }, 400);
     return () => window.clearTimeout(timeoutId);
   }, [favoriteMediaSearchInput]);
 
