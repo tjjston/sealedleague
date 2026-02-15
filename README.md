@@ -1,23 +1,72 @@
 # Sealed League
 
-Sealed League is a customized fork of [evroon/bracket](https://github.com/evroon/bracket) focused on running league-style play for sealed deck formats (including Star Wars Unlimited workflows).
+Sealed League is a customized fork of [evroon/bracket](https://github.com/evroon/bracket) focused on running Star Wars Unlimited league play:
 
-It keeps Bracket's tournament management foundation and adds league-specific features like season standings, sealed draft simulation, card-pool tracking, and deck submission/deckbuilding flows.
+- seasonal card pools
+- deckbuilding from card pools
+- tournament deck submissions
+- season standings and card-pool draft rotation
+- player career profiles and league admin tools
 
-## What this repo includes
+## What Is In This Repo
 
-- Backend: FastAPI + async Python (`backend/`)
-- Frontend: React + Vite + Mantine (`frontend/`)
-- Dockerized app + Postgres for local/dev deployment (`docker-compose.yml`)
-- League APIs and pages for:
-- season standings/history
-- card pool management
-- deck save/import/submission
-- sealed draft simulation
+- `backend/`: FastAPI app, SQL layer, league logic, migrations, seed tooling
+- `frontend/`: React + Vite + Mantine UI
+- `docker-compose.yml`: local app + Postgres stack
+- `backend/scripts/seed_league_sample_data.py`: sample seasons/users/events/decks generator
 
-## Quick Start (Docker)
+## Core Features
 
-Run the full stack with Docker Compose:
+### Deckbuilder
+
+- Search + filters across card metadata
+- Sortable table columns
+- Card pool quantity editing
+- Deck/sideboard quantity tracking
+- SWUDB JSON import/export
+- Card-pool validation highlights + save confirmation
+- Multiple saved decks per user per season (deck-name based)
+
+### Tournament Entries
+
+- Users submit saved decks from `Entries`
+- Users see current submission + submitted players/decks
+- Users see next opponent when event is active
+
+### Players And Profiles
+
+- Player directory shows avatar, current leader, tournaments won/placed, card totals, favorite media, and weapon icon
+- Player profile shows overall record, season records, most-used aspects, and favorite card
+
+### Seasons
+
+- Create/set active/edit/delete seasons (admin)
+- Season standings + cumulative standings
+- Season card-pool draft rotation page (admin)
+
+### Results
+
+- Match result entry by admin or participating players
+- Elimination bracket view + champions summary
+
+### Account Settings
+
+- Edit Details tab includes name/email/password/language
+- Profile tab includes favorite card/media/avatar/weapon icon
+
+## Roles And Permissions
+
+- `ADMIN` users can manage clubs/tournaments/seasons/admin tools.
+- `USER` (regular) users can use deckbuilder, view players, submit tournament decks, and report eligible match results.
+- Demo account creation is disabled in this project (`ALLOW_DEMO_USER_REGISTRATION=false` by default in compose).
+
+## Quick Start (Docker, Recommended)
+
+### Prerequisites
+
+- Docker + Docker Compose
+
+### Start
 
 ```bash
 docker compose up -d --build
@@ -27,50 +76,44 @@ App URL:
 
 - `http://localhost:8400`
 
-Default local credentials from `docker-compose.yml`:
+Default admin credentials from `docker-compose.yml`:
 
-- Admin email: `admin@sealedleague.local`
-- Admin password: `change-me-now`
+- email: `admin@sealedleague.local`
+- password: `change-me-now`
 
-Important: change these values before using this outside local development.
+Change these before using outside local dev.
 
-Useful commands:
+### Useful Docker Commands
 
 ```bash
 # Follow logs
 docker compose logs -f sealedleague
 
+# Restart app only
+docker compose up -d --force-recreate sealedleague
+
 # Stop stack
 docker compose down
 
-# Stop stack and remove DB volume
+# Stop + remove DB volume
 docker compose down -v
 ```
 
-## Seed sample league data
+## First-Time Setup Flow (UI)
 
-Create a fresh active season plus a synthetic previous season (for draft order/card-base testing):
+1. Sign in as admin.
+2. Go to `Clubs` and create/select your club.
+3. Create a tournament tied to that club.
+4. Go to `League Admin` / `Season Standings` and create or activate the season you want.
+5. Users register accounts (or admin creates users), then build decks in `Deckbuilder`.
+6. Users submit decks in the tournament `Entries` page.
+7. Admin schedules rounds/stages and runs events.
 
-```bash
-docker compose exec sealedleague sh -lc "\
-  cd /app && \
-  PYTHONPATH=/app uv run --no-dev --locked \
-  python scripts/seed_league_sample_data.py --tournament-id 5 \
-"
-```
+## Seed Sample Data (Recommended For Testing)
 
-Optional season name:
+This script creates sample users, seasons, card pools, decks, weekly events, and finals.
 
-```bash
-docker compose exec sealedleague sh -lc "\
-  cd /app && \
-  PYTHONPATH=/app uv run --no-dev --locked \
-  python scripts/seed_league_sample_data.py --tournament-id 5 --season-name 'Season Sample Seed' \
-"
-```
-
-Create 10 sample users, set their password, generate 120-card pools/decks, and seed a "Season 1"
-dataset with 3 weekly round-robin events plus a Swiss + single-elimination finals:
+### Command
 
 ```bash
 docker compose exec sealedleague sh -lc "\
@@ -84,27 +127,39 @@ docker compose exec sealedleague sh -lc "\
 "
 ```
 
-## Development (without Docker)
+Notes:
+
+- `--tournament-id` must exist.
+- If you need a different tournament, create one in UI first and use that ID.
+- Tournament ID is visible in the URL when you open a tournament, e.g. `/tournaments/5/...`.
+- Sample users created as: `sample.player.01@sealedleague.local` ... `sample.player.10@sealedleague.local`
+
+## SWUDB Import Notes
+
+Deckbuilder import supports typical SWUDB JSON shape, including:
+
+- `metadata.name`
+- `leader.id`
+- `base.id`
+- `deck[]` and `sideboard[]`
+
+Import updates current deck state (name, leader, base, mainboard, sideboard) and saves it.
+
+## Local Development (Without Docker)
 
 Prerequisites:
 
-- Python 3.12+
-- `uv`
+- Python + `uv`
 - Node.js + `pnpm`
 - PostgreSQL
 
-Run frontend + backend together:
+### Run both frontend and backend
 
 ```bash
 ./run.sh
 ```
 
-This starts:
-
-- Frontend dev server (Vite)
-- Backend on `http://localhost:8400`
-
-You can also run each service separately:
+### Run separately
 
 ```bash
 # Backend
@@ -122,46 +177,46 @@ pnpm install
 pnpm run dev
 ```
 
-## Database and helper commands
+## Backend Helper Commands
 
 From `backend/`:
 
 ```bash
-# Seed a development database
+# Create development DB
 uv run ./cli.py create-dev-db
 
-# Generate OpenAPI JSON
+# Generate OpenAPI file
 uv run ./cli.py generate-openapi
 
-# Register a user interactively
+# Register user interactively
 uv run ./cli.py register-user
-```
 
-## Quality checks
-
-From `backend/`:
-
-```bash
-# Formatting + type checks used in this repo
+# Formatting/type checks
 ./check.sh
 
-# Full precommit pipeline (lint/tests/openapi generation)
+# Full local precommit pipeline
 ./precommit.sh
 ```
 
-## Project layout
+## Troubleshooting
 
-```text
-backend/    FastAPI app, SQL models, league logic, tests
-frontend/   React/Vite UI and league pages
-docs/       Documentation site content
-Dockerfile  Production-style image (builds frontend, serves via backend)
-docker-compose.yml  Local stack (app + postgres)
-```
+### Browser shows stale UI after code changes
 
-## Upstream
+- Run `docker compose up -d --force-recreate sealedleague`
+- Hard refresh browser (`Ctrl+Shift+R`)
 
-This project is based on `evroon/bracket` and retains AGPL-3.0 licensing.
+### App feels frozen or blank on pages
 
-- Upstream repo: <https://github.com/evroon/bracket>
-- License: [AGPL-3.0](LICENSE)
+- Check logs: `docker compose logs sealedleague --tail=200`
+- If worker timeouts repeat, rebuild/restart the app container
+
+### Slow first card loads
+
+- First request warms card caches; later loads should be faster
+- Ensure Docker has enough memory/CPU
+
+## Upstream And License
+
+Based on [evroon/bracket](https://github.com/evroon/bracket).
+
+License: [AGPL-3.0](LICENSE)
