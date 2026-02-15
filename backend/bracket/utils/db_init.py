@@ -116,8 +116,21 @@ async def init_db_when_empty() -> UserId | None:
     table_count = await database.fetch_val(
         "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
     )
+    users_table_exists = (
+        await database.fetch_val(
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public'
+                  AND table_name = 'users'
+            )
+            """
+        )
+        is True
+    )
     admin_exists = False
-    if config.admin_email:
+    if config.admin_email and users_table_exists:
         admin_exists = (
             await database.fetch_val(
                 "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
@@ -125,16 +138,25 @@ async def init_db_when_empty() -> UserId | None:
             )
             is True
         )
+    should_bootstrap = (table_count <= 1 and environment != Environment.CI) or (
+        environment is Environment.DEVELOPMENT and (not users_table_exists or not admin_exists)
+    )
     if config.admin_email and config.admin_password:
-        if (table_count <= 1 and environment != Environment.CI) or (
-            environment is Environment.DEVELOPMENT and not admin_exists
-        ):
+        if should_bootstrap:
             logger.warning("Empty db detected, creating tables...")
             metadata.create_all(engine)
             alembic_stamp_head()
 
-            logger.warning("Empty db detected, creating admin user...")
-            return await create_admin_user()
+            admin_exists_after_create = (
+                await database.fetch_val(
+                    "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
+                    values={"email": config.admin_email},
+                )
+                is True
+            )
+            if not admin_exists_after_create:
+                logger.warning("Empty db detected, creating admin user...")
+                return await create_admin_user()
 
     return None
 

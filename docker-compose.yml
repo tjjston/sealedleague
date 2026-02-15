@@ -10,7 +10,8 @@ services:
   sealedleague:
     container_name: sealedleague-app
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       ENVIRONMENT: DEVELOPMENT
       GUNICORN_CMD_ARGS: --log-level warning --timeout 120 --graceful-timeout 30 --keep-alive 5
@@ -42,6 +43,11 @@ services:
       POSTGRES_PASSWORD: sealedleague_dev
       POSTGRES_USER: sealedleague_dev
     image: postgres:16
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sealedleague_dev -d sealedleague_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
     networks:
       - sealedleague_lan
     restart: always
