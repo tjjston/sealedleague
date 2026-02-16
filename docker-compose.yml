@@ -28,7 +28,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: sealedleague/local:dev
+      pull: true
+    image: tjjston/sealedleague:latest .
     networks:
       - sealedleague_lan
     ports:
@@ -38,6 +39,7 @@ services:
       - sealedleague_static_data:/app/static
 
   postgres:
+    pull_policy: always
     environment:
       POSTGRES_DB: sealedleague_dev
       POSTGRES_PASSWORD: sealedleague_dev
