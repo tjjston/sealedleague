@@ -13,7 +13,13 @@ from bracket.models.league import (
     LeagueAdminUserView,
     LeagueFavoriteCard,
     LeagueDistributionBucket,
+    LeagueCommunicationUpsertBody,
+    LeagueCommunicationUpdateBody,
+    LeagueCommunicationView,
     LeaguePlayerCareerProfile,
+    LeagueProjectedScheduleItemUpsertBody,
+    LeagueProjectedScheduleItemUpdateBody,
+    LeagueProjectedScheduleItemView,
     LeagueSeasonDraftCardBase,
     LeagueSeasonDraftOrderItem,
     LeagueSeasonDraftView,
@@ -248,14 +254,13 @@ async def get_league_standings(
             )
         """
     )
-    query = """
-        WITH tournament_users AS (
-            SELECT DISTINCT u.id, u.name, u.email
-            FROM tournaments t
-            JOIN users_x_clubs uxc ON uxc.club_id = t.club_id
-            JOIN users u ON u.id = uxc.user_id
-            WHERE t.id = :tournament_id
-        ),
+    live_cte = ""
+    live_join = ""
+    live_group_by = ""
+    live_points_expression = "0"
+    if include_live_points:
+        live_cte = f"""
+        ,
         live_match_points AS (
             SELECT
                 tu.id AS user_id,
@@ -268,6 +273,22 @@ async def get_league_standings(
                AND lower(trim(p.name)) = lower(trim(tu.name))
             GROUP BY tu.id
         )
+        """
+        live_join = """
+        LEFT JOIN live_match_points lmp
+            ON lmp.user_id = tu.id
+        """
+        live_group_by = "lmp.live_points,\n            "
+        live_points_expression = "COALESCE(lmp.live_points, 0)"
+    query = """
+        WITH tournament_users AS (
+            SELECT DISTINCT u.id, u.name, u.email
+            FROM tournaments t
+            JOIN users_x_clubs uxc ON uxc.club_id = t.club_id
+            JOIN users u ON u.id = uxc.user_id
+            WHERE t.id = :tournament_id
+        )
+        {live_cte}
         SELECT
             tu.id AS user_id,
             tu.name AS user_name,
@@ -326,13 +347,12 @@ async def get_league_standings(
         LEFT JOIN season_points_ledger spl
             ON spl.user_id = tu.id
             {season_filter}
-        LEFT JOIN live_match_points lmp
-            ON lmp.user_id = tu.id
+        {live_join}
         GROUP BY
             tu.id,
             tu.name,
             tu.email,
-            lmp.live_points,
+            {live_group_by}
             sm.role,
             sm.can_manage_points,
             sm.can_manage_tournaments
@@ -340,8 +360,10 @@ async def get_league_standings(
     """.format(
         membership_filter=membership_filter,
         season_filter=season_filter,
-        tournament_scope_filter=tournament_scope_filter,
-        live_points_expression="COALESCE(lmp.live_points, 0)" if include_live_points else "0",
+        live_cte=live_cte,
+        live_join=live_join,
+        live_group_by=live_group_by,
+        live_points_expression=live_points_expression,
     )
     values: dict[str, int] = {"tournament_id": tournament_id}
     if season_id is not None:
@@ -1507,6 +1529,326 @@ async def upsert_tournament_application(
     )
 
 
+async def _get_league_communication_by_id(
+    tournament_id: TournamentId, communication_id: int
+) -> LeagueCommunicationView | None:
+    row = await database.fetch_one(
+        """
+        SELECT
+            lc.id,
+            lc.tournament_id,
+            lc.kind,
+            lc.title,
+            lc.body,
+            lc.pinned,
+            lc.created_by_user_id,
+            u.name AS created_by_user_name,
+            lc.created,
+            lc.updated
+        FROM league_communications lc
+        LEFT JOIN users u ON u.id = lc.created_by_user_id
+        WHERE lc.tournament_id = :tournament_id
+          AND lc.id = :communication_id
+        """,
+        values={"tournament_id": int(tournament_id), "communication_id": int(communication_id)},
+    )
+    return LeagueCommunicationView.model_validate(dict(row._mapping)) if row is not None else None
+
+
+async def list_league_communications(tournament_id: TournamentId) -> list[LeagueCommunicationView]:
+    rows = await database.fetch_all(
+        """
+        SELECT
+            lc.id,
+            lc.tournament_id,
+            lc.kind,
+            lc.title,
+            lc.body,
+            lc.pinned,
+            lc.created_by_user_id,
+            u.name AS created_by_user_name,
+            lc.created,
+            lc.updated
+        FROM league_communications lc
+        LEFT JOIN users u ON u.id = lc.created_by_user_id
+        WHERE lc.tournament_id = :tournament_id
+        ORDER BY
+            CASE
+                WHEN lc.kind = 'ANNOUNCEMENT' THEN 0
+                WHEN lc.kind = 'RULE' THEN 1
+                ELSE 2
+            END ASC,
+            lc.pinned DESC,
+            lc.updated DESC,
+            lc.id DESC
+        """,
+        values={"tournament_id": int(tournament_id)},
+    )
+    return [LeagueCommunicationView.model_validate(dict(row._mapping)) for row in rows]
+
+
+async def create_league_communication(
+    tournament_id: TournamentId,
+    body: LeagueCommunicationUpsertBody,
+    created_by_user_id: UserId,
+) -> LeagueCommunicationView:
+    row = await database.fetch_one(
+        """
+        INSERT INTO league_communications (
+            tournament_id,
+            kind,
+            title,
+            body,
+            pinned,
+            created_by_user_id,
+            created,
+            updated
+        )
+        VALUES (
+            :tournament_id,
+            :kind,
+            :title,
+            :body,
+            :pinned,
+            :created_by_user_id,
+            :created,
+            :updated
+        )
+        RETURNING id
+        """,
+        values={
+            "tournament_id": int(tournament_id),
+            "kind": body.kind,
+            "title": body.title.strip(),
+            "body": body.body.strip(),
+            "pinned": bool(body.pinned),
+            "created_by_user_id": int(created_by_user_id),
+            "created": datetime_utc.now(),
+            "updated": datetime_utc.now(),
+        },
+    )
+    communication_id = int(assert_some(row)._mapping["id"])
+    return assert_some(await _get_league_communication_by_id(tournament_id, communication_id))
+
+
+async def update_league_communication(
+    tournament_id: TournamentId,
+    communication_id: int,
+    body: LeagueCommunicationUpdateBody,
+) -> LeagueCommunicationView | None:
+    payload = body.model_dump(exclude_unset=True)
+    values: dict[str, object] = {
+        "tournament_id": int(tournament_id),
+        "communication_id": int(communication_id),
+    }
+    set_clauses: list[str] = []
+
+    for field in ("kind", "title", "body", "pinned"):
+        if field not in payload:
+            continue
+        value = payload[field]
+        if field in {"title", "body"} and isinstance(value, str):
+            value = value.strip()
+        values[field] = value
+        set_clauses.append(f"{field} = :{field}")
+
+    if len(set_clauses) < 1:
+        return await _get_league_communication_by_id(tournament_id, communication_id)
+
+    values["updated"] = datetime_utc.now()
+    set_clauses.append("updated = :updated")
+
+    row = await database.fetch_one(
+        f"""
+        UPDATE league_communications
+        SET {", ".join(set_clauses)}
+        WHERE tournament_id = :tournament_id
+          AND id = :communication_id
+        RETURNING id
+        """,
+        values=values,
+    )
+    if row is None:
+        return None
+    return await _get_league_communication_by_id(tournament_id, int(row._mapping["id"]))
+
+
+async def delete_league_communication(tournament_id: TournamentId, communication_id: int) -> None:
+    await database.execute(
+        """
+        DELETE FROM league_communications
+        WHERE tournament_id = :tournament_id
+          AND id = :communication_id
+        """,
+        values={"tournament_id": int(tournament_id), "communication_id": int(communication_id)},
+    )
+
+
+async def _get_projected_schedule_item_by_id(
+    tournament_id: TournamentId, schedule_item_id: int
+) -> LeagueProjectedScheduleItemView | None:
+    row = await database.fetch_one(
+        """
+        SELECT
+            lps.id,
+            lps.tournament_id,
+            lps.round_label,
+            lps.starts_at,
+            lps.title,
+            lps.details,
+            lps.status,
+            lps.sort_order,
+            lps.created_by_user_id,
+            u.name AS created_by_user_name,
+            lps.created,
+            lps.updated
+        FROM league_projected_schedule_items lps
+        LEFT JOIN users u ON u.id = lps.created_by_user_id
+        WHERE lps.tournament_id = :tournament_id
+          AND lps.id = :schedule_item_id
+        """,
+        values={"tournament_id": int(tournament_id), "schedule_item_id": int(schedule_item_id)},
+    )
+    return LeagueProjectedScheduleItemView.model_validate(dict(row._mapping)) if row is not None else None
+
+
+async def list_projected_schedule_items(
+    tournament_id: TournamentId,
+) -> list[LeagueProjectedScheduleItemView]:
+    rows = await database.fetch_all(
+        """
+        SELECT
+            lps.id,
+            lps.tournament_id,
+            lps.round_label,
+            lps.starts_at,
+            lps.title,
+            lps.details,
+            lps.status,
+            lps.sort_order,
+            lps.created_by_user_id,
+            u.name AS created_by_user_name,
+            lps.created,
+            lps.updated
+        FROM league_projected_schedule_items lps
+        LEFT JOIN users u ON u.id = lps.created_by_user_id
+        WHERE lps.tournament_id = :tournament_id
+        ORDER BY lps.sort_order ASC, lps.starts_at ASC NULLS LAST, lps.id ASC
+        """,
+        values={"tournament_id": int(tournament_id)},
+    )
+    return [LeagueProjectedScheduleItemView.model_validate(dict(row._mapping)) for row in rows]
+
+
+async def create_projected_schedule_item(
+    tournament_id: TournamentId,
+    body: LeagueProjectedScheduleItemUpsertBody,
+    created_by_user_id: UserId,
+) -> LeagueProjectedScheduleItemView:
+    row = await database.fetch_one(
+        """
+        INSERT INTO league_projected_schedule_items (
+            tournament_id,
+            round_label,
+            starts_at,
+            title,
+            details,
+            status,
+            sort_order,
+            created_by_user_id,
+            created,
+            updated
+        )
+        VALUES (
+            :tournament_id,
+            :round_label,
+            :starts_at,
+            :title,
+            :details,
+            :status,
+            :sort_order,
+            :created_by_user_id,
+            :created,
+            :updated
+        )
+        RETURNING id
+        """,
+        values={
+            "tournament_id": int(tournament_id),
+            "round_label": (
+                body.round_label.strip()
+                if body.round_label is not None and body.round_label.strip() != ""
+                else None
+            ),
+            "starts_at": body.starts_at,
+            "title": body.title.strip(),
+            "details": body.details.strip() if body.details is not None else None,
+            "status": body.status.strip() if body.status is not None else None,
+            "sort_order": int(body.sort_order),
+            "created_by_user_id": int(created_by_user_id),
+            "created": datetime_utc.now(),
+            "updated": datetime_utc.now(),
+        },
+    )
+    schedule_item_id = int(assert_some(row)._mapping["id"])
+    return assert_some(await _get_projected_schedule_item_by_id(tournament_id, schedule_item_id))
+
+
+async def update_projected_schedule_item(
+    tournament_id: TournamentId,
+    schedule_item_id: int,
+    body: LeagueProjectedScheduleItemUpdateBody,
+) -> LeagueProjectedScheduleItemView | None:
+    payload = body.model_dump(exclude_unset=True)
+    values: dict[str, object] = {
+        "tournament_id": int(tournament_id),
+        "schedule_item_id": int(schedule_item_id),
+    }
+    set_clauses: list[str] = []
+
+    for field in ("round_label", "starts_at", "title", "details", "status", "sort_order"):
+        if field not in payload:
+            continue
+        value = payload[field]
+        if field in {"round_label", "title", "details", "status"} and isinstance(value, str):
+            value = value.strip()
+        if field in {"round_label", "details", "status"} and value == "":
+            value = None
+        values[field] = value
+        set_clauses.append(f"{field} = :{field}")
+
+    if len(set_clauses) < 1:
+        return await _get_projected_schedule_item_by_id(tournament_id, schedule_item_id)
+
+    values["updated"] = datetime_utc.now()
+    set_clauses.append("updated = :updated")
+
+    row = await database.fetch_one(
+        f"""
+        UPDATE league_projected_schedule_items
+        SET {", ".join(set_clauses)}
+        WHERE tournament_id = :tournament_id
+          AND id = :schedule_item_id
+        RETURNING id
+        """,
+        values=values,
+    )
+    if row is None:
+        return None
+    return await _get_projected_schedule_item_by_id(tournament_id, int(row._mapping["id"]))
+
+
+async def delete_projected_schedule_item(tournament_id: TournamentId, schedule_item_id: int) -> None:
+    await database.execute(
+        """
+        DELETE FROM league_projected_schedule_items
+        WHERE tournament_id = :tournament_id
+          AND id = :schedule_item_id
+        """,
+        values={"tournament_id": int(tournament_id), "schedule_item_id": int(schedule_item_id)},
+    )
+
+
 async def get_tournament_applications(
     tournament_id: TournamentId,
     user_id: UserId | None = None,
@@ -1567,16 +1909,33 @@ async def user_is_league_admin(tournament_id: TournamentId, user_id: UserId) -> 
 
 
 async def delete_league_data_for_tournament(tournament_id: TournamentId) -> None:
-    query = """
-        DELETE FROM seasons
-        WHERE tournament_id = :tournament_id
-           OR id IN (
-                SELECT season_id
-                FROM season_tournaments
-                WHERE tournament_id = :tournament_id
-           )
-    """
-    await database.execute(query=query, values={"tournament_id": tournament_id})
+    async with database.transaction():
+        await database.execute(
+            """
+            DELETE FROM league_communications
+            WHERE tournament_id = :tournament_id
+            """,
+            values={"tournament_id": tournament_id},
+        )
+        await database.execute(
+            """
+            DELETE FROM league_projected_schedule_items
+            WHERE tournament_id = :tournament_id
+            """,
+            values={"tournament_id": tournament_id},
+        )
+        await database.execute(
+            """
+            DELETE FROM seasons
+            WHERE tournament_id = :tournament_id
+               OR id IN (
+                    SELECT season_id
+                    FROM season_tournaments
+                    WHERE tournament_id = :tournament_id
+               )
+            """,
+            values={"tournament_id": tournament_id},
+        )
 
 
 async def get_user_season_records(user_id: UserId, user_name: str) -> list[LeagueSeasonRecord]:

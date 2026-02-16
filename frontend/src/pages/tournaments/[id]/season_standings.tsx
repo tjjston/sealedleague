@@ -4,14 +4,13 @@ import {
   Card,
   FileInput,
   Group,
-  Select,
   Stack,
   Table,
   Text,
   TextInput,
   Title,
 } from '@mantine/core';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { showNotification } from '@mantine/notifications';
 
 import { getTournamentIdFromRouter } from '@components/utils/util';
@@ -57,33 +56,41 @@ export default function SeasonStandingsPage({
   const swrAdminUsersResponse = getLeagueAdminUsers(activeTournamentId);
   const swrAdminSeasonsResponse = getLeagueAdminSeasons(activeTournamentId);
   const isAdmin = swrAdminUsersResponse.data != null || swrAdminSeasonsResponse.data != null;
-  const seasons = swrStandingsResponse.data?.data?.seasons ?? [];
-  const adminSeasons = swrAdminSeasonsResponse.data?.data ?? [];
+  const seasons = swrStandingsResponse.data?.data?.seasons;
+  const adminSeasons = swrAdminSeasonsResponse.data?.data;
   const cumulativeRows = swrStandingsResponse.data?.data?.cumulative ?? [];
   const [importFile, setImportFile] = useState<File | null>(null);
   const [seasonName, setSeasonName] = useState('');
   const [seasonNameDrafts, setSeasonNameDrafts] = useState<Record<number, string>>({});
+  const [seasonExpanded, setSeasonExpanded] = useState<Record<number, boolean>>({});
+
+  const seasonRows = useMemo(
+    () =>
+      (adminSeasons != null && adminSeasons.length > 0
+        ? adminSeasons.map((season: any) => ({
+            season_id: Number(season.season_id),
+            season_name: String(season.name ?? ''),
+          }))
+        : (seasons ?? []).map((season: any) => ({
+            season_id: Number(season.season_id),
+            season_name: String(season.season_name ?? ''),
+          }))) as Array<{ season_id: number; season_name: string }>,
+    [adminSeasons, seasons]
+  );
 
   useEffect(() => {
-    const rows = (adminSeasons.length > 0
-      ? adminSeasons.map((season: any) => ({
-          season_id: Number(season.season_id),
-          season_name: String(season.name ?? ''),
-        }))
-      : seasons.map((season: any) => ({
-          season_id: Number(season.season_id),
-          season_name: String(season.season_name ?? ''),
-        }))) as Array<{ season_id: number; season_name: string }>;
     setSeasonNameDrafts((previous) => {
       const next = { ...previous };
-      rows.forEach((row) => {
+      let changed = false;
+      seasonRows.forEach((row) => {
         if (next[row.season_id] == null || next[row.season_id] === '') {
           next[row.season_id] = row.season_name;
+          changed = true;
         }
       });
-      return next;
+      return changed ? next : previous;
     });
-  }, [adminSeasons, seasons]);
+  }, [seasonRows]);
 
   function StandingsTable({ rows }: { rows: any[] }) {
     return (
@@ -180,13 +187,13 @@ export default function SeasonStandingsPage({
                   </Table.Tr>
                 </Table.Thead>
                 <Table.Tbody>
-                {(adminSeasons.length > 0
-                  ? adminSeasons.map((season: any) => ({
+                {((adminSeasons ?? []).length > 0
+                  ? (adminSeasons ?? []).map((season: any) => ({
                       season_id: season.season_id,
                       season_name: season.name,
                       is_active: season.is_active,
                     }))
-                  : seasons
+                  : (seasons ?? [])
                 ).map((season: any) => (
                   <Table.Tr key={season.season_id}>
                     <Table.Td>
@@ -282,65 +289,50 @@ export default function SeasonStandingsPage({
           </Stack>
         </Card>
       )}
-      {standalone && (
+      {standalone && isAdmin && (
         <Card withBorder>
           <Group align="end">
-            <Select
-              label="Tournament"
-              value={selectedTournamentId}
-              onChange={(value) => {
-                setSelectedTournamentId(value);
-                if (value != null) {
-                  window.localStorage.setItem('league_default_tournament_id', value);
-                }
-              }}
-              allowDeselect={false}
-              data={tournaments.map((t: any) => ({ value: String(t.id), label: t.name }))}
-              style={{ minWidth: 320 }}
-            />
-            {isAdmin && (
-              <Group>
-                <Button
-                  variant="outline"
-                  onClick={async () => {
-                    const response = await exportSeasonStandingsCsv(activeTournamentId);
-                    // @ts-ignore
-                    const csv = response?.data;
-                    if (csv == null) return;
-                    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-                    const url = window.URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.href = url;
-                    link.download = `season-standings-${activeTournamentId}.csv`;
-                    link.click();
-                    window.URL.revokeObjectURL(url);
-                  }}
-                >
-                  Export CSV
-                </Button>
-                <FileInput
-                  value={importFile}
-                  onChange={setImportFile}
-                  placeholder="Import standings CSV"
-                  accept=".csv,text/csv"
-                />
-                <Button
-                  onClick={async () => {
-                    if (importFile == null) return;
-                    await importSeasonStandingsCsv(activeTournamentId, importFile);
-                    await swrStandingsResponse.mutate();
-                    setImportFile(null);
-                    showNotification({
-                      color: 'green',
-                      title: 'Standings CSV imported',
-                      message: '',
-                    });
-                  }}
-                >
-                  Import CSV
-                </Button>
-              </Group>
-            )}
+            <Group>
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  const response = await exportSeasonStandingsCsv(activeTournamentId);
+                  // @ts-ignore
+                  const csv = response?.data;
+                  if (csv == null) return;
+                  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                  const url = window.URL.createObjectURL(blob);
+                  const link = document.createElement('a');
+                  link.href = url;
+                  link.download = `season-standings-${activeTournamentId}.csv`;
+                  link.click();
+                  window.URL.revokeObjectURL(url);
+                }}
+              >
+                Export CSV
+              </Button>
+              <FileInput
+                value={importFile}
+                onChange={setImportFile}
+                placeholder="Import standings CSV"
+                accept=".csv,text/csv"
+              />
+              <Button
+                onClick={async () => {
+                  if (importFile == null) return;
+                  await importSeasonStandingsCsv(activeTournamentId, importFile);
+                  await swrStandingsResponse.mutate();
+                  setImportFile(null);
+                  showNotification({
+                    color: 'green',
+                    title: 'Standings CSV imported',
+                    message: '',
+                  });
+                }}
+              >
+                Import CSV
+              </Button>
+            </Group>
           </Group>
         </Card>
       )}
@@ -350,13 +342,32 @@ export default function SeasonStandingsPage({
         </Title>
         <StandingsTable rows={cumulativeRows} />
       </Card>
-      {seasons.map((season: any) => (
+      {(seasons ?? []).map((season: any) => (
         <Card withBorder key={season.season_id}>
           <Group justify="space-between" mb="sm">
             <Title order={4}>{season.season_name}</Title>
-            {season.is_active && <Badge color="green">Active</Badge>}
+            <Group gap={8}>
+              {season.is_active && <Badge color="green">Active</Badge>}
+              <Button
+                size="xs"
+                variant="subtle"
+                onClick={() =>
+                  setSeasonExpanded((previous) => ({
+                    ...previous,
+                    [season.season_id]:
+                      !(previous[season.season_id] ?? Boolean(season.is_active)),
+                  }))
+                }
+              >
+                {(seasonExpanded[season.season_id] ?? Boolean(season.is_active))
+                  ? 'Hide standings'
+                  : 'Show standings'}
+              </Button>
+            </Group>
           </Group>
-          <StandingsTable rows={season.standings ?? []} />
+          {(seasonExpanded[season.season_id] ?? Boolean(season.is_active)) && (
+            <StandingsTable rows={season.standings ?? []} />
+          )}
         </Card>
       ))}
     </Stack>

@@ -20,7 +20,7 @@ from bracket.models.db.stage_item import StageItemCreateBody, StageType
 from bracket.models.db.team import TeamInsertable
 from bracket.models.db.tournament import TournamentBody
 from bracket.models.league import LeagueSeasonPrivilegesUpdateBody
-from bracket.schema import players_x_teams, teams, users, users_x_clubs
+from bracket.schema import clubs, players_x_teams, teams, users, users_x_clubs
 from bracket.sql.league import (
     create_season,
     ensure_user_registered_as_participant,
@@ -40,7 +40,7 @@ from bracket.sql.stage_items import (
     get_stage_item,
     sql_create_stage_item_with_empty_inputs,
 )
-from bracket.sql.tournaments import sql_create_tournament, sql_get_tournament
+from bracket.sql.tournaments import sql_create_tournament
 from bracket.utils.id_types import TournamentId, UserId
 from bracket.utils.league_cards import (
     DEFAULT_SWU_SET_CODES,
@@ -234,6 +234,93 @@ async def create_event_tournament(
     )
     tournament_id = await sql_create_tournament(tournament_body)
     await sql_create_ranking(tournament_id, RankingCreateBody(), position=0)
+    return tournament_id
+
+
+async def resolve_tournament_for_seed(requested_tournament_id: int | None) -> TournamentId:
+    if requested_tournament_id is not None:
+        tournament_exists = (
+            await database.fetch_val(
+                """
+                SELECT EXISTS(
+                    SELECT 1
+                    FROM tournaments
+                    WHERE id = :tournament_id
+                )
+                """,
+                values={"tournament_id": requested_tournament_id},
+            )
+            is True
+        )
+        if tournament_exists:
+            return TournamentId(requested_tournament_id)
+
+        existing = await database.fetch_all(
+            """
+            SELECT id, name
+            FROM tournaments
+            ORDER BY id ASC
+            LIMIT 25
+            """
+        )
+        existing_ids = [str(int(row._mapping["id"])) for row in existing]
+        if len(existing_ids) < 1:
+            raise ValueError(
+                f"Tournament {requested_tournament_id} not found and no tournaments exist yet. "
+                "Run without --tournament-id to auto-create a seed tournament."
+            )
+        raise ValueError(
+            f"Tournament {requested_tournament_id} not found. Existing tournament IDs: "
+            + ", ".join(existing_ids)
+        )
+
+    first_tournament_row = await database.fetch_one(
+        """
+        SELECT id
+        FROM tournaments
+        ORDER BY id ASC
+        LIMIT 1
+        """
+    )
+    if first_tournament_row is not None:
+        return TournamentId(int(first_tournament_row._mapping["id"]))
+
+    owner_row = await database.fetch_one(
+        """
+        SELECT id
+        FROM users
+        ORDER BY CASE WHEN account_type = 'ADMIN' THEN 0 ELSE 1 END, id ASC
+        LIMIT 1
+        """
+    )
+    if owner_row is None:
+        raise ValueError("No users found. Create an admin user before seeding sample data.")
+    owner_user_id = int(owner_row._mapping["id"])
+
+    created = datetime_utc.now()
+    club_id = await database.execute(
+        query=clubs.insert(),
+        values={
+            "name": f"Sample League Club {created.strftime('%Y-%m-%d %H:%M:%S')}",
+            "created": created,
+        },
+    )
+    await database.execute(
+        query=users_x_clubs.insert(),
+        values={
+            "club_id": int(club_id),
+            "user_id": owner_user_id,
+            "relation": "OWNER",
+        },
+    )
+
+    tournament_id = await create_event_tournament(
+        club_id=int(club_id),
+        name="Sample Seed Tournament",
+        start_time=created,
+        dashboard_suffix=created.strftime("%Y%m%d%H%M%S"),
+    )
+    print(f"Auto-created seed tournament: {int(tournament_id)}")
     return tournament_id
 
 
@@ -829,10 +916,17 @@ async def seed_for_tournament(
     sample_user_count: int,
     sample_password: str,
 ) -> None:
-    tournament = await sql_get_tournament(tournament_id)
+    tournament = await database.fetch_one(
+        """
+        SELECT id, club_id
+        FROM tournaments
+        WHERE id = :tournament_id
+        """,
+        values={"tournament_id": int(tournament_id)},
+    )
     if tournament is None:
         raise ValueError(f"Tournament {int(tournament_id)} not found")
-    club_id = int(tournament.club_id)
+    club_id = int(tournament._mapping["club_id"])
 
     participants = await ensure_sample_users_for_club(
         club_id=club_id,
@@ -1043,7 +1137,12 @@ async def async_main() -> None:
             "and season events with RR + Swiss/Single-Elim."
         )
     )
-    parser.add_argument("--tournament-id", type=int, required=True)
+    parser.add_argument(
+        "--tournament-id",
+        type=int,
+        default=None,
+        help="Tournament ID to seed. If omitted, first tournament is used or one is auto-created.",
+    )
     parser.add_argument("--season-name", type=str, default=None)
     parser.add_argument("--sample-users", type=int, default=10)
     parser.add_argument("--sample-password", type=str, default="sample-pass-123")
@@ -1054,8 +1153,9 @@ async def async_main() -> None:
 
     await database.connect()
     try:
+        tournament_id = await resolve_tournament_for_seed(args.tournament_id)
         await seed_for_tournament(
-            tournament_id=TournamentId(args.tournament_id),
+            tournament_id=tournament_id,
             target_season_name=args.season_name,
             sample_user_count=int(args.sample_users),
             sample_password=str(args.sample_password),

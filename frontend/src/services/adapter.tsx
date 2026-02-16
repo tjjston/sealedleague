@@ -389,6 +389,20 @@ export function getLeagueSeasonDraft(tournament_id: number | null): SWRResponse<
   return useSWR(`tournaments/${tournament_id}/league/admin/season_draft`, fetcher);
 }
 
+export function getLeagueCommunications(tournament_id: number | null): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  return useSWR(`tournaments/${tournament_id}/league/communications`, fetcher);
+}
+
+export function getLeagueProjectedSchedule(tournament_id: number | null): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  return useSWR(`tournaments/${tournament_id}/league/projected_schedule`, fetcher);
+}
+
 export function getTournamentApplications(
   tournament_id: number | null,
   scope: 'me' | 'all' | 'admin' = 'me'

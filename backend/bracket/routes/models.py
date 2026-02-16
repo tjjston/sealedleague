@@ -10,7 +10,9 @@ from bracket.models.league import (
     LeagueSeasonAdminView,
     LeagueAdminUserView,
     LeagueCardPoolEntryView,
+    LeagueCommunicationView,
     LeagueDeckView,
+    LeagueProjectedScheduleItemView,
     LeagueSeasonDraftView,
     LeagueSeasonHistoryView,
     LeagueRecalculateView,
@@ -194,4 +196,20 @@ class LeaguePlayerCareerProfileResponse(DataResponse[LeaguePlayerCareerProfile])
 
 
 class LeagueSeasonDraftResponse(DataResponse[LeagueSeasonDraftView]):
+    pass
+
+
+class LeagueCommunicationsResponse(DataResponse[list[LeagueCommunicationView]]):
+    pass
+
+
+class LeagueCommunicationResponse(DataResponse[LeagueCommunicationView]):
+    pass
+
+
+class LeagueProjectedScheduleResponse(DataResponse[list[LeagueProjectedScheduleItemView]]):
+    pass
+
+
+class LeagueProjectedScheduleItemResponse(DataResponse[LeagueProjectedScheduleItemView]):
     pass

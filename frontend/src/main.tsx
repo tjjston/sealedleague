@@ -25,15 +25,19 @@ import PasswordResetPage from './pages/password_reset';
 import LeagueDeckbuilderEntryPage from './pages/league/deckbuilder';
 import LeaguePlayersPage from './pages/league/players';
 import LeaguePlayerProfilePage from './pages/league/player_profile';
+import LeagueCommunicationsPage from './pages/league/communications';
+import LeagueProjectedSchedulePage from './pages/league/projected_schedule';
 import SealedDraftSimulationPage from './pages/league/sealed_draft';
 import LeagueSeasonDraftPage from './pages/league/season_draft';
 import LeagueSeasonStandingsEntryPage from './pages/league/season_standings';
+import TournamentCommunicationsPage from './pages/tournaments/[id]/communications';
 import DashboardSchedulePage from './pages/tournaments/[id]/dashboard';
 import DashboardNotFoundPage from './pages/tournaments/[id]/dashboard/dashboard_404';
 import CourtsPresentPage from './pages/tournaments/[id]/dashboard/present/courts';
 import StandingsPresentPage from './pages/tournaments/[id]/dashboard/present/standings';
 import DashboardStandingsPage from './pages/tournaments/[id]/dashboard/standings';
 import TournamentEntriesPage from './pages/tournaments/[id]/entries';
+import TournamentProjectedSchedulePage from './pages/tournaments/[id]/projected_schedule';
 import RankingsPage from './pages/tournaments/[id]/rankings';
 import ResultsPage from './pages/tournaments/[id]/results';
 import SchedulePage from './pages/tournaments/[id]/schedule';
@@ -95,6 +99,8 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/password-reset" element={<PasswordResetPage />} />
               <Route path="/create-account" element={<CreateAccountPage />} />
               <Route path="/league/deckbuilder" element={<LeagueDeckbuilderEntryPage />} />
+              <Route path="/league/communications" element={<LeagueCommunicationsPage />} />
+              <Route path="/league/projected_schedule" element={<LeagueProjectedSchedulePage />} />
               <Route path="/league/players" element={<LeaguePlayersPage />} />
               <Route path="/league/players/:user_id" element={<LeaguePlayerProfilePage />} />
               <Route path="/league/sealed-draft" element={<SealedDraftSimulationPage />} />
@@ -110,6 +116,11 @@ createRoot(document.getElementById('root')!).render(
                   <Route path="admin" element={<LeagueAdminPage />} />
                   <Route path="settings" element={<SettingsPage />} />
                   <Route path="results" element={<ResultsPage />} />
+                  <Route path="communications" element={<TournamentCommunicationsPage />} />
+                  <Route
+                    path="projected_schedule"
+                    element={<TournamentProjectedSchedulePage />}
+                  />
                   <Route path="stages">
                     <Route index element={<StagesPage />} />
                     <Route path="swiss/:stage_item_id" element={<SwissTournamentPage />} />

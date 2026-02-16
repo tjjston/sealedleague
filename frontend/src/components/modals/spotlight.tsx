@@ -39,6 +39,20 @@ export function BracketSpotlight() {
       leftSection: <IconUsersGroup size="1.2rem" />,
     },
     {
+      id: 'league notes',
+      title: 'League Notes',
+      description: 'View league notes and commissioner announcements',
+      onClick: () => navigate('/league/communications'),
+      leftSection: <IconChecklist size="1.2rem" />,
+    },
+    {
+      id: 'projected schedule',
+      title: 'Projected Schedule',
+      description: 'View projected league schedule',
+      onClick: () => navigate('/league/projected_schedule'),
+      leftSection: <IconCalendarEvent size="1.2rem" />,
+    },
+    {
       id: 'user settings',
       title: t('user_settings_title'),
       description: t('user_settings_spotlight_description'),
@@ -60,6 +74,13 @@ export function BracketSpotlight() {
       title: t('planning_title'),
       description: t('planning_spotlight_description'),
       onClick: () => navigate(`/tournaments/${tournamentId}/schedule`),
+      leftSection: <IconCalendarEvent size="1.2rem" />,
+    },
+    {
+      id: 'projected schedule tournament',
+      title: 'Projected Schedule',
+      description: 'View/edit projected schedule for this tournament',
+      onClick: () => navigate(`/tournaments/${tournamentId}/projected_schedule`),
       leftSection: <IconCalendarEvent size="1.2rem" />,
     },
     {

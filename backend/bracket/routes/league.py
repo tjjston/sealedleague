@@ -1,3 +1,4 @@
+import asyncio
 import io
 import csv
 
@@ -10,6 +11,10 @@ from bracket.config import config
 from bracket.models.db.user import UserPublic
 from bracket.models.league import (
     LeagueAwardAccoladeBody,
+    LeagueCommunicationUpdateBody,
+    LeagueCommunicationUpsertBody,
+    LeagueProjectedScheduleItemUpdateBody,
+    LeagueProjectedScheduleItemUpsertBody,
     LeagueSeasonCreateBody,
     LeagueSeasonDraftPickBody,
     LeagueSeasonPointAdjustmentBody,
@@ -24,6 +29,8 @@ from bracket.models.league import (
 )
 from bracket.routes.auth import is_admin_user, user_authenticated_for_tournament_member
 from bracket.routes.models import (
+    LeagueCommunicationResponse,
+    LeagueCommunicationsResponse,
     LeagueAdminSeasonsResponse,
     LeagueTournamentApplicationsResponse,
     LeagueUpcomingOpponentResponse,
@@ -33,13 +40,19 @@ from bracket.routes.models import (
     LeagueDecksResponse,
     LeagueRecalculateResponse,
     LeagueSeasonHistoryResponse,
+    LeagueProjectedScheduleItemResponse,
+    LeagueProjectedScheduleResponse,
     LeagueSeasonStandingsResponse,
     LeagueSeasonDraftResponse,
     SuccessResponse,
 )
 from bracket.sql.league import (
     apply_season_draft_pick,
+    create_league_communication,
+    create_projected_schedule_item,
     create_season,
+    delete_league_communication,
+    delete_projected_schedule_item,
     delete_season,
     delete_deck,
     ensure_user_registered_as_participant,
@@ -55,6 +68,8 @@ from bracket.sql.league import (
     get_or_create_season_by_name,
     get_or_create_active_season,
     get_tournament_ids_for_season,
+    list_league_communications,
+    list_projected_schedule_items,
     get_seasons_for_tournament,
     get_user_id_by_email,
     insert_accolade,
@@ -63,6 +78,8 @@ from bracket.sql.league import (
     set_team_logo_for_user_in_tournament,
     upsert_tournament_application,
     update_season,
+    update_league_communication,
+    update_projected_schedule_item,
     upsert_card_pool_entry,
     upsert_deck,
     upsert_season_membership,
@@ -130,18 +147,141 @@ async def get_season_history(
 ) -> LeagueSeasonHistoryResponse:
     await ensure_tournament_records_fresh(tournament_id)
     seasons = await get_seasons_for_tournament(tournament_id)
+    standings_results = await asyncio.gather(
+        *(get_league_standings(tournament_id, season.id) for season in seasons),
+        get_league_standings(tournament_id, None),
+    )
+    standings_by_season = standings_results[:-1]
+    cumulative = standings_results[-1]
     season_views = []
-    for season in seasons:
+    for season, season_standings in zip(seasons, standings_by_season, strict=False):
         season_views.append(
             {
                 "season_id": season.id,
                 "season_name": season.name,
                 "is_active": season.is_active,
-                "standings": await get_league_standings(tournament_id, season.id),
+                "standings": season_standings,
             }
         )
-    cumulative = await get_league_standings(tournament_id, None)
     return LeagueSeasonHistoryResponse(data={"seasons": season_views, "cumulative": cumulative})
+
+
+@router.get(
+    "/tournaments/{tournament_id}/league/communications",
+    response_model=LeagueCommunicationsResponse,
+)
+async def get_league_communications(
+    tournament_id: TournamentId,
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueCommunicationsResponse:
+    return LeagueCommunicationsResponse(data=await list_league_communications(tournament_id))
+
+
+@router.post(
+    "/tournaments/{tournament_id}/league/admin/communications",
+    response_model=LeagueCommunicationResponse,
+)
+async def post_league_communication(
+    tournament_id: TournamentId,
+    body: LeagueCommunicationUpsertBody,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueCommunicationResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    created = await create_league_communication(tournament_id, body, user_public.id)
+    return LeagueCommunicationResponse(data=created)
+
+
+@router.put(
+    "/tournaments/{tournament_id}/league/admin/communications/{communication_id}",
+    response_model=LeagueCommunicationResponse,
+)
+async def put_league_communication(
+    tournament_id: TournamentId,
+    communication_id: int,
+    body: LeagueCommunicationUpdateBody,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueCommunicationResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    updated = await update_league_communication(tournament_id, communication_id, body)
+    if updated is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Communication entry not found")
+    return LeagueCommunicationResponse(data=updated)
+
+
+@router.delete(
+    "/tournaments/{tournament_id}/league/admin/communications/{communication_id}",
+    response_model=SuccessResponse,
+)
+async def delete_admin_league_communication(
+    tournament_id: TournamentId,
+    communication_id: int,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> SuccessResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    await delete_league_communication(tournament_id, communication_id)
+    return SuccessResponse()
+
+
+@router.get(
+    "/tournaments/{tournament_id}/league/projected_schedule",
+    response_model=LeagueProjectedScheduleResponse,
+)
+async def get_projected_schedule(
+    tournament_id: TournamentId,
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueProjectedScheduleResponse:
+    return LeagueProjectedScheduleResponse(data=await list_projected_schedule_items(tournament_id))
+
+
+@router.post(
+    "/tournaments/{tournament_id}/league/admin/projected_schedule",
+    response_model=LeagueProjectedScheduleItemResponse,
+)
+async def post_projected_schedule_item(
+    tournament_id: TournamentId,
+    body: LeagueProjectedScheduleItemUpsertBody,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueProjectedScheduleItemResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    created = await create_projected_schedule_item(tournament_id, body, user_public.id)
+    return LeagueProjectedScheduleItemResponse(data=created)
+
+
+@router.put(
+    "/tournaments/{tournament_id}/league/admin/projected_schedule/{schedule_item_id}",
+    response_model=LeagueProjectedScheduleItemResponse,
+)
+async def put_projected_schedule_item(
+    tournament_id: TournamentId,
+    schedule_item_id: int,
+    body: LeagueProjectedScheduleItemUpdateBody,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueProjectedScheduleItemResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    updated = await update_projected_schedule_item(tournament_id, schedule_item_id, body)
+    if updated is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Projected schedule item not found")
+    return LeagueProjectedScheduleItemResponse(data=updated)
+
+
+@router.delete(
+    "/tournaments/{tournament_id}/league/admin/projected_schedule/{schedule_item_id}",
+    response_model=SuccessResponse,
+)
+async def delete_admin_projected_schedule_item(
+    tournament_id: TournamentId,
+    schedule_item_id: int,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> SuccessResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    await delete_projected_schedule_item(tournament_id, schedule_item_id)
+    return SuccessResponse()
 
 
 @router.get(

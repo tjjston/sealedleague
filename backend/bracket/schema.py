@@ -150,6 +150,36 @@ tournament_applications = Table(
     UniqueConstraint("tournament_id", "user_id"),
 )
 
+league_communications = Table(
+    "league_communications",
+    metadata,
+    Column("id", BigInteger, primary_key=True, index=True, autoincrement=True),
+    Column("tournament_id", BigInteger, ForeignKey("tournaments.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("kind", String, nullable=False, index=True),
+    Column("title", String, nullable=False),
+    Column("body", Text, nullable=False),
+    Column("pinned", Boolean, nullable=False, server_default="f", index=True),
+    Column("created_by_user_id", BigInteger, ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True),
+    Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
+    Column("updated", DateTimeTZ, nullable=False, server_default=func.now()),
+)
+
+league_projected_schedule_items = Table(
+    "league_projected_schedule_items",
+    metadata,
+    Column("id", BigInteger, primary_key=True, index=True, autoincrement=True),
+    Column("tournament_id", BigInteger, ForeignKey("tournaments.id", ondelete="CASCADE"), index=True, nullable=False),
+    Column("round_label", String, nullable=True),
+    Column("starts_at", DateTimeTZ, nullable=True, index=True),
+    Column("title", String, nullable=False),
+    Column("details", Text, nullable=True),
+    Column("status", String, nullable=True),
+    Column("sort_order", Integer, nullable=False, server_default="0", index=True),
+    Column("created_by_user_id", BigInteger, ForeignKey("users.id", ondelete="SET NULL"), index=True, nullable=True),
+    Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
+    Column("updated", DateTimeTZ, nullable=False, server_default=func.now()),
+)
+
 stages = Table(
     "stages",
     metadata,

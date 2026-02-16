@@ -1,4 +1,13 @@
-import { Button, FileInput, Image, Select, Tabs, Text, TextInput } from '@mantine/core';
+import {
+  Button,
+  FileInput,
+  Group,
+  Image,
+  Select,
+  Tabs,
+  Text,
+  TextInput,
+} from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { BiGlobe } from '@react-icons/all-files/bi/BiGlobe';
 import { IconHash, IconLogout, IconUser } from '@tabler/icons-react';
@@ -6,21 +15,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router';
 
 import { PasswordStrength } from '@components/utils/password';
+import {
+  getWeaponIconConfig,
+  WEAPON_ICON_OPTIONS,
+} from '@constants/weapon_icons';
 import { UserPublic } from '@openapi';
 import { performLogoutAndRedirect } from '@services/local_storage';
 import { getBaseApiUrl, getUserCardCatalog, getUserMediaCatalog } from '@services/adapter';
 import { updatePassword, updateUser, updateUserPreferences, uploadUserAvatar } from '@services/user';
-
-const WEAPON_ICON_OPTIONS = [
-  { value: 'blaster_pistol', label: '🔫 Blaster Pistol' },
-  { value: 'blaster_rifle', label: '🛡️ Blaster Rifle' },
-  { value: 'lightsaber_blue', label: '🔵 Blue Lightsaber' },
-  { value: 'lightsaber_red', label: '🔴 Red Lightsaber' },
-  { value: 'lightsaber_green', label: '🟢 Green Lightsaber' },
-  { value: 'lightsaber_purple', label: '🟣 Purple Lightsaber' },
-  { value: 'wrist_rockets', label: '🚀 Wrist Rockets' },
-  { value: 'electrostaff', label: '⚡ Electrostaff' },
-];
 
 export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; i18n: any }) {
   const navigate = useNavigate();
@@ -39,6 +41,7 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
     (user as any).favorite_media ?? null
   );
   const [weaponIcon, setWeaponIcon] = useState<string | null>((user as any).weapon_icon ?? null);
+  const selectedWeaponIcon = getWeaponIconConfig(weaponIcon);
   const [avatarUrl, setAvatarUrl] = useState<string>((user as any).avatar_url ?? '');
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const swrCardCatalogResponse = getUserCardCatalog(favoriteCardSearch, 120);
@@ -289,6 +292,36 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
           value={weaponIcon}
           onChange={setWeaponIcon}
           data={WEAPON_ICON_OPTIONS}
+          leftSection={
+            selectedWeaponIcon == null ? null : (
+              <img
+                src={selectedWeaponIcon.iconPath}
+                alt={selectedWeaponIcon.label}
+                width={18}
+                height={18}
+                style={{ objectFit: 'contain' }}
+              />
+            )
+          }
+          renderOption={({ option }) => {
+            const icon = getWeaponIconConfig(option.value);
+            return (
+              <Group gap={8} wrap="nowrap">
+                {icon != null ? (
+                  <img
+                    src={icon.iconPath}
+                    alt={icon.label}
+                    width={18}
+                    height={18}
+                    style={{ objectFit: 'contain' }}
+                  />
+                ) : null}
+                <Text size="sm">
+                  {icon?.fallbackSymbol ?? ''} {option.label}
+                </Text>
+              </Group>
+            );
+          }}
           nothingFoundMessage="No icons found"
         />
         <Text size="xs" c="dimmed" mt={4}>

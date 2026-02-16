@@ -2,6 +2,7 @@ import { Badge, Card, Group, Table, Text, Title } from '@mantine/core';
 import { useMemo } from 'react';
 
 import PreloadLink from '@components/utils/link';
+import { getWeaponIconConfig } from '@constants/weapon_icons';
 import RequestErrorAlert from '@components/utils/error_alert';
 import Layout from '@pages/_layout';
 import { checkForAuthError, getBaseApiUrl, getUserDirectory } from '@services/adapter';
@@ -21,27 +22,21 @@ type PlayerUser = {
   current_leader_image_url: string | null;
 };
 
-function getWeaponIconDisplay(weaponIcon: string | null) {
-  switch (weaponIcon) {
-    case 'blaster_pistol':
-      return { symbol: '🔫', label: 'Blaster Pistol' };
-    case 'blaster_rifle':
-      return { symbol: '🛡️', label: 'Blaster Rifle' };
-    case 'lightsaber_blue':
-      return { symbol: '🔵', label: 'Blue Lightsaber' };
-    case 'lightsaber_red':
-      return { symbol: '🔴', label: 'Red Lightsaber' };
-    case 'lightsaber_green':
-      return { symbol: '🟢', label: 'Green Lightsaber' };
-    case 'lightsaber_purple':
-      return { symbol: '🟣', label: 'Purple Lightsaber' };
-    case 'wrist_rockets':
-      return { symbol: '🚀', label: 'Wrist Rockets' };
-    case 'electrostaff':
-      return { symbol: '⚡', label: 'Electrostaff' };
-    default:
-      return { symbol: '-', label: 'Not selected' };
+function PlayerWeaponIcon({ weaponIcon }: { weaponIcon: string | null }) {
+  const config = getWeaponIconConfig(weaponIcon);
+  if (config == null) {
+    return <Text c="dimmed">-</Text>;
   }
+  return (
+    <img
+      src={config.iconPath}
+      alt={config.label}
+      title={config.label}
+      width={18}
+      height={18}
+      style={{ objectFit: 'contain' }}
+    />
+  );
 }
 
 export default function LeaguePlayersPage() {
@@ -78,9 +73,7 @@ export default function LeaguePlayersPage() {
                 <Table.Td>
                   <PreloadLink href={`/league/players/${user.user_id}`}>
                     <Group gap={6}>
-                      <Text title={getWeaponIconDisplay(user.weapon_icon).label}>
-                        {getWeaponIconDisplay(user.weapon_icon).symbol}
-                      </Text>
+                      <PlayerWeaponIcon weaponIcon={user.weapon_icon} />
                       <Text fw={600}>{user.user_name}</Text>
                     </Group>
                   </PreloadLink>

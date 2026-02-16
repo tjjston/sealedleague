@@ -82,6 +82,8 @@ export function getBaseLinksDict() {
 
   return [
     { link: '/dashboard', label: 'Dashboard', links: [], icon: IconHome },
+    { link: '/league/communications', label: 'League Notes', links: [], icon: IconChecklist },
+    { link: '/league/projected_schedule', label: 'Projected Schedule', links: [], icon: IconCalendar },
     { link: '/league/deckbuilder', label: 'Deckbuilder', links: [], icon: IconBrackets },
     { link: '/league/sealed-draft', label: 'Sealed Draft', links: [], icon: IconCards },
     { link: '/league/season-draft', label: 'Season Draft', links: [], icon: IconChecklist },
@@ -115,6 +117,16 @@ export function TournamentLinks({ tournament_id }: any) {
   const pathName = location.pathname.replace('[id]', tournament_id).replace(/\/+$/, '');
 
   const data = [
+    {
+      icon: IconChecklist,
+      label: 'League Notes',
+      link: `${tm_prefix}/communications`,
+    },
+    {
+      icon: IconCalendar,
+      label: 'Projected Schedule',
+      link: `${tm_prefix}/projected_schedule`,
+    },
     {
       icon: IconTrophy,
       label: capitalize(t('stage_title')),

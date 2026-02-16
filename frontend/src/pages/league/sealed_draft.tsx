@@ -564,16 +564,11 @@ export default function SealedDraftSimulationPage() {
               <Stack>
                 <Title order={4}>Build Deck</Title>
                 <TextInput label="Deck Name" value={deckName} onChange={(e) => setDeckName(e.currentTarget.value)} />
-                <Select
-                  label="Save To Tournament"
-                  value={selectedTournamentId}
-                  onChange={(value) => {
-                    setSelectedTournamentId(value);
-                    if (value != null) window.localStorage.setItem('league_default_tournament_id', value);
-                  }}
-                  data={tournaments.map((t: any) => ({ value: String(t.id), label: t.name }))}
-                  clearable
-                />
+                <Text size="sm" c="dimmed">
+                  Saving to:{' '}
+                  {tournaments.find((t: any) => String(t.id) === String(activeTournamentId))?.name ??
+                    'No tournament selected'}
+                </Text>
                 <Select searchable label="Leader" data={uniqueLeaderOptions} value={leaderCardId} onChange={setLeaderCardId} />
                 {leaderCard?.image_url != null && <Image src={leaderCard.image_url} h={130} fit="contain" radius="sm" />}
                 <Select searchable label="Base" data={uniqueBaseOptions} value={baseCardId} onChange={setBaseCardId} />

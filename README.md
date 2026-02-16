@@ -118,9 +118,7 @@ This script creates sample users, seasons, card pools, decks, weekly events, and
 ```bash
 docker compose exec sealedleague sh -lc "\
   cd /app && \
-  PYTHONPATH=/app uv run --no-dev --locked \
-  python scripts/seed_league_sample_data.py \
-    --tournament-id 5 \
+  PYTHONPATH=/app ./.venv/bin/python scripts/seed_league_sample_data.py \
     --season-name 'Season Sample Seed' \
     --sample-users 10 \
     --sample-password 'sample-pass-123' \
@@ -129,9 +127,9 @@ docker compose exec sealedleague sh -lc "\
 
 Notes:
 
-- `--tournament-id` must exist.
-- If you need a different tournament, create one in UI first and use that ID.
-- Tournament ID is visible in the URL when you open a tournament, e.g. `/tournaments/5/...`.
+- `--tournament-id` is optional now.
+- If omitted, the script uses the first tournament in DB, or auto-creates one if none exist.
+- You can still pass a specific tournament ID, e.g. `--tournament-id 5`.
 - Sample users created as: `sample.player.01@sealedleague.local` ... `sample.player.10@sealedleague.local`
 
 ## SWUDB Import Notes

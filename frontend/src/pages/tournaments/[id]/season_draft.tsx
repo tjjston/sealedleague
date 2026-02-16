@@ -102,24 +102,6 @@ export default function SeasonDraftPage({
         immediately previous season only.
       </Text>
 
-      {standalone && (
-        <Card withBorder>
-          <Select
-            label="Tournament"
-            value={selectedTournamentId}
-            onChange={(value) => {
-              setSelectedTournamentId(value);
-              if (value != null) {
-                window.localStorage.setItem('league_default_tournament_id', value);
-              }
-            }}
-            allowDeselect={false}
-            data={tournaments.map((t: any) => ({ value: String(t.id), label: t.name }))}
-            style={{ minWidth: 320 }}
-          />
-        </Card>
-      )}
-
       {swrDraftResponse.error && <RequestErrorAlert error={swrDraftResponse.error} />}
 
       {!swrDraftResponse.isLoading && draftData != null && draftData.from_season_id == null && (

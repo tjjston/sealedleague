@@ -158,6 +158,83 @@ export async function submitSeasonDraftPick(
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function createLeagueCommunication(
+  tournament_id: number,
+  body: {
+    kind: 'NOTE' | 'ANNOUNCEMENT' | 'RULE';
+    title: string;
+    body: string;
+    pinned?: boolean;
+  }
+) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/league/admin/communications`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function updateLeagueCommunication(
+  tournament_id: number,
+  communication_id: number,
+  body: {
+    kind?: 'NOTE' | 'ANNOUNCEMENT' | 'RULE';
+    title?: string;
+    body?: string;
+    pinned?: boolean;
+  }
+) {
+  return createAxios()
+    .put(`tournaments/${tournament_id}/league/admin/communications/${communication_id}`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function deleteLeagueCommunication(tournament_id: number, communication_id: number) {
+  return createAxios()
+    .delete(`tournaments/${tournament_id}/league/admin/communications/${communication_id}`)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function createProjectedScheduleItem(
+  tournament_id: number,
+  body: {
+    round_label?: string | null;
+    starts_at?: string | null;
+    title: string;
+    details?: string | null;
+    status?: string | null;
+    sort_order?: number;
+  }
+) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/league/admin/projected_schedule`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function updateProjectedScheduleItem(
+  tournament_id: number,
+  schedule_item_id: number,
+  body: {
+    round_label?: string | null;
+    starts_at?: string | null;
+    title?: string;
+    details?: string | null;
+    status?: string | null;
+    sort_order?: number;
+  }
+) {
+  return createAxios()
+    .put(`tournaments/${tournament_id}/league/admin/projected_schedule/${schedule_item_id}`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function deleteProjectedScheduleItem(
+  tournament_id: number,
+  schedule_item_id: number
+) {
+  return createAxios()
+    .delete(`tournaments/${tournament_id}/league/admin/projected_schedule/${schedule_item_id}`)
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function adjustSeasonUserPoints(
   tournament_id: number,
   season_id: number,

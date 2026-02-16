@@ -1,4 +1,5 @@
 import json
+from typing import Literal
 
 from heliclockter import datetime_utc
 from pydantic import BaseModel, Field, field_validator
@@ -328,6 +329,38 @@ class LeagueSeasonDraftPickBody(BaseModel):
     source_user_id: UserId
 
 
+class LeagueCommunicationUpsertBody(BaseModel):
+    kind: Literal["NOTE", "ANNOUNCEMENT", "RULE"]
+    title: str = Field(min_length=1, max_length=180)
+    body: str = Field(min_length=1, max_length=6000)
+    pinned: bool = False
+
+
+class LeagueCommunicationUpdateBody(BaseModel):
+    kind: Literal["NOTE", "ANNOUNCEMENT", "RULE"] | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=180)
+    body: str | None = Field(default=None, min_length=1, max_length=6000)
+    pinned: bool | None = None
+
+
+class LeagueProjectedScheduleItemUpsertBody(BaseModel):
+    round_label: str | None = Field(default=None, max_length=120)
+    starts_at: datetime_utc | None = None
+    title: str = Field(min_length=1, max_length=180)
+    details: str | None = Field(default=None, max_length=4000)
+    status: str | None = Field(default=None, max_length=80)
+    sort_order: int = Field(default=0, ge=0, le=1000)
+
+
+class LeagueProjectedScheduleItemUpdateBody(BaseModel):
+    round_label: str | None = Field(default=None, max_length=120)
+    starts_at: datetime_utc | None = None
+    title: str | None = Field(default=None, min_length=1, max_length=180)
+    details: str | None = Field(default=None, max_length=4000)
+    status: str | None = Field(default=None, max_length=80)
+    sort_order: int | None = Field(default=None, ge=0, le=1000)
+
+
 class LeagueTournamentApplicationView(BaseModel):
     user_id: UserId
     user_name: str
@@ -339,3 +372,31 @@ class LeagueTournamentApplicationView(BaseModel):
     deck_leader: str | None = None
     deck_base: str | None = None
     status: str
+
+
+class LeagueCommunicationView(BaseModel):
+    id: int
+    tournament_id: TournamentId
+    kind: Literal["NOTE", "ANNOUNCEMENT", "RULE"]
+    title: str
+    body: str
+    pinned: bool = False
+    created_by_user_id: UserId | None = None
+    created_by_user_name: str | None = None
+    created: datetime_utc
+    updated: datetime_utc
+
+
+class LeagueProjectedScheduleItemView(BaseModel):
+    id: int
+    tournament_id: TournamentId
+    round_label: str | None = None
+    starts_at: datetime_utc | None = None
+    title: str
+    details: str | None = None
+    status: str | None = None
+    sort_order: int = 0
+    created_by_user_id: UserId | None = None
+    created_by_user_name: str | None = None
+    created: datetime_utc
+    updated: datetime_utc
