@@ -25,28 +25,24 @@ from bracket.utils.league_cards import (
 router = APIRouter(prefix=config.api_prefix)
 
 
-@router.get("/tournaments/{tournament_id}/league/cards", response_model=LeagueCardsResponse)
-async def search_league_cards(
-    tournament_id: TournamentId,
-    _: UserPublic = Depends(user_authenticated_for_tournament_member),
-    query: str | None = Query(default=None, description="Search in name, rules text, and traits."),
-    set_code: list[str] | None = Query(
-        default=None, description="Filter by one or more set codes (e.g. sor, shd)."
-    ),
-    aspect: list[str] | None = Query(default=None, description="Require aspects to be present."),
-    trait: list[str] | None = Query(default=None, description="Require traits to be present."),
-    keyword: list[str] | None = Query(default=None, description="Require keywords to be present."),
-    arena: list[str] | None = Query(default=None, description="Require arenas to be present."),
-    card_type: str | None = Query(default=None, description="Exact type match."),
-    rarity: str | None = Query(default=None, description="Exact rarity match."),
-    name: str | None = Query(default=None, description="Search by card name."),
-    rules: str | None = Query(default=None, description="Search in rules text."),
-    cost: int | None = Query(default=None, ge=0, le=20, description="Exact card cost."),
-    cost_min: int | None = Query(default=None, ge=0, le=20, description="Minimum card cost."),
-    cost_max: int | None = Query(default=None, ge=0, le=20, description="Maximum card cost."),
-    unique: bool | None = Query(default=None, description="Filter unique vs non-unique cards."),
-    offset: int = Query(default=0, ge=0),
-    limit: int = Query(default=50, ge=1, le=5000),
+async def _search_cards_payload(
+    *,
+    query: str | None,
+    set_code: list[str] | None,
+    aspect: list[str] | None,
+    trait: list[str] | None,
+    keyword: list[str] | None,
+    arena: list[str] | None,
+    card_type: str | None,
+    rarity: str | None,
+    name: str | None,
+    rules: str | None,
+    cost: int | None,
+    cost_min: int | None,
+    cost_max: int | None,
+    unique: bool | None,
+    offset: int,
+    limit: int,
 ) -> LeagueCardsResponse:
     set_codes = set_code if set_code else list(DEFAULT_SWU_SET_CODES)
 
@@ -85,6 +81,92 @@ async def search_league_cards(
     )
 
 
+@router.get("/league/cards", response_model=LeagueCardsResponse)
+async def search_league_cards_global(
+    _: UserPublic = Depends(user_authenticated),
+    query: str | None = Query(default=None, description="Search in name, rules text, and traits."),
+    set_code: list[str] | None = Query(
+        default=None, description="Filter by one or more set codes (e.g. sor, shd)."
+    ),
+    aspect: list[str] | None = Query(default=None, description="Require aspects to be present."),
+    trait: list[str] | None = Query(default=None, description="Require traits to be present."),
+    keyword: list[str] | None = Query(default=None, description="Require keywords to be present."),
+    arena: list[str] | None = Query(default=None, description="Require arenas to be present."),
+    card_type: str | None = Query(default=None, description="Exact type match."),
+    rarity: str | None = Query(default=None, description="Exact rarity match."),
+    name: str | None = Query(default=None, description="Search by card name."),
+    rules: str | None = Query(default=None, description="Search in rules text."),
+    cost: int | None = Query(default=None, ge=0, le=20, description="Exact card cost."),
+    cost_min: int | None = Query(default=None, ge=0, le=20, description="Minimum card cost."),
+    cost_max: int | None = Query(default=None, ge=0, le=20, description="Maximum card cost."),
+    unique: bool | None = Query(default=None, description="Filter unique vs non-unique cards."),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=5000),
+) -> LeagueCardsResponse:
+    return await _search_cards_payload(
+        query=query,
+        set_code=set_code,
+        aspect=aspect,
+        trait=trait,
+        keyword=keyword,
+        arena=arena,
+        card_type=card_type,
+        rarity=rarity,
+        name=name,
+        rules=rules,
+        cost=cost,
+        cost_min=cost_min,
+        cost_max=cost_max,
+        unique=unique,
+        offset=offset,
+        limit=limit,
+    )
+
+
+@router.get("/tournaments/{tournament_id}/league/cards", response_model=LeagueCardsResponse)
+async def search_league_cards(
+    tournament_id: TournamentId,
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
+    query: str | None = Query(default=None, description="Search in name, rules text, and traits."),
+    set_code: list[str] | None = Query(
+        default=None, description="Filter by one or more set codes (e.g. sor, shd)."
+    ),
+    aspect: list[str] | None = Query(default=None, description="Require aspects to be present."),
+    trait: list[str] | None = Query(default=None, description="Require traits to be present."),
+    keyword: list[str] | None = Query(default=None, description="Require keywords to be present."),
+    arena: list[str] | None = Query(default=None, description="Require arenas to be present."),
+    card_type: str | None = Query(default=None, description="Exact type match."),
+    rarity: str | None = Query(default=None, description="Exact rarity match."),
+    name: str | None = Query(default=None, description="Search by card name."),
+    rules: str | None = Query(default=None, description="Search in rules text."),
+    cost: int | None = Query(default=None, ge=0, le=20, description="Exact card cost."),
+    cost_min: int | None = Query(default=None, ge=0, le=20, description="Minimum card cost."),
+    cost_max: int | None = Query(default=None, ge=0, le=20, description="Maximum card cost."),
+    unique: bool | None = Query(default=None, description="Filter unique vs non-unique cards."),
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=5000),
+) -> LeagueCardsResponse:
+    _ = tournament_id
+    return await _search_cards_payload(
+        query=query,
+        set_code=set_code,
+        aspect=aspect,
+        trait=trait,
+        keyword=keyword,
+        arena=arena,
+        card_type=card_type,
+        rarity=rarity,
+        name=name,
+        rules=rules,
+        cost=cost,
+        cost_min=cost_min,
+        cost_max=cost_max,
+        unique=unique,
+        offset=offset,
+        limit=limit,
+    )
+
+
 @router.post(
     "/tournaments/{tournament_id}/league/draft/simulate",
     response_model=LeagueDraftSimulationResponse,
@@ -95,8 +177,9 @@ async def simulate_draft(
     _: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueDraftSimulationResponse:
     set_codes = body.set_codes if body.set_codes else list(DEFAULT_SWU_SET_CODES)
+    fetch_set_codes = sorted({*set_codes, *DEFAULT_SWU_SET_CODES})
     try:
-        raw_cards = await asyncio.to_thread(fetch_swu_cards_cached, set_codes)
+        raw_cards = await asyncio.to_thread(fetch_swu_cards_cached, fetch_set_codes)
     except (URLError, HTTPError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -120,8 +203,9 @@ async def simulate_draft_global(
     _: UserPublic = Depends(user_authenticated),
 ) -> LeagueDraftSimulationResponse:
     set_codes = body.set_codes if body.set_codes else list(DEFAULT_SWU_SET_CODES)
+    fetch_set_codes = sorted({*set_codes, *DEFAULT_SWU_SET_CODES})
     try:
-        raw_cards = await asyncio.to_thread(fetch_swu_cards_cached, set_codes)
+        raw_cards = await asyncio.to_thread(fetch_swu_cards_cached, fetch_set_codes)
     except (URLError, HTTPError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

@@ -45,6 +45,7 @@ async def get_stages(
     tournament_id: TournamentId,
     user: UserPublic = Depends(user_authenticated_or_public_dashboard),
     no_draft_rounds: bool = False,
+    include_team_players: bool = False,
 ) -> StagesWithStageItemsResponse:
     if no_draft_rounds is False and user is None:
         raise HTTPException(
@@ -54,7 +55,11 @@ async def get_stages(
 
     try:
         stages_ = await asyncio.wait_for(
-            get_full_tournament_details(tournament_id, no_draft_rounds=no_draft_rounds),
+            get_full_tournament_details(
+                tournament_id,
+                no_draft_rounds=no_draft_rounds,
+                include_team_players=include_team_players,
+            ),
             timeout=45,
         )
     except TimeoutError as exc:

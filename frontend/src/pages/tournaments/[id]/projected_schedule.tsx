@@ -3,6 +3,7 @@ import {
   Card,
   Group,
   NumberInput,
+  Select,
   Stack,
   Table,
   Text,
@@ -14,15 +15,18 @@ import { showNotification } from '@mantine/notifications';
 import { useEffect, useMemo, useState } from 'react';
 
 import RequestErrorAlert from '@components/utils/error_alert';
+import PreloadLink from '@components/utils/link';
 import { getTournamentIdFromRouter } from '@components/utils/util';
 import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
 import {
   getLeagueAdminUsers,
   getLeagueProjectedSchedule,
+  getLeagueSeasons,
   getTournaments,
 } from '@services/adapter';
 import {
+  createProjectedScheduleEvent,
   createProjectedScheduleItem,
   deleteProjectedScheduleItem,
   updateProjectedScheduleItem,
@@ -68,6 +72,8 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
 
   const swrScheduleResponse = getLeagueProjectedSchedule(activeTournamentId);
   const swrAdminUsersResponse = getLeagueAdminUsers(activeTournamentId);
+  const swrSeasonsResponse = getLeagueSeasons(activeTournamentId);
+  const seasons = swrSeasonsResponse.data?.data ?? [];
   const isAdmin = swrAdminUsersResponse.data != null;
   const rows = useMemo(() => swrScheduleResponse.data?.data ?? [], [swrScheduleResponse.data]);
 
@@ -76,8 +82,15 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
   const [startsAt, setStartsAt] = useState('');
   const [title, setTitle] = useState('');
   const [details, setDetails] = useState('');
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState<'PLANNED' | 'OPEN' | 'IN_PROGRESS' | 'COMPLETED'>('PLANNED');
+  const [seasonId, setSeasonId] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<number>(0);
+  const [seriesWeeks, setSeriesWeeks] = useState<number>(1);
+
+  const [wizardSeasonId, setWizardSeasonId] = useState<string | null>(null);
+  const [wizardStartsAt, setWizardStartsAt] = useState('');
+  const [wizardRoundRobinWeeks, setWizardRoundRobinWeeks] = useState<number>(4);
+  const [wizardFinalStages, setWizardFinalStages] = useState('Swiss Finals, Top Cut');
 
   const resetForm = () => {
     setEditingId(null);
@@ -85,8 +98,10 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
     setStartsAt('');
     setTitle('');
     setDetails('');
-    setStatus('');
+    setStatus('PLANNED');
+    setSeasonId(null);
     setSortOrder(0);
+    setSeriesWeeks(1);
   };
 
   const startEdit = (row: any) => {
@@ -95,8 +110,15 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
     setStartsAt(toLocalInputValue(row.starts_at));
     setTitle(String(row.title ?? ''));
     setDetails(String(row.details ?? ''));
-    setStatus(String(row.status ?? ''));
+    const rawStatus = String(row.status ?? '').trim().toUpperCase();
+    if (rawStatus === 'OPEN' || rawStatus === 'IN_PROGRESS' || rawStatus === 'COMPLETED') {
+      setStatus(rawStatus);
+    } else {
+      setStatus('PLANNED');
+    }
+    setSeasonId(row.season_id != null ? String(row.season_id) : null);
     setSortOrder(Number(row.sort_order ?? 0));
+    setSeriesWeeks(1);
   };
 
   const content = (
@@ -148,12 +170,47 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
               onChange={(event) => setDetails(event.currentTarget.value)}
               placeholder="Expected timing and additional notes"
             />
-            <TextInput
-              label="Status"
-              value={status}
-              onChange={(event) => setStatus(event.currentTarget.value)}
-              placeholder="Planned / Open / In Progress / Completed"
-            />
+            <Group grow align="end">
+              <Select
+                label="Status"
+                value={status}
+                allowDeselect={false}
+                data={[
+                  { value: 'PLANNED', label: 'Planned' },
+                  { value: 'OPEN', label: 'Open' },
+                  { value: 'IN_PROGRESS', label: 'In Progress' },
+                  { value: 'COMPLETED', label: 'Completed' },
+                ]}
+                onChange={(value) => {
+                  if (value === 'OPEN' || value === 'IN_PROGRESS' || value === 'COMPLETED') {
+                    setStatus(value);
+                    return;
+                  }
+                  setStatus('PLANNED');
+                }}
+              />
+              <Select
+                label="Season (Optional)"
+                value={seasonId}
+                onChange={setSeasonId}
+                clearable
+                searchable
+                data={seasons.map((season: any) => ({
+                  value: String(season.season_id),
+                  label: `${season.name}${season.is_active ? ' (Active)' : ''}`,
+                }))}
+              />
+              {editingId == null && (
+                <NumberInput
+                  label="Repeat Weekly"
+                  value={seriesWeeks}
+                  onChange={(value) => setSeriesWeeks(Math.max(1, Number(value ?? 1)))}
+                  min={1}
+                  max={12}
+                  step={1}
+                />
+              )}
+            </Group>
             <Group>
               <Button
                 onClick={async () => {
@@ -163,14 +220,34 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
                     starts_at: startsAt.trim() === '' ? null : new Date(startsAt).toISOString(),
                     title: title.trim(),
                     details: details.trim() === '' ? null : details.trim(),
-                    status: status.trim() === '' ? null : status.trim(),
+                    status: status,
+                    season_id: seasonId == null || seasonId === '' ? null : Number(seasonId),
                     sort_order: Number(sortOrder ?? 0),
                   };
                   if (editingId == null) {
-                    await createProjectedScheduleItem(activeTournamentId, payload);
+                    const repeatCount = Math.max(1, Number(seriesWeeks ?? 1));
+                    const baseStartsAt = payload.starts_at == null ? null : new Date(payload.starts_at);
+                    for (let index = 0; index < repeatCount; index += 1) {
+                      const startsAtIso =
+                        baseStartsAt == null
+                          ? null
+                          : new Date(baseStartsAt.getTime() + index * 7 * 24 * 60 * 60 * 1000).toISOString();
+                      await createProjectedScheduleItem(activeTournamentId, {
+                        ...payload,
+                        starts_at: startsAtIso,
+                        title:
+                          repeatCount > 1
+                            ? `${payload.title} (Week ${index + 1})`
+                            : payload.title,
+                        sort_order: Number(sortOrder ?? 0) + index,
+                      });
+                    }
                     showNotification({
                       color: 'green',
-                      title: 'Schedule item created',
+                      title:
+                        repeatCount > 1
+                          ? `Created ${repeatCount} schedule items`
+                          : 'Schedule item created',
                       message: '',
                     });
                   } else {
@@ -197,15 +274,125 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
         </Card>
       )}
 
+      {isAdmin && (
+        <Card withBorder>
+          <Stack>
+            <Title order={4}>Season Schedule Helper</Title>
+            <Text c="dimmed" size="sm">
+              Quickly create a weekly round-robin block plus finals milestones.
+            </Text>
+            <Group grow align="end">
+              <Select
+                label="Season"
+                value={wizardSeasonId}
+                onChange={setWizardSeasonId}
+                clearable
+                searchable
+                data={seasons.map((season: any) => ({
+                  value: String(season.season_id),
+                  label: `${season.name}${season.is_active ? ' (Active)' : ''}`,
+                }))}
+              />
+              <TextInput
+                label="Start Time"
+                type="datetime-local"
+                value={wizardStartsAt}
+                onChange={(event) => setWizardStartsAt(event.currentTarget.value)}
+              />
+              <NumberInput
+                label="Round Robin Weeks"
+                value={wizardRoundRobinWeeks}
+                onChange={(value) =>
+                  setWizardRoundRobinWeeks(Math.max(1, Number(value ?? 1)))
+                }
+                min={1}
+                max={20}
+              />
+            </Group>
+            <TextInput
+              label="Finals Stages (comma separated)"
+              value={wizardFinalStages}
+              onChange={(event) => setWizardFinalStages(event.currentTarget.value)}
+              placeholder="Swiss Finals, Top Cut, Championship"
+            />
+            <Group>
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  if (activeTournamentId <= 0 || wizardStartsAt.trim() === '') return;
+                  const startDate = new Date(wizardStartsAt);
+                  if (Number.isNaN(startDate.getTime())) return;
+
+                  const seasonLabel =
+                    seasons.find((season: any) => String(season.season_id) === wizardSeasonId)?.name ??
+                    'Season';
+                  const seasonNumber =
+                    wizardSeasonId == null || wizardSeasonId === '' ? null : Number(wizardSeasonId);
+
+                  for (let week = 0; week < Math.max(1, Number(wizardRoundRobinWeeks ?? 1)); week += 1) {
+                    await createProjectedScheduleItem(activeTournamentId, {
+                      round_label: `Week ${week + 1}`,
+                      starts_at: new Date(
+                        startDate.getTime() + week * 7 * 24 * 60 * 60 * 1000
+                      ).toISOString(),
+                      title: `${seasonLabel} Round Robin - Week ${week + 1}`,
+                      details: null,
+                      status: 'PLANNED',
+                      season_id: seasonNumber,
+                      sort_order: week,
+                    });
+                  }
+
+                  const finalsStages = wizardFinalStages
+                    .split(',')
+                    .map((value) => value.trim())
+                    .filter((value) => value !== '');
+                  for (let index = 0; index < finalsStages.length; index += 1) {
+                    const stage = finalsStages[index];
+                    await createProjectedScheduleItem(activeTournamentId, {
+                      round_label: `Finals ${index + 1}`,
+                      starts_at: new Date(
+                        startDate.getTime() +
+                          (Math.max(1, Number(wizardRoundRobinWeeks ?? 1)) + index) *
+                            7 *
+                            24 *
+                            60 *
+                            60 *
+                            1000
+                      ).toISOString(),
+                      title: `${seasonLabel} ${stage}`,
+                      details: null,
+                      status: 'PLANNED',
+                      season_id: seasonNumber,
+                      sort_order: Math.max(1, Number(wizardRoundRobinWeeks ?? 1)) + index,
+                    });
+                  }
+                  showNotification({
+                    color: 'green',
+                    title: 'Season schedule generated',
+                    message: '',
+                  });
+                  await swrScheduleResponse.mutate();
+                }}
+              >
+                Generate Season Schedule
+              </Button>
+            </Group>
+          </Stack>
+        </Card>
+      )}
+
       <Card withBorder>
         <Table>
           <Table.Thead>
             <Table.Tr>
               <Table.Th>Round/Stage</Table.Th>
+              <Table.Th>Season</Table.Th>
               <Table.Th>Title</Table.Th>
               <Table.Th>Projected Start</Table.Th>
               <Table.Th>Status</Table.Th>
               <Table.Th>Details</Table.Th>
+              <Table.Th>Event</Table.Th>
               <Table.Th>Sort</Table.Th>
               {isAdmin && <Table.Th></Table.Th>}
             </Table.Tr>
@@ -213,7 +400,7 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
           <Table.Tbody>
             {rows.length < 1 && (
               <Table.Tr>
-                <Table.Td colSpan={isAdmin ? 7 : 6}>
+                <Table.Td colSpan={isAdmin ? 9 : 8}>
                   <Text c="dimmed" size="sm">
                     No projected schedule items configured yet.
                   </Text>
@@ -223,18 +410,64 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
             {rows.map((row: any) => (
               <Table.Tr key={row.id}>
                 <Table.Td>{row.round_label ?? '-'}</Table.Td>
+                <Table.Td>
+                  {row.season_id != null
+                    ? seasons.find((season: any) => Number(season.season_id) === Number(row.season_id))
+                        ?.name ?? `Season ${row.season_id}`
+                    : '-'}
+                </Table.Td>
                 <Table.Td>{row.title}</Table.Td>
                 <Table.Td>{formatDate(row.starts_at)}</Table.Td>
-                <Table.Td>{row.status ?? '-'}</Table.Td>
+                <Table.Td>{row.status ?? 'PLANNED'}</Table.Td>
                 <Table.Td>
                   <Text size="sm" style={{ whiteSpace: 'pre-wrap' }}>
                     {row.details ?? '-'}
                   </Text>
                 </Table.Td>
+                <Table.Td>
+                  {row.linked_tournament_id != null ? (
+                    <Button
+                      size="xs"
+                      variant="subtle"
+                      component={PreloadLink}
+                      href={`/tournaments/${row.linked_tournament_id}/entries`}
+                    >
+                      {row.linked_tournament_name ?? `Event ${row.linked_tournament_id}`}
+                    </Button>
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      -
+                    </Text>
+                  )}
+                </Table.Td>
                 <Table.Td>{row.sort_order ?? 0}</Table.Td>
                 {isAdmin && (
                   <Table.Td>
                     <Group justify="flex-end" gap={8}>
+                      {row.linked_tournament_id == null && (
+                        <Button
+                          size="xs"
+                          variant="light"
+                          onClick={async () => {
+                            const confirmed = window.confirm(
+                              `Create an event from \"${row.title}\"?`
+                            );
+                            if (!confirmed) return;
+                            await createProjectedScheduleEvent(
+                              activeTournamentId,
+                              Number(row.id)
+                            );
+                            await swrScheduleResponse.mutate();
+                            showNotification({
+                              color: 'green',
+                              title: 'Event created',
+                              message: '',
+                            });
+                          }}
+                        >
+                          Create Event
+                        </Button>
+                      )}
                       <Button size="xs" variant="light" onClick={() => startEdit(row)}>
                         Edit
                       </Button>

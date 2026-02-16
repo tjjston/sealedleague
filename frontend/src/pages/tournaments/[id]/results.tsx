@@ -7,6 +7,7 @@ import {
   Flex,
   Grid,
   Group,
+  Table,
   Stack,
   Text,
   Title,
@@ -27,7 +28,7 @@ import { Translator } from '@components/utils/types';
 import { getTournamentIdFromRouter, responseIsValid } from '@components/utils/util';
 import { MatchWithDetails } from '@openapi';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
-import { getCourts, getStages, getUser } from '@services/adapter';
+import { getCourts, getPlayers, getStages, getUser } from '@services/adapter';
 import { getMatchLookup, getStageItemLookup, stringToColour } from '@services/lookups';
 
 function ScheduleRow({
@@ -36,6 +37,7 @@ function ScheduleRow({
   stageItemsLookup,
   matchesLookup,
   editable,
+  submittableByUser,
   winnerByStageItemId,
 }: {
   data: any;
@@ -43,6 +45,7 @@ function ScheduleRow({
   stageItemsLookup: any;
   matchesLookup: any;
   editable: boolean;
+  submittableByUser: boolean;
   winnerByStageItemId: Record<number, string>;
 }) {
   const { t } = useTranslation();
@@ -79,6 +82,14 @@ function ScheduleRow({
         withBorder
         mt="md"
         pt="0rem"
+        style={
+          submittableByUser
+            ? {
+                backgroundColor: 'rgba(80, 160, 255, 0.14)',
+                borderColor: 'rgba(80, 160, 255, 0.7)',
+              }
+            : undefined
+        }
       >
         <Card.Section withBorder>
           <Grid pt="0.75rem" pb="0.5rem">
@@ -198,6 +209,7 @@ function Schedule({
   openMatchModal,
   matchesLookup,
   canEditMatch,
+  isSubmittableByUser,
   winnerByStageItemId,
 }: {
   t: Translator;
@@ -205,6 +217,7 @@ function Schedule({
   openMatchModal: CallableFunction;
   matchesLookup: any;
   canEditMatch: (match: any) => boolean;
+  isSubmittableByUser: (match: any) => boolean;
   winnerByStageItemId: Record<number, string>;
 }) {
   const matches: any[] = Object.values(matchesLookup ?? {}).filter(
@@ -248,6 +261,7 @@ function Schedule({
         stageItemsLookup={stageItemsLookup}
         matchesLookup={matchesLookup}
         editable={canEditMatch(data.match)}
+        submittableByUser={isSubmittableByUser(data.match)}
         winnerByStageItemId={winnerByStageItemId}
       />
     );
@@ -293,8 +307,9 @@ export default function ResultsPage() {
   const { t } = useTranslation();
   const { tournamentData } = getTournamentIdFromRouter();
   const swrCurrentUserResponse = getUser();
-  const swrStagesResponse = getStages(tournamentData.id, true);
+  const swrStagesResponse = getStages(tournamentData.id, true, true);
   const swrCourtsResponse = getCourts(tournamentData.id);
+  const swrPlayersResponse = getPlayers(tournamentData.id);
 
   const stageItemsLookup = responseIsValid(swrStagesResponse)
     ? getStageItemLookup(swrStagesResponse)
@@ -348,6 +363,36 @@ export default function ResultsPage() {
     });
     return summaries;
   }, [stages]);
+  const eventStandings = useMemo(() => {
+    const players = swrPlayersResponse.data?.data?.players ?? [];
+    const sorted = [...players].sort((left: any, right: any) => {
+      const leftPoints = Number(left?.swiss_score ?? 0);
+      const rightPoints = Number(right?.swiss_score ?? 0);
+      if (rightPoints !== leftPoints) return rightPoints - leftPoints;
+      const winsDiff = Number(right?.wins ?? 0) - Number(left?.wins ?? 0);
+      if (winsDiff !== 0) return winsDiff;
+      const drawsDiff = Number(right?.draws ?? 0) - Number(left?.draws ?? 0);
+      if (drawsDiff !== 0) return drawsDiff;
+      const lossesDiff = Number(left?.losses ?? 0) - Number(right?.losses ?? 0);
+      if (lossesDiff !== 0) return lossesDiff;
+      return String(left?.name ?? '').localeCompare(String(right?.name ?? ''));
+    });
+    return sorted.map((player: any, index: number) => {
+      const wins = Number(player?.wins ?? 0);
+      const draws = Number(player?.draws ?? 0);
+      const losses = Number(player?.losses ?? 0);
+      const matches = wins + draws + losses;
+      return {
+        rank: index + 1,
+        name: String(player?.name ?? ''),
+        swiss_points: Number(player?.swiss_score ?? 0),
+        wins,
+        draws,
+        losses,
+        win_rate: matches > 0 ? ((wins / matches) * 100).toFixed(2) : '0.00',
+      };
+    });
+  }, [swrPlayersResponse.data?.data?.players]);
   const winnerByStageItemId = useMemo(
     () =>
       finishedStageItemWinners.reduce(
@@ -364,12 +409,13 @@ export default function ResultsPage() {
     eliminationStageItems[0] ??
     null;
 
-  if (swrStagesResponse.error || swrCourtsResponse.error) {
+  if (swrStagesResponse.error || swrCourtsResponse.error || swrPlayersResponse.error) {
     return (
       <TournamentLayout tournament_id={tournamentData.id}>
         <Title>{t('results_title')}</Title>
         {swrStagesResponse.error != null ? <RequestErrorAlert error={swrStagesResponse.error} /> : null}
         {swrCourtsResponse.error != null ? <RequestErrorAlert error={swrCourtsResponse.error} /> : null}
+        {swrPlayersResponse.error != null ? <RequestErrorAlert error={swrPlayersResponse.error} /> : null}
       </TournamentLayout>
     );
   }
@@ -386,19 +432,21 @@ export default function ResultsPage() {
   const currentUser = swrCurrentUserResponse.data?.data ?? null;
   const currentUserName = String(currentUser?.name ?? '').trim().toLowerCase();
   const isAdmin = String(currentUser?.account_type ?? 'REGULAR') === 'ADMIN';
+  const userIsInMatch = (matchToCheck: any) => {
+    if (currentUserName === '') return false;
+    return [matchToCheck?.stage_item_input1, matchToCheck?.stage_item_input2].some((input: any) => {
+      const teamName = String(input?.team?.name ?? '').trim().toLowerCase();
+      if (teamName === currentUserName) return true;
+      const players = Array.isArray(input?.team?.players) ? input.team.players : [];
+      return players.some(
+        (player: any) => String(player?.name ?? '').trim().toLowerCase() === currentUserName
+      );
+    });
+  };
 
   function canEditMatch(matchToCheck: any) {
     if (isAdmin) return true;
-    const team1Name = String(matchToCheck?.stage_item_input1?.team?.name ?? '')
-      .trim()
-      .toLowerCase();
-    const team2Name = String(matchToCheck?.stage_item_input2?.team?.name ?? '')
-      .trim()
-      .toLowerCase();
-    return (
-      currentUserName !== '' &&
-      (team1Name === currentUserName || team2Name === currentUserName)
-    );
+    return userIsInMatch(matchToCheck);
   }
 
   function openMatchModal(matchToOpen: MatchWithDetails) {
@@ -450,6 +498,39 @@ export default function ResultsPage() {
                 </Badge>
               ))}
             </Group>
+          </Stack>
+        </Card>
+      ) : null}
+      {eventStandings.length > 0 ? (
+        <Card withBorder mt="sm">
+          <Stack>
+            <Title order={4}>Event Standings</Title>
+            <Table highlightOnHover>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>#</Table.Th>
+                  <Table.Th>Player</Table.Th>
+                  <Table.Th>Points</Table.Th>
+                  <Table.Th>Wins</Table.Th>
+                  <Table.Th>Draws</Table.Th>
+                  <Table.Th>Losses</Table.Th>
+                  <Table.Th>Win %</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {eventStandings.map((row) => (
+                  <Table.Tr key={`${row.rank}-${row.name}`}>
+                    <Table.Td>{row.rank}</Table.Td>
+                    <Table.Td>{row.name}</Table.Td>
+                    <Table.Td>{row.swiss_points}</Table.Td>
+                    <Table.Td>{row.wins}</Table.Td>
+                    <Table.Td>{row.draws}</Table.Td>
+                    <Table.Td>{row.losses}</Table.Td>
+                    <Table.Td>{row.win_rate}</Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
           </Stack>
         </Card>
       ) : null}
@@ -507,6 +588,7 @@ export default function ResultsPage() {
             stageItemsLookup={stageItemsLookup}
             openMatchModal={openMatchModal}
             canEditMatch={canEditMatch}
+            isSubmittableByUser={(matchToCheck: any) => !isAdmin && userIsInMatch(matchToCheck)}
             winnerByStageItemId={winnerByStageItemId}
           />
         </SectionErrorBoundary>

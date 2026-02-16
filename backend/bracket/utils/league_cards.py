@@ -253,22 +253,37 @@ def simulate_sealed_draft(
     pack_count: int,
 ) -> dict:
     filtered_cards = filter_cards_for_deckbuilding(cards, set_codes=set_codes)
+    all_filtered_cards = filter_cards_for_deckbuilding(cards)
 
-    leaders = [card for card in filtered_cards if card["type"].lower() == "leader"]
-    bases = [card for card in filtered_cards if card["type"].lower() == "base"]
-    non_leader_base = [
-        card
-        for card in filtered_cards
-        if card["type"].lower() not in {"leader", "base"}
+    scoped_leaders = [card for card in filtered_cards if card["type"].lower() == "leader"]
+    scoped_bases = [card for card in filtered_cards if card["type"].lower() == "base"]
+    scoped_non_leader_base = [
+        card for card in filtered_cards if card["type"].lower() not in {"leader", "base"}
     ]
+
+    fallback_leaders = [card for card in all_filtered_cards if card["type"].lower() == "leader"]
+    fallback_bases = [card for card in all_filtered_cards if card["type"].lower() == "base"]
+    fallback_non_leader_base = [
+        card for card in all_filtered_cards if card["type"].lower() not in {"leader", "base"}
+    ]
+
+    leaders = scoped_leaders if scoped_leaders else fallback_leaders
+    bases = scoped_bases if scoped_bases else fallback_bases
+    non_leader_base = scoped_non_leader_base if scoped_non_leader_base else fallback_non_leader_base
     commons = [card for card in non_leader_base if card["rarity"].lower() == "common"]
     uncommons = [card for card in non_leader_base if card["rarity"].lower() == "uncommon"]
     rare_or_legendary = [
         card for card in non_leader_base if card["rarity"].lower() in {"rare", "legendary"}
     ]
 
-    if not leaders or not bases or not non_leader_base or not commons or not uncommons or not rare_or_legendary:
+    if not leaders or not bases or not non_leader_base:
         raise ValueError("Not enough card data to simulate sealed draft packs")
+
+    # Some sets can have sparse/incomplete card slices (e.g. missing rarity buckets or no
+    # leaders/bases in the selected set). Fall back to broader pools so simulation remains usable.
+    commons_pool = commons if commons else non_leader_base
+    uncommons_pool = uncommons if uncommons else non_leader_base
+    rare_pool = rare_or_legendary if rare_or_legendary else non_leader_base
 
     packs: list[dict] = []
     chosen_leaders: list[dict] = []
@@ -276,9 +291,9 @@ def simulate_sealed_draft(
     pool: list[dict] = []
 
     for index in range(1, pack_count + 1):
-        pack_commons = _pick_many(commons, 9)
-        pack_uncommons = _pick_many(uncommons, 3)
-        pack_rare = random.choice(rare_or_legendary)
+        pack_commons = _pick_many(commons_pool, 9)
+        pack_uncommons = _pick_many(uncommons_pool, 3)
+        pack_rare = random.choice(rare_pool)
         pack_leader = random.choice(leaders)
         pack_base = random.choice(bases)
         pack_wildcard = random.choice(non_leader_base)

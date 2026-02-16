@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from starlette import status
 
 from bracket.config import config
+from bracket.database import database
 from bracket.logic.planning.conflicts import handle_conflicts
 from bracket.logic.planning.matches import (
     get_scheduled_matches,
@@ -49,14 +50,20 @@ from bracket.utils.types import assert_some
 router = APIRouter(prefix=config.api_prefix)
 
 
-def user_is_participant_in_match(user: UserPublic, match: Match) -> bool:
+async def user_is_participant_in_match(
+    tournament_id: TournamentId, user: UserPublic, match: Match
+) -> bool:
     target_name = user.name.strip().lower()
     if target_name == "":
         return False
 
+    team_ids: list[int] = []
     for stage_input in [match.stage_item_input1, match.stage_item_input2]:
         if stage_input is None:
             continue
+        team_id = getattr(stage_input, "team_id", None)
+        if team_id is not None:
+            team_ids.append(int(team_id))
         team = getattr(stage_input, "team", None)
         if team is None:
             continue
@@ -64,7 +71,29 @@ def user_is_participant_in_match(user: UserPublic, match: Match) -> bool:
         if team_name == target_name:
             return True
 
-    return False
+    if len(team_ids) < 1:
+        return False
+
+    first_team_id = team_ids[0]
+    second_team_id = team_ids[1] if len(team_ids) > 1 else team_ids[0]
+    row = await database.fetch_one(
+        """
+        SELECT 1
+        FROM players p
+        JOIN players_x_teams pxt ON pxt.player_id = p.id
+        WHERE p.tournament_id = :tournament_id
+          AND lower(trim(p.name)) = lower(trim(:user_name))
+          AND (pxt.team_id = :team_id_1 OR pxt.team_id = :team_id_2)
+        LIMIT 1
+        """,
+        values={
+            "tournament_id": int(tournament_id),
+            "user_name": user.name,
+            "team_id_1": first_team_id,
+            "team_id_2": second_team_id,
+        },
+    )
+    return row is not None
 
 
 @router.get(
@@ -187,7 +216,7 @@ async def update_match_by_id(
     match: Match = Depends(match_dependency),
 ) -> SuccessResponse:
     if not is_admin_user(user_public):
-        if not user_is_participant_in_match(user_public, match):
+        if not await user_is_participant_in_match(tournament_id, user_public, match):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="You can only submit scores for matches you are playing in",

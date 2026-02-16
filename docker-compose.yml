@@ -29,7 +29,7 @@ services:
       context: .
       dockerfile: Dockerfile
       pull: true
-    image: tjjston/sealedleague:latest .
+    image: tjjston/sealedleague:latest
     networks:
       - sealedleague_lan
     ports:

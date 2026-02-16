@@ -191,12 +191,13 @@ export function getAvailableStageItemInputs(
 
 export function getStages(
   tournament_id: number | null,
-  no_draft_rounds: boolean = false
+  no_draft_rounds: boolean = false,
+  include_team_players: boolean = false
 ): SWRResponse<StagesWithStageItemsResponse> {
   return useSWR(
     tournament_id == null || tournament_id === -1
       ? null
-      : `tournaments/${tournament_id}/stages?no_draft_rounds=${no_draft_rounds}`,
+      : `tournaments/${tournament_id}/stages?no_draft_rounds=${no_draft_rounds}&include_team_players=${include_team_players}`,
     fetcher
   );
 }
@@ -277,28 +278,24 @@ export function getUserCareer(user_id: number | null): SWRResponse<any> {
   return useSWR(`users/${user_id}/career`, fetcher);
 }
 
-export function getLeagueCards(
-  tournament_id: number | null,
-  filters: {
-    query?: string;
-    name?: string;
-    rules?: string;
-    aspect?: string;
-    trait?: string;
-    keyword?: string;
-    arena?: string;
-    card_type?: string;
-    set_code?: string;
-    cost?: number | null;
-    cost_min?: number | null;
-    cost_max?: number | null;
-    limit?: number;
-    offset?: number;
-  }
-): SWRResponse<any> {
-  if (tournament_id == null || tournament_id <= 0) {
-    return useSWR(null, fetcher);
-  }
+type LeagueCardsFilters = {
+  query?: string;
+  name?: string;
+  rules?: string;
+  aspect?: string;
+  trait?: string;
+  keyword?: string;
+  arena?: string;
+  card_type?: string;
+  set_code?: string;
+  cost?: number | null;
+  cost_min?: number | null;
+  cost_max?: number | null;
+  limit?: number;
+  offset?: number;
+};
+
+function buildLeagueCardsParams(filters: LeagueCardsFilters): URLSearchParams {
   const params = new URLSearchParams();
   if (filters.query != null && filters.query !== '') params.set('query', filters.query);
   if (filters.name != null && filters.name !== '') params.set('name', filters.name);
@@ -314,7 +311,23 @@ export function getLeagueCards(
   if (filters.cost_max != null) params.set('cost_max', String(filters.cost_max));
   params.set('limit', String(filters.limit ?? 100));
   params.set('offset', String(filters.offset ?? 0));
+  return params;
+}
+
+export function getLeagueCards(
+  tournament_id: number | null,
+  filters: LeagueCardsFilters
+): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  const params = buildLeagueCardsParams(filters);
   return useSWR(`tournaments/${tournament_id}/league/cards?${params.toString()}`, fetcher);
+}
+
+export function getLeagueCardsGlobal(filters: LeagueCardsFilters): SWRResponse<any> {
+  const params = buildLeagueCardsParams(filters);
+  return useSWR(`league/cards?${params.toString()}`, fetcher);
 }
 
 export function getLeagueCardPool(
@@ -366,6 +379,17 @@ export function getLeagueSeasonHistory(tournament_id: number | null): SWRRespons
     return useSWR(null, fetcher);
   }
   return useSWR(`tournaments/${tournament_id}/league/season_history`, fetcher);
+}
+
+export function getLeagueMetaAnalysis(
+  tournament_id: number | null,
+  season_id?: number | null
+): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  const suffix = season_id == null ? '' : `?season_id=${season_id}`;
+  return useSWR(`tournaments/${tournament_id}/league/meta_analysis${suffix}`, fetcher);
 }
 
 export function getLeagueAdminUsers(tournament_id: number | null): SWRResponse<any> {

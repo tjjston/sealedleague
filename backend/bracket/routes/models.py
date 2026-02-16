@@ -12,6 +12,8 @@ from bracket.models.league import (
     LeagueCardPoolEntryView,
     LeagueCommunicationView,
     LeagueDeckView,
+    LeagueMetaAnalysisView,
+    LeagueProjectedScheduleEventCreateResult,
     LeagueProjectedScheduleItemView,
     LeagueSeasonDraftView,
     LeagueSeasonHistoryView,
@@ -212,4 +214,14 @@ class LeagueProjectedScheduleResponse(DataResponse[list[LeagueProjectedScheduleI
 
 
 class LeagueProjectedScheduleItemResponse(DataResponse[LeagueProjectedScheduleItemView]):
+    pass
+
+
+class LeagueProjectedScheduleEventCreateResponse(
+    DataResponse[LeagueProjectedScheduleEventCreateResult]
+):
+    pass
+
+
+class LeagueMetaAnalysisResponse(DataResponse[LeagueMetaAnalysisView]):
     pass

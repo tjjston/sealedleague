@@ -99,7 +99,13 @@ export default function LeaguePlayersPage() {
                       <img
                         src={user.current_leader_image_url}
                         alt={user.current_leader_name ?? user.current_leader_card_id ?? 'Leader'}
-                        style={{ width: 36, height: 52, borderRadius: 6, objectFit: 'cover' }}
+                        style={{
+                          width: 72,
+                          height: 40,
+                          borderRadius: 6,
+                          objectFit: 'contain',
+                          background: '#f8f9fa',
+                        }}
                       />
                     ) : null}
                     <Text>

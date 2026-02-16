@@ -251,7 +251,7 @@ export default function SchedulePage() {
 
   const { t } = useTranslation();
   const { tournamentData } = getTournamentIdFromRouter();
-  const swrStagesResponse = getStages(tournamentData.id);
+  const swrStagesResponse = getStages(tournamentData.id, true, false);
   const swrCourtsResponse = getCourts(tournamentData.id);
 
   const stageItemsLookup = responseIsValid(swrStagesResponse)

@@ -105,6 +105,20 @@ class MatchPosition(NamedTuple):
     position: float
 
 
+def _get_slot_minutes_for_match(
+    tournament: Tournament, match: MatchWithDetailsDefinitive | MatchWithDetails
+) -> int:
+    duration = (
+        tournament.duration_minutes
+        if match.custom_duration_minutes is None
+        else match.custom_duration_minutes
+    )
+    margin = (
+        tournament.margin_minutes if match.custom_margin_minutes is None else match.custom_margin_minutes
+    )
+    return duration + margin
+
+
 async def reorder_matches_for_court(
     tournament: Tournament,
     scheduled_matches: list[MatchPosition],
@@ -125,7 +139,7 @@ async def reorder_matches_for_court(
             tournament=tournament,
         )
         last_start_time = last_start_time + timedelta(
-            minutes=match_pos.match.duration_minutes + match_pos.match.margin_minutes
+            minutes=_get_slot_minutes_for_match(tournament, match_pos.match)
         )
 
 
@@ -167,15 +181,48 @@ async def handle_match_reschedule(
     if body.new_court_id != body.old_court_id:
         await reorder_matches_for_court(tournament, scheduled_matches, body.old_court_id)
 
+    await update_start_times_of_matches(tournament.id)
+
 
 async def update_start_times_of_matches(tournament_id: TournamentId) -> None:
     stages = await get_full_tournament_details(tournament_id)
     tournament = await sql_get_tournament(tournament_id)
-    courts = await get_all_courts_in_tournament(tournament_id)
     scheduled_matches = get_scheduled_matches(stages)
+    matches_by_position: dict[int, list[MatchWithDetailsDefinitive | MatchWithDetails]] = defaultdict(list)
+    for match_pos in scheduled_matches:
+        match = match_pos.match
+        if match.court_id is None or match.position_in_schedule is None:
+            continue
+        matches_by_position[int(match.position_in_schedule)].append(match)
 
-    for court in courts:
-        await reorder_matches_for_court(tournament, scheduled_matches, court.id)
+    if len(matches_by_position) < 1:
+        return
+
+    slot_start_time = tournament.start_time
+    normalized_slot = 0
+    for position in sorted(matches_by_position):
+        slot_matches = sorted(
+            matches_by_position[position],
+            key=lambda match: (
+                int(match.court_id or 0),
+                int(match.id),
+            ),
+        )
+        longest_slot_minutes = 0
+        for match in slot_matches:
+            await sql_reschedule_match_and_determine_duration_and_margin(
+                assert_some(match.court_id),
+                slot_start_time,
+                position_in_schedule=normalized_slot,
+                match=match,
+                tournament=tournament,
+            )
+            longest_slot_minutes = max(
+                longest_slot_minutes,
+                _get_slot_minutes_for_match(tournament, match),
+            )
+        slot_start_time = slot_start_time + timedelta(minutes=longest_slot_minutes)
+        normalized_slot += 1
 
 
 def get_scheduled_matches(stages: list[StageWithStageItems]) -> list[MatchPosition]:

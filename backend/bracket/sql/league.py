@@ -13,6 +13,11 @@ from bracket.models.league import (
     LeagueAdminUserView,
     LeagueFavoriteCard,
     LeagueDistributionBucket,
+    LeagueMetaAnalysisView,
+    LeagueMetaArchetypeUsage,
+    LeagueMetaCardUsage,
+    LeagueMetaCountBucket,
+    LeagueMetaDeckCoreUsage,
     LeagueCommunicationUpsertBody,
     LeagueCommunicationUpdateBody,
     LeagueCommunicationView,
@@ -209,7 +214,6 @@ async def set_season_tournaments(season_id: int, tournament_ids: list[Tournament
 async def get_league_standings(
     tournament_id: TournamentId, season_id: int | None
 ) -> list[LeagueStandingsRow]:
-    include_live_points = season_id is None
     season_filter = (
         "AND spl.season_id = :season_id"
         if season_id is not None
@@ -254,17 +258,13 @@ async def get_league_standings(
             )
         """
     )
-    live_cte = ""
-    live_join = ""
-    live_group_by = ""
-    live_points_expression = "0"
-    if include_live_points:
-        live_cte = f"""
+    live_cte = f"""
         ,
         live_match_points AS (
             SELECT
                 tu.id AS user_id,
-                COALESCE(SUM((p.wins * 3) + p.draws), 0) AS live_points
+                COALESCE(SUM((p.wins * 3) + p.draws), 0) AS live_points,
+                COALESCE(SUM(p.wins), 0) AS event_wins
             FROM tournament_users tu
             JOIN tournaments t
                 ON {tournament_scope_filter}
@@ -273,13 +273,13 @@ async def get_league_standings(
                AND lower(trim(p.name)) = lower(trim(tu.name))
             GROUP BY tu.id
         )
-        """
-        live_join = """
+    """
+    live_join = """
         LEFT JOIN live_match_points lmp
             ON lmp.user_id = tu.id
-        """
-        live_group_by = "lmp.live_points,\n            "
-        live_points_expression = "COALESCE(lmp.live_points, 0)"
+    """
+    live_group_by = "lmp.live_points,\n            lmp.event_wins,\n            "
+    live_points_expression = "COALESCE(lmp.live_points, 0)"
     query = """
         WITH tournament_users AS (
             SELECT DISTINCT u.id, u.name, u.email
@@ -305,6 +305,7 @@ async def get_league_standings(
                 )
                 + {live_points_expression}
             ) AS points,
+            COALESCE(lmp.event_wins, 0) AS event_wins,
             COALESCE(
                 ARRAY_AGG(REPLACE(spl.reason, 'ACCOLADE:', ''))
                 FILTER (WHERE spl.reason LIKE 'ACCOLADE:%'),
@@ -981,6 +982,198 @@ async def get_decks(
     """
     rows = await database.fetch_all(query=query, values=values)
     return [LeagueDeckView.model_validate(dict(row._mapping)) for row in rows]
+
+
+def _extract_set_code_from_card_id(card_id: str) -> str | None:
+    normalized = str(card_id).strip().lower()
+    if normalized == "":
+        return None
+    if "-" in normalized:
+        prefix = normalized.split("-", 1)[0].strip()
+        return prefix or None
+    return None
+
+
+async def get_league_meta_analysis(
+    *,
+    season_id: int,
+    season_name: str,
+) -> LeagueMetaAnalysisView:
+    decks = await get_decks(season_id)
+    if len(decks) < 1:
+        return LeagueMetaAnalysisView(
+            season_id=season_id,
+            season_name=season_name,
+            total_decks=0,
+        )
+
+    leader_counts: Counter[str] = Counter()
+    base_counts: Counter[str] = Counter()
+    leader_wins: Counter[str] = Counter()
+    leader_matches: Counter[str] = Counter()
+    base_wins: Counter[str] = Counter()
+    base_matches: Counter[str] = Counter()
+    archetype_counts: Counter[tuple[str, str]] = Counter()
+    archetype_wins: Counter[tuple[str, str]] = Counter()
+    archetype_matches: Counter[tuple[str, str]] = Counter()
+
+    card_total_copies: Counter[str] = Counter()
+    card_deck_counts: Counter[str] = Counter()
+
+    for deck in decks:
+        leader_id = str(deck.leader).strip().lower()
+        base_id = str(deck.base).strip().lower()
+        if leader_id != "":
+            leader_counts[leader_id] += 1
+            leader_wins[leader_id] += int(deck.wins)
+            leader_matches[leader_id] += int(deck.matches)
+        if base_id != "":
+            base_counts[base_id] += 1
+            base_wins[base_id] += int(deck.wins)
+            base_matches[base_id] += int(deck.matches)
+        if leader_id != "" and base_id != "":
+            archetype_key = (leader_id, base_id)
+            archetype_counts[archetype_key] += 1
+            archetype_wins[archetype_key] += int(deck.wins)
+            archetype_matches[archetype_key] += int(deck.matches)
+
+        deck_card_ids: set[str] = set()
+        for card_id, count in {**deck.mainboard, **deck.sideboard}.items():
+            normalized_card_id = str(card_id).strip().lower()
+            if normalized_card_id == "":
+                continue
+            deck_card_ids.add(normalized_card_id)
+
+        for card_id, count in deck.mainboard.items():
+            normalized_card_id = str(card_id).strip().lower()
+            if normalized_card_id == "":
+                continue
+            card_total_copies[normalized_card_id] += int(count)
+        for card_id, count in deck.sideboard.items():
+            normalized_card_id = str(card_id).strip().lower()
+            if normalized_card_id == "":
+                continue
+            card_total_copies[normalized_card_id] += int(count)
+        for card_id in deck_card_ids:
+            card_deck_counts[card_id] += 1
+
+    needed_card_ids = set(card_total_copies.keys())
+    needed_card_ids.update(leader_counts.keys())
+    needed_card_ids.update(base_counts.keys())
+    set_codes = sorted(
+        {
+            set_code
+            for set_code in (
+                _extract_set_code_from_card_id(card_id) for card_id in needed_card_ids
+            )
+            if set_code is not None
+        }
+    )
+
+    card_lookup: dict[str, dict] = {}
+    if len(set_codes) > 0:
+        try:
+            cards_raw = await asyncio.to_thread(fetch_swu_cards_cached, set_codes, 8, 1800)
+            cards = [normalize_card_for_deckbuilding(card) for card in cards_raw]
+            card_lookup = {str(card["card_id"]).strip().lower(): card for card in cards}
+        except Exception:
+            card_lookup = {}
+
+    trait_counts: Counter[str] = Counter()
+    keyword_counts: Counter[str] = Counter()
+    for card_id, copies in card_total_copies.items():
+        card = card_lookup.get(card_id)
+        if card is None:
+            continue
+        for trait in card.get("traits", []):
+            normalized_trait = str(trait).strip()
+            if normalized_trait != "":
+                trait_counts[normalized_trait] += int(copies)
+        for keyword in card.get("keywords", []):
+            normalized_keyword = str(keyword).strip()
+            if normalized_keyword != "":
+                keyword_counts[normalized_keyword] += int(copies)
+
+    def win_rate_from(wins: int, matches: int) -> float:
+        if matches <= 0:
+            return 0
+        return round((wins / matches) * 100, 2)
+
+    top_cards = [
+        LeagueMetaCardUsage(
+            card_id=card_id,
+            card_name=(card_lookup.get(card_id) or {}).get("name"),
+            image_url=(card_lookup.get(card_id) or {}).get("image_url"),
+            set_code=(card_lookup.get(card_id) or {}).get("set_code"),
+            card_type=(card_lookup.get(card_id) or {}).get("type"),
+            traits=list((card_lookup.get(card_id) or {}).get("traits", []) or []),
+            keywords=list((card_lookup.get(card_id) or {}).get("keywords", []) or []),
+            rules_text=(card_lookup.get(card_id) or {}).get("rules_text"),
+            deck_count=int(card_deck_counts[card_id]),
+            total_copies=int(total_copies),
+        )
+        for card_id, total_copies in card_total_copies.most_common(40)
+    ]
+
+    top_leaders = [
+        LeagueMetaDeckCoreUsage(
+            card_id=card_id,
+            card_name=(card_lookup.get(card_id) or {}).get("name"),
+            image_url=(card_lookup.get(card_id) or {}).get("image_url"),
+            count=int(count),
+            win_rate=win_rate_from(int(leader_wins[card_id]), int(leader_matches[card_id])),
+        )
+        for card_id, count in leader_counts.most_common(20)
+    ]
+
+    top_bases = [
+        LeagueMetaDeckCoreUsage(
+            card_id=card_id,
+            card_name=(card_lookup.get(card_id) or {}).get("name"),
+            image_url=(card_lookup.get(card_id) or {}).get("image_url"),
+            count=int(count),
+            win_rate=win_rate_from(int(base_wins[card_id]), int(base_matches[card_id])),
+        )
+        for card_id, count in base_counts.most_common(20)
+    ]
+
+    top_archetypes = [
+        LeagueMetaArchetypeUsage(
+            leader_card_id=leader_id,
+            leader_name=(card_lookup.get(leader_id) or {}).get("name"),
+            leader_image_url=(card_lookup.get(leader_id) or {}).get("image_url"),
+            base_card_id=base_id,
+            base_name=(card_lookup.get(base_id) or {}).get("name"),
+            base_image_url=(card_lookup.get(base_id) or {}).get("image_url"),
+            count=int(count),
+            win_rate=win_rate_from(
+                int(archetype_wins[(leader_id, base_id)]),
+                int(archetype_matches[(leader_id, base_id)]),
+            ),
+        )
+        for (leader_id, base_id), count in archetype_counts.most_common(20)
+    ]
+
+    top_traits = [
+        LeagueMetaCountBucket(label=label, count=int(count))
+        for label, count in trait_counts.most_common(25)
+    ]
+    top_keywords = [
+        LeagueMetaCountBucket(label=label, count=int(count))
+        for label, count in keyword_counts.most_common(25)
+    ]
+
+    return LeagueMetaAnalysisView(
+        season_id=season_id,
+        season_name=season_name,
+        total_decks=len(decks),
+        top_cards=top_cards,
+        top_leaders=top_leaders,
+        top_bases=top_bases,
+        top_traits=top_traits,
+        top_keywords=top_keywords,
+        top_archetypes=top_archetypes,
+    )
 
 
 async def upsert_deck(
@@ -1697,19 +1890,29 @@ async def _get_projected_schedule_item_by_id(
             lps.title,
             lps.details,
             lps.status,
+            lps.season_id,
             lps.sort_order,
+            lps.linked_tournament_id,
+            lt.name AS linked_tournament_name,
             lps.created_by_user_id,
             u.name AS created_by_user_name,
             lps.created,
             lps.updated
         FROM league_projected_schedule_items lps
         LEFT JOIN users u ON u.id = lps.created_by_user_id
+        LEFT JOIN tournaments lt ON lt.id = lps.linked_tournament_id
         WHERE lps.tournament_id = :tournament_id
           AND lps.id = :schedule_item_id
         """,
         values={"tournament_id": int(tournament_id), "schedule_item_id": int(schedule_item_id)},
     )
     return LeagueProjectedScheduleItemView.model_validate(dict(row._mapping)) if row is not None else None
+
+
+async def get_projected_schedule_item_by_id(
+    tournament_id: TournamentId, schedule_item_id: int
+) -> LeagueProjectedScheduleItemView | None:
+    return await _get_projected_schedule_item_by_id(tournament_id, schedule_item_id)
 
 
 async def list_projected_schedule_items(
@@ -1725,13 +1928,17 @@ async def list_projected_schedule_items(
             lps.title,
             lps.details,
             lps.status,
+            lps.season_id,
             lps.sort_order,
+            lps.linked_tournament_id,
+            lt.name AS linked_tournament_name,
             lps.created_by_user_id,
             u.name AS created_by_user_name,
             lps.created,
             lps.updated
         FROM league_projected_schedule_items lps
         LEFT JOIN users u ON u.id = lps.created_by_user_id
+        LEFT JOIN tournaments lt ON lt.id = lps.linked_tournament_id
         WHERE lps.tournament_id = :tournament_id
         ORDER BY lps.sort_order ASC, lps.starts_at ASC NULLS LAST, lps.id ASC
         """,
@@ -1754,7 +1961,9 @@ async def create_projected_schedule_item(
             title,
             details,
             status,
+            season_id,
             sort_order,
+            linked_tournament_id,
             created_by_user_id,
             created,
             updated
@@ -1766,7 +1975,9 @@ async def create_projected_schedule_item(
             :title,
             :details,
             :status,
+            :season_id,
             :sort_order,
+            :linked_tournament_id,
             :created_by_user_id,
             :created,
             :updated
@@ -1784,7 +1995,9 @@ async def create_projected_schedule_item(
             "title": body.title.strip(),
             "details": body.details.strip() if body.details is not None else None,
             "status": body.status.strip() if body.status is not None else None,
+            "season_id": body.season_id,
             "sort_order": int(body.sort_order),
+            "linked_tournament_id": None,
             "created_by_user_id": int(created_by_user_id),
             "created": datetime_utc.now(),
             "updated": datetime_utc.now(),
@@ -1806,7 +2019,16 @@ async def update_projected_schedule_item(
     }
     set_clauses: list[str] = []
 
-    for field in ("round_label", "starts_at", "title", "details", "status", "sort_order"):
+    for field in (
+        "round_label",
+        "starts_at",
+        "title",
+        "details",
+        "status",
+        "season_id",
+        "sort_order",
+        "linked_tournament_id",
+    ):
         if field not in payload:
             continue
         value = payload[field]

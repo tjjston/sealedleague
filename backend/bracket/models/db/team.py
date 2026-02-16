@@ -28,6 +28,7 @@ class TeamInsertable(BaseModelORM):
 
 class Team(TeamInsertable):
     id: TeamId
+    players: list[Player] = Field(default_factory=list)
 
 
 class TeamWithPlayers(BaseModel):

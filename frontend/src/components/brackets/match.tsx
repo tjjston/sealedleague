@@ -11,6 +11,7 @@ import { formatMatchInput1, formatMatchInput2, isMatchHappening } from '@compone
 import { formatStageItemInputWithRecord } from '@components/utils/stage_item_input';
 import { TournamentMinimal } from '@components/utils/tournament';
 import { MatchWithDetails, RoundWithMatches, StagesWithStageItemsResponse } from '@openapi';
+import { getUser } from '@services/adapter';
 import { getMatchLookup, getStageItemLookup } from '@services/lookups';
 import classes from './match.module.css';
 
@@ -56,6 +57,7 @@ export default function Match({
 }) {
   const { t } = useTranslation();
   const theme = useMantineTheme();
+  const swrCurrentUserResponse = getUser();
   const winner_style = {
     backgroundColor: theme.colors.green[9],
   };
@@ -78,6 +80,21 @@ export default function Match({
   const team2_logo = (match.stage_item_input2 as any)?.team?.logo_path;
 
   const [opened, setOpened] = useState(false);
+  const currentUser = swrCurrentUserResponse.data?.data ?? null;
+  const currentUserName = String(currentUser?.name ?? '').trim().toLowerCase();
+  const isAdmin = String(currentUser?.account_type ?? 'REGULAR') === 'ADMIN';
+  const userCanSubmitScore =
+    !readOnly &&
+    currentUserName !== '' &&
+    !isAdmin &&
+    [match.stage_item_input1, match.stage_item_input2].some((stageItemInput: any) => {
+      const teamName = String(stageItemInput?.team?.name ?? '').trim().toLowerCase();
+      if (teamName === currentUserName) return true;
+      const players = Array.isArray(stageItemInput?.team?.players) ? stageItemInput.team.players : [];
+      return players.some(
+        (player: any) => String(player?.name ?? '').trim().toLowerCase() === currentUserName
+      );
+    });
 
   const bracket = (
     <>
@@ -126,7 +143,19 @@ export default function Match({
 
   return (
     <>
-      <UnstyledButton className={classes.root} onClick={() => setOpened(!opened)}>
+      <UnstyledButton
+        className={classes.root}
+        onClick={() => setOpened(!opened)}
+        style={
+          userCanSubmitScore
+            ? {
+                borderRadius: 10,
+                backgroundColor: 'rgba(80, 160, 255, 0.18)',
+                boxShadow: '0 0 0 1px rgba(80, 160, 255, 0.5)',
+              }
+            : undefined
+        }
+      >
         {bracket}
       </UnstyledButton>
       <MatchModal

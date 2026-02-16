@@ -316,9 +316,7 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
                     style={{ objectFit: 'contain' }}
                   />
                 ) : null}
-                <Text size="sm">
-                  {icon?.fallbackSymbol ?? ''} {option.label}
-                </Text>
+                <Text size="sm">{option.label}</Text>
               </Group>
             );
           }}

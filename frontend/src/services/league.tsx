@@ -201,6 +201,7 @@ export async function createProjectedScheduleItem(
     title: string;
     details?: string | null;
     status?: string | null;
+    season_id?: number | null;
     sort_order?: number;
   }
 ) {
@@ -218,6 +219,8 @@ export async function updateProjectedScheduleItem(
     title?: string;
     details?: string | null;
     status?: string | null;
+    season_id?: number | null;
+    linked_tournament_id?: number | null;
     sort_order?: number;
   }
 ) {
@@ -232,6 +235,15 @@ export async function deleteProjectedScheduleItem(
 ) {
   return createAxios()
     .delete(`tournaments/${tournament_id}/league/admin/projected_schedule/${schedule_item_id}`)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function createProjectedScheduleEvent(
+  tournament_id: number,
+  schedule_item_id: number
+) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/league/admin/projected_schedule/${schedule_item_id}/create_event`)
     .catch((response: any) => handleRequestError(response));
 }
 

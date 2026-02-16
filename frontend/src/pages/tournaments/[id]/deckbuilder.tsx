@@ -35,7 +35,9 @@ import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
 import {
   getLeagueCardPool,
+  getLeagueCardsGlobal,
   getLeagueCards,
+  getLeagueAdminUsers,
   getLeagueDecks,
   getLeagueSeasons,
   getTournaments,
@@ -184,29 +186,42 @@ export default function DeckbuilderPage({
   const tournaments = swrTournamentsResponse.data?.data ?? [];
 
   const [selectedTournamentId, setSelectedTournamentId] = useState<string | null>(null);
+  const [selectedTargetUserId, setSelectedTargetUserId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!standalone || tournaments.length < 1 || selectedTournamentId != null) return;
+    const requestedTournamentId = new URLSearchParams(window.location.search).get('tournament_id');
     const saved = window.localStorage.getItem('league_default_tournament_id');
-    const selected = tournaments.find((t: any) => String(t.id) === saved) ?? tournaments[0];
+    const preferredTournamentId = requestedTournamentId ?? saved;
+    const selected =
+      tournaments.find((t: any) => String(t.id) === preferredTournamentId) ?? tournaments[0];
+    if (selected == null) return;
     setSelectedTournamentId(String(selected.id));
     window.localStorage.setItem('league_default_tournament_id', String(selected.id));
   }, [standalone, tournaments, selectedTournamentId]);
 
   const activeTournamentId = standalone
-    ? Number(selectedTournamentId ?? tournaments[0]?.id ?? 0)
+    ? Number(selectedTournamentId ?? 0)
     : tournamentData.id;
   const hasTournament = Number.isFinite(activeTournamentId) && activeTournamentId > 0;
   const [selectedSeasonId, setSelectedSeasonId] = useState<string | null>(null);
 
   const swrCurrentUserResponse = getUser();
   const isAdmin = String(swrCurrentUserResponse.data?.data?.account_type ?? 'REGULAR') === 'ADMIN';
-  const targetUserId = null;
+  const swrAdminUsersResponse = getLeagueAdminUsers(
+    isAdmin && hasTournament ? activeTournamentId : null
+  );
+  const adminUsers = swrAdminUsersResponse.data?.data ?? [];
+  const targetUserId =
+    isAdmin && selectedTargetUserId != null && selectedTargetUserId !== ''
+      ? Number(selectedTargetUserId)
+      : null;
   const swrSeasonsResponse = getLeagueSeasons(hasTournament ? activeTournamentId : null);
   const seasons = swrSeasonsResponse.data?.data ?? [];
 
   useEffect(() => {
     setSelectedSeasonId(null);
+    setSelectedTargetUserId(null);
   }, [activeTournamentId]);
 
   useEffect(() => {
@@ -222,10 +237,50 @@ export default function DeckbuilderPage({
   const selectedSeasonNumber =
     selectedSeasonId != null && selectedSeasonId !== '' ? Number(selectedSeasonId) : null;
 
-  const swrCatalogResponse = getLeagueCards(hasTournament ? activeTournamentId : null, {
-    limit: 5000,
-    offset: 0,
-  });
+  useEffect(() => {
+    if (!isAdmin || !hasTournament || adminUsers.length < 1) return;
+    const searchParams = new URLSearchParams(window.location.search);
+    const queryTarget = searchParams.get('user_id');
+    const queryTeamName = searchParams.get('team_name')?.trim().toLowerCase();
+    const hasCurrentSelection = adminUsers.some(
+      (row: any) => String(row.user_id) === String(selectedTargetUserId)
+    );
+    if (hasCurrentSelection) return;
+    const selectedFromQuery =
+      queryTarget != null
+        ? adminUsers.find((row: any) => String(row.user_id) === queryTarget)
+        : null;
+    const selectedFromCurrentUser =
+      swrCurrentUserResponse.data?.data?.id != null
+        ? adminUsers.find(
+            (row: any) => Number(row.user_id) === Number(swrCurrentUserResponse.data?.data?.id)
+          )
+        : null;
+    const selectedFromTeamName =
+      queryTeamName != null && queryTeamName !== ''
+        ? adminUsers.find((row: any) => String(row.user_name ?? '').trim().toLowerCase() === queryTeamName)
+        : null;
+    const fallback = selectedFromQuery ?? selectedFromTeamName ?? selectedFromCurrentUser ?? adminUsers[0];
+    if (fallback != null) {
+      setSelectedTargetUserId(String(fallback.user_id));
+    }
+  }, [
+    adminUsers,
+    hasTournament,
+    isAdmin,
+    selectedTargetUserId,
+    swrCurrentUserResponse.data?.data?.id,
+  ]);
+
+  const swrCatalogResponse = hasTournament
+    ? getLeagueCards(activeTournamentId, {
+        limit: 5000,
+        offset: 0,
+      })
+    : getLeagueCardsGlobal({
+        limit: 5000,
+        offset: 0,
+      });
   const swrCardPoolResponse = getLeagueCardPool(
     hasTournament ? activeTournamentId : null,
     targetUserId,
@@ -701,7 +756,6 @@ export default function DeckbuilderPage({
   }
 
   async function onImportSwuDb() {
-    if (!hasTournament) return;
     try {
       const parsed = JSON.parse(swudbImportJson);
       const resolveCardId = (rawId: unknown) => {
@@ -761,17 +815,25 @@ export default function DeckbuilderPage({
         )
       );
 
-      await importDeckSwuDb(activeTournamentId, {
-        user_id: targetUserId ?? undefined,
-        season_id: selectedSeasonNumber ?? undefined,
-        name: importedName,
-        leader,
-        base,
-        deck,
-        sideboard,
+      if (hasTournament) {
+        await importDeckSwuDb(activeTournamentId, {
+          user_id: targetUserId ?? undefined,
+          season_id: selectedSeasonNumber ?? undefined,
+          name: importedName,
+          leader,
+          base,
+          deck,
+          sideboard,
+        });
+        await swrDecksResponse.mutate();
+      }
+      showNotification({
+        color: 'green',
+        title: 'Import successful',
+        message: hasTournament
+          ? 'Deck imported and saved.'
+          : 'Deck loaded locally. Select a tournament to save or submit.',
       });
-      await swrDecksResponse.mutate();
-      showNotification({ color: 'green', title: 'Import successful', message: '' });
       setSwudbImportJson('');
     } catch {
       showNotification({
@@ -953,8 +1015,22 @@ export default function DeckbuilderPage({
                       window.localStorage.setItem('league_default_tournament_id', value);
                     }
                   }}
-                  allowDeselect={false}
+                  allowDeselect
+                  clearable
                   data={tournaments.map((t: any) => ({ value: String(t.id), label: t.name }))}
+                />
+              )}
+              {isAdmin && hasTournament && (
+                <Select
+                  label="Deck/Card Pool Owner"
+                  value={selectedTargetUserId}
+                  onChange={setSelectedTargetUserId}
+                  allowDeselect={false}
+                  searchable
+                  data={adminUsers.map((row: any) => ({
+                    value: String(row.user_id),
+                    label: `${row.user_name} (${row.user_email})`,
+                  }))}
                 />
               )}
               {seasons.length > 0 && (
@@ -1501,19 +1577,13 @@ export default function DeckbuilderPage({
                     Save warning: {poolViolations.length} card-pool issue(s) detected ({poolViolations.filter((item) => item.reason === 'missing').length} missing, {poolViolations.filter((item) => item.reason === 'excess').length} over limit).
                   </Text>
                 )}
-                {isAdmin ? (
-                  <Button
-                    variant="outline"
-                    onClick={onSubmitEntry}
-                    disabled={leaderCardId == null || baseCardId == null}
-                  >
-                    Submit Tournament Entry
-                  </Button>
-                ) : (
-                  <Text size="sm" c="dimmed">
-                    Only admins can submit tournament entries.
-                  </Text>
-                )}
+                <Button
+                  variant="outline"
+                  onClick={onSubmitEntry}
+                  disabled={!hasTournament || leaderCardId == null || baseCardId == null}
+                >
+                  Submit Tournament Entry
+                </Button>
               </Stack>
             </Card>
 

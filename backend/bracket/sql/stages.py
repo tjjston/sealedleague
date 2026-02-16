@@ -14,6 +14,7 @@ async def get_full_tournament_details(
     stage_item_ids: set[StageItemId] | None = None,
     *,
     no_draft_rounds: bool = False,
+    include_team_players: bool = False,
 ) -> list[StageWithStageItems]:
     draft_filter = "AND rounds.is_draft IS FALSE" if no_draft_rounds else ""
     round_filter = "AND rounds.id = :round_id" if round_id is not None else ""
@@ -27,15 +28,43 @@ async def get_full_tournament_details(
         else ""
     )
 
+    team_players_cte = """
+        teams_with_players AS (
+            SELECT
+                t.*,
+                COALESCE(
+                    to_json(array_agg(p.*) FILTER (WHERE p.id IS NOT NULL)),
+                    '[]'::json
+                ) AS players
+            FROM teams t
+            LEFT JOIN players_x_teams pxt ON pxt.team_id = t.id
+            LEFT JOIN players p ON p.id = pxt.player_id
+            WHERE t.tournament_id = :tournament_id
+            GROUP BY t.id
+        ),
+    """
+    teams_without_players_cte = """
+        teams_with_players AS (
+            SELECT
+                t.*,
+                '[]'::json AS players
+            FROM teams t
+            WHERE t.tournament_id = :tournament_id
+        ),
+    """
+    teams_cte = team_players_cte if include_team_players else teams_without_players_cte
+
     query = f"""
-        WITH inputs_with_teams AS (
+        WITH
+        {teams_cte}
+        inputs_with_teams AS (
             SELECT DISTINCT ON (stage_item_inputs.id)
                 stage_item_inputs.*,
                 to_json(t.*) AS team
             FROM stage_item_inputs
             JOIN stage_items on stage_item_inputs.stage_item_id = stage_items.id
             LEFT JOIN stages s2 on s2.id = stage_items.stage_id
-            LEFT JOIN teams t on t.id = stage_item_inputs.team_id
+            LEFT JOIN teams_with_players t on t.id = stage_item_inputs.team_id
             WHERE s2.tournament_id = :tournament_id
             {stage_item_filter}
             GROUP BY stage_item_inputs.id, t.id

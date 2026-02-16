@@ -172,6 +172,7 @@ class LeagueStandingsRow(BaseModel):
     user_name: str
     user_email: str
     points: float = 0
+    event_wins: int = 0
     tournament_wins: int = 0
     tournament_placements: int = 0
     prize_packs: int = 0
@@ -349,6 +350,7 @@ class LeagueProjectedScheduleItemUpsertBody(BaseModel):
     title: str = Field(min_length=1, max_length=180)
     details: str | None = Field(default=None, max_length=4000)
     status: str | None = Field(default=None, max_length=80)
+    season_id: int | None = None
     sort_order: int = Field(default=0, ge=0, le=1000)
 
 
@@ -358,6 +360,8 @@ class LeagueProjectedScheduleItemUpdateBody(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=180)
     details: str | None = Field(default=None, max_length=4000)
     status: str | None = Field(default=None, max_length=80)
+    season_id: int | None = None
+    linked_tournament_id: TournamentId | None = None
     sort_order: int | None = Field(default=None, ge=0, le=1000)
 
 
@@ -395,8 +399,66 @@ class LeagueProjectedScheduleItemView(BaseModel):
     title: str
     details: str | None = None
     status: str | None = None
+    season_id: int | None = None
     sort_order: int = 0
+    linked_tournament_id: TournamentId | None = None
+    linked_tournament_name: str | None = None
     created_by_user_id: UserId | None = None
     created_by_user_name: str | None = None
     created: datetime_utc
     updated: datetime_utc
+
+
+class LeagueProjectedScheduleEventCreateResult(BaseModel):
+    schedule_item_id: int
+    tournament_id: TournamentId
+    tournament_name: str
+
+
+class LeagueMetaCountBucket(BaseModel):
+    label: str
+    count: int
+
+
+class LeagueMetaCardUsage(BaseModel):
+    card_id: str
+    card_name: str | None = None
+    image_url: str | None = None
+    set_code: str | None = None
+    card_type: str | None = None
+    traits: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+    rules_text: str | None = None
+    deck_count: int = 0
+    total_copies: int = 0
+
+
+class LeagueMetaDeckCoreUsage(BaseModel):
+    card_id: str
+    card_name: str | None = None
+    image_url: str | None = None
+    count: int = 0
+    win_rate: float = 0
+
+
+class LeagueMetaArchetypeUsage(BaseModel):
+    leader_card_id: str
+    leader_name: str | None = None
+    leader_image_url: str | None = None
+    base_card_id: str
+    base_name: str | None = None
+    base_image_url: str | None = None
+    count: int = 0
+    win_rate: float = 0
+
+
+class LeagueMetaAnalysisView(BaseModel):
+    season_id: int
+    season_name: str
+    total_decks: int
+    top_cards: list[LeagueMetaCardUsage] = Field(default_factory=list)
+    top_leaders: list[LeagueMetaDeckCoreUsage] = Field(default_factory=list)
+    top_bases: list[LeagueMetaDeckCoreUsage] = Field(default_factory=list)
+    top_traits: list[LeagueMetaCountBucket] = Field(default_factory=list)
+    top_keywords: list[LeagueMetaCountBucket] = Field(default_factory=list)
+    top_archetypes: list[LeagueMetaArchetypeUsage] = Field(default_factory=list)

@@ -100,7 +100,8 @@ export default function SeasonStandingsPage({
             <Table.Th>#</Table.Th>
             <Table.Th>Player</Table.Th>
             <Table.Th>Points</Table.Th>
-            <Table.Th>Wins</Table.Th>
+            <Table.Th>Event Wins</Table.Th>
+            <Table.Th>Tournament Wins</Table.Th>
             <Table.Th>Placements</Table.Th>
             <Table.Th>Packs</Table.Th>
             <Table.Th>Privileges</Table.Th>
@@ -120,6 +121,7 @@ export default function SeasonStandingsPage({
                 </Stack>
               </Table.Td>
               <Table.Td>{row.points}</Table.Td>
+              <Table.Td>{row.event_wins ?? 0}</Table.Td>
               <Table.Td>{row.tournament_wins ?? 0}</Table.Td>
               <Table.Td>{row.tournament_placements ?? 0}</Table.Td>
               <Table.Td>{row.prize_packs ?? 0}</Table.Td>

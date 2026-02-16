@@ -8,6 +8,10 @@ from starlette.responses import Response
 from starlette import status
 
 from bracket.config import config
+from bracket.database import database
+from bracket.models.db.player import PlayerBody
+from bracket.models.db.ranking import RankingCreateBody
+from bracket.models.db.tournament import TournamentBody, TournamentUpdateBody
 from bracket.models.db.user import UserPublic
 from bracket.models.league import (
     LeagueAwardAccoladeBody,
@@ -38,7 +42,9 @@ from bracket.routes.models import (
     LeagueCardPoolEntriesResponse,
     LeagueDeckResponse,
     LeagueDecksResponse,
+    LeagueMetaAnalysisResponse,
     LeagueRecalculateResponse,
+    LeagueProjectedScheduleEventCreateResponse,
     LeagueSeasonHistoryResponse,
     LeagueProjectedScheduleItemResponse,
     LeagueProjectedScheduleResponse,
@@ -60,6 +66,7 @@ from bracket.sql.league import (
     get_deck_by_id,
     get_decks,
     get_league_admin_users,
+    get_league_meta_analysis,
     get_league_standings,
     get_season_draft_view,
     get_season_by_id,
@@ -67,6 +74,7 @@ from bracket.sql.league import (
     get_next_opponent_for_user_in_tournament,
     get_or_create_season_by_name,
     get_or_create_active_season,
+    get_projected_schedule_item_by_id,
     get_tournament_ids_for_season,
     list_league_communications,
     list_projected_schedule_items,
@@ -87,9 +95,14 @@ from bracket.sql.league import (
 )
 from bracket.utils.id_types import DeckId, TournamentId, UserId
 from bracket.utils.logging import logger
-from bracket.sql.tournaments import sql_get_tournament, sql_update_tournament
-from bracket.models.db.tournament import TournamentUpdateBody
-from bracket.sql.players import ensure_tournament_records_fresh, recalculate_tournament_records
+from bracket.sql.players import (
+    ensure_tournament_records_fresh,
+    insert_player,
+    recalculate_tournament_records,
+)
+from bracket.sql.rankings import sql_create_ranking
+from bracket.sql.tournaments import sql_create_tournament, sql_get_tournament, sql_update_tournament
+from bracket.sql.users import get_users_for_club
 
 router = APIRouter(prefix=config.api_prefix)
 
@@ -164,6 +177,20 @@ async def get_season_history(
             }
         )
     return LeagueSeasonHistoryResponse(data={"seasons": season_views, "cumulative": cumulative})
+
+
+@router.get(
+    "/tournaments/{tournament_id}/league/meta_analysis",
+    response_model=LeagueMetaAnalysisResponse,
+)
+async def get_meta_analysis(
+    tournament_id: TournamentId,
+    season_id: int | None = Query(default=None),
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueMetaAnalysisResponse:
+    season = await resolve_season_for_tournament(tournament_id, season_id)
+    data = await get_league_meta_analysis(season_id=season.id, season_name=season.name)
+    return LeagueMetaAnalysisResponse(data=data)
 
 
 @router.get(
@@ -247,6 +274,8 @@ async def post_projected_schedule_item(
 ) -> LeagueProjectedScheduleItemResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    if body.season_id is not None:
+        await resolve_season_for_tournament(tournament_id, body.season_id)
     created = await create_projected_schedule_item(tournament_id, body, user_public.id)
     return LeagueProjectedScheduleItemResponse(data=created)
 
@@ -263,6 +292,8 @@ async def put_projected_schedule_item(
 ) -> LeagueProjectedScheduleItemResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    if body.season_id is not None:
+        await resolve_season_for_tournament(tournament_id, body.season_id)
     updated = await update_projected_schedule_item(tournament_id, schedule_item_id, body)
     if updated is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Projected schedule item not found")
@@ -282,6 +313,78 @@ async def delete_admin_projected_schedule_item(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
     await delete_projected_schedule_item(tournament_id, schedule_item_id)
     return SuccessResponse()
+
+
+@router.post(
+    "/tournaments/{tournament_id}/league/admin/projected_schedule/{schedule_item_id}/create_event",
+    response_model=LeagueProjectedScheduleEventCreateResponse,
+)
+async def post_create_projected_schedule_event(
+    tournament_id: TournamentId,
+    schedule_item_id: int,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueProjectedScheduleEventCreateResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+
+    schedule_item = await get_projected_schedule_item_by_id(tournament_id, schedule_item_id)
+    if schedule_item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Projected schedule item not found")
+
+    if schedule_item.linked_tournament_id is not None:
+        existing_event = await sql_get_tournament(schedule_item.linked_tournament_id)
+        return LeagueProjectedScheduleEventCreateResponse(
+            data={
+                "schedule_item_id": int(schedule_item.id),
+                "tournament_id": int(existing_event.id),
+                "tournament_name": existing_event.name,
+            }
+        )
+
+    source_tournament = await sql_get_tournament(tournament_id)
+    event_name = f"{source_tournament.name} - {schedule_item.title}".strip()
+    if event_name == "":
+        event_name = f"{source_tournament.name} Event"
+
+    event_start_time = (
+        schedule_item.starts_at if schedule_item.starts_at is not None else datetime_utc.now()
+    )
+
+    event_body = TournamentBody(
+        club_id=source_tournament.club_id,
+        name=event_name[:180],
+        start_time=event_start_time,
+        dashboard_public=False,
+        dashboard_endpoint=None,
+        players_can_be_in_multiple_teams=source_tournament.players_can_be_in_multiple_teams,
+        auto_assign_courts=source_tournament.auto_assign_courts,
+        duration_minutes=source_tournament.duration_minutes,
+        margin_minutes=source_tournament.margin_minutes,
+    )
+
+    async with database.transaction():
+        created_tournament_id = await sql_create_tournament(event_body)
+        await sql_create_ranking(created_tournament_id, RankingCreateBody(), position=0)
+        club_users = await get_users_for_club(source_tournament.club_id)
+        for club_user in club_users:
+            player_name = club_user.name.strip()
+            if player_name == "":
+                continue
+            await insert_player(PlayerBody(name=player_name, active=True), created_tournament_id)
+        await update_projected_schedule_item(
+            tournament_id,
+            schedule_item_id,
+            LeagueProjectedScheduleItemUpdateBody(linked_tournament_id=created_tournament_id),
+        )
+
+    created_event = await sql_get_tournament(created_tournament_id)
+    return LeagueProjectedScheduleEventCreateResponse(
+        data={
+            "schedule_item_id": int(schedule_item.id),
+            "tournament_id": int(created_event.id),
+            "tournament_name": created_event.name,
+        }
+    )
 
 
 @router.get(
@@ -424,9 +527,6 @@ async def submit_league_entry(
     body: LeagueParticipantSubmissionBody,
     user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueDeckResponse:
-    if not is_admin_user(user_public):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
-
     participant_name = (
         body.participant_name.strip() if body.participant_name is not None else user_public.name.strip()
     )
@@ -906,6 +1006,7 @@ async def export_standings_csv(
             "user_name",
             "user_email",
             "points",
+            "event_wins",
             "tournament_wins",
             "tournament_placements",
             "prize_packs",
@@ -925,6 +1026,7 @@ async def export_standings_csv(
                 row.user_name,
                 row.user_email,
                 row.points,
+                row.event_wins,
                 row.tournament_wins,
                 row.tournament_placements,
                 row.prize_packs,

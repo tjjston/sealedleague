@@ -1,4 +1,4 @@
-import { Badge, Center, Pagination, Table } from '@mantine/core';
+import { Badge, Button, Center, Group, Pagination, Table } from '@mantine/core';
 import { useTranslation } from 'react-i18next';
 import { SWRResponse } from 'swr';
 
@@ -8,6 +8,7 @@ import TeamUpdateModal from '@components/modals/team_update_modal';
 import { NoContent } from '@components/no_content/empty_table_info';
 import { DateTime } from '@components/utils/datetime';
 import RequestErrorAlert from '@components/utils/error_alert';
+import PreloadLink from '@components/utils/link';
 import { TableSkeletonSingleColumn } from '@components/utils/skeletons';
 import { TournamentMinimal } from '@components/utils/tournament';
 import { FullTeamWithPlayers, TeamsWithPlayersResponse } from '@openapi';
@@ -55,18 +56,28 @@ export default function TeamsTable({
           <DateTime datetime={team.created} />
         </Table.Td>
         <Table.Td>
-          <TeamUpdateModal
-            tournament_id={tournamentData.id}
-            team={team}
-            swrTeamsResponse={swrTeamsResponse}
-          />
-          <DeleteButton
-            onClick={async () => {
-              await deleteTeam(tournamentData.id, team.id);
-              await swrTeamsResponse.mutate();
-            }}
-            title={t('delete_team_button')}
-          />
+          <Group gap={6}>
+            <Button
+              size="xs"
+              variant="light"
+              component={PreloadLink}
+              href={`/league/deckbuilder?tournament_id=${tournamentData.id}&team_name=${encodeURIComponent(team.name)}`}
+            >
+              Decks
+            </Button>
+            <TeamUpdateModal
+              tournament_id={tournamentData.id}
+              team={team}
+              swrTeamsResponse={swrTeamsResponse}
+            />
+            <DeleteButton
+              onClick={async () => {
+                await deleteTeam(tournamentData.id, team.id);
+                await swrTeamsResponse.mutate();
+              }}
+              title={t('delete_team_button')}
+            />
+          </Group>
         </Table.Td>
       </Table.Tr>
     ));
