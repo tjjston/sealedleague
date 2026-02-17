@@ -29,7 +29,8 @@ services:
       context: .
       dockerfile: Dockerfile
       pull: true
-    image: tjjston/sealedleague:latest
+      args:
+        SOURCE_COMMIT: ${GIT_COMMIT:-local-dev}
     networks:
       - sealedleague_lan
     ports:

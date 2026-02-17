@@ -13,6 +13,8 @@ RUN apk add pnpm && \
 
 # Build backend image that also serves frontend (stored in `/app/frontend-dist`)
 FROM python:3.14-alpine3.22
+ARG SOURCE_COMMIT=local-dev
+LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}"
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 RUN rm -rf /var/cache/apk/*

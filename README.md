@@ -69,6 +69,7 @@ Sealed League is a customized fork of [evroon/bracket](https://github.com/evroon
 ### Start
 
 ```bash
+export GIT_COMMIT="$(git rev-parse --short=12 HEAD)"
 docker compose up -d --build
 ```
 
@@ -97,6 +98,21 @@ docker compose down
 
 # Stop + remove DB volume
 docker compose down -v
+```
+
+### Server Update Flow (Always Build Current Commit)
+
+```bash
+git fetch --all --prune
+git checkout master
+git pull --ff-only origin master
+
+export GIT_COMMIT="$(git rev-parse --short=12 HEAD)"
+docker compose build --pull sealedleague
+docker compose up -d --force-recreate sealedleague
+
+# Verify the running container build commit:
+docker inspect sealedleague-app --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}'
 ```
 
 ## First-Time Setup Flow (UI)
