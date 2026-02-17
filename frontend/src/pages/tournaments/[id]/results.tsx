@@ -307,7 +307,10 @@ export default function ResultsPage() {
   const { t } = useTranslation();
   const { tournamentData } = getTournamentIdFromRouter();
   const swrCurrentUserResponse = getUser();
-  const swrStagesResponse = getStages(tournamentData.id, true, true);
+  const currentUser = swrCurrentUserResponse.data?.data ?? null;
+  const isAdmin = String(currentUser?.account_type ?? 'REGULAR') === 'ADMIN';
+  const includeTeamPlayers = currentUser == null ? false : !isAdmin;
+  const swrStagesResponse = getStages(tournamentData.id, true, includeTeamPlayers);
   const swrCourtsResponse = getCourts(tournamentData.id);
   const swrPlayersResponse = getPlayers(tournamentData.id);
 
@@ -429,9 +432,7 @@ export default function ResultsPage() {
     );
   }
 
-  const currentUser = swrCurrentUserResponse.data?.data ?? null;
   const currentUserName = String(currentUser?.name ?? '').trim().toLowerCase();
-  const isAdmin = String(currentUser?.account_type ?? 'REGULAR') === 'ADMIN';
   const userIsInMatch = (matchToCheck: any) => {
     if (currentUserName === '') return false;
     return [matchToCheck?.stage_item_input1, matchToCheck?.stage_item_input2].some((input: any) => {

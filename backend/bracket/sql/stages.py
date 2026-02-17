@@ -58,16 +58,15 @@ async def get_full_tournament_details(
         WITH
         {teams_cte}
         inputs_with_teams AS (
-            SELECT DISTINCT ON (stage_item_inputs.id)
+            SELECT
                 stage_item_inputs.*,
-                to_json(t.*) AS team
+                to_json(t) AS team
             FROM stage_item_inputs
             JOIN stage_items on stage_item_inputs.stage_item_id = stage_items.id
             LEFT JOIN stages s2 on s2.id = stage_items.stage_id
             LEFT JOIN teams_with_players t on t.id = stage_item_inputs.team_id
             WHERE s2.tournament_id = :tournament_id
             {stage_item_filter}
-            GROUP BY stage_item_inputs.id, t.id
         ), matches_with_inputs AS (
             SELECT DISTINCT ON (matches.id)
                 matches.*,
