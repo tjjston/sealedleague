@@ -28,6 +28,7 @@ import LeaguePlayerProfilePage from './pages/league/player_profile';
 import LeagueCommunicationsPage from './pages/league/communications';
 import LeagueMetaAnalysisPage from './pages/league/meta_analysis';
 import LeagueProjectedSchedulePage from './pages/league/projected_schedule';
+import BaseHealthPage from './pages/league/base_health';
 import SealedDraftSimulationPage from './pages/league/sealed_draft';
 import LeagueSeasonDraftPage from './pages/league/season_draft';
 import LeagueSeasonStandingsEntryPage from './pages/league/season_standings';
@@ -122,6 +123,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/league/communications" element={<LeagueCommunicationsPage />} />
               <Route path="/league/projected_schedule" element={<LeagueProjectedSchedulePage />} />
               <Route path="/league/meta-analysis" element={<LeagueMetaAnalysisPage />} />
+              <Route path="/league/base-health" element={<BaseHealthPage />} />
               <Route path="/league/players" element={<LeaguePlayersPage />} />
               <Route path="/league/players/:user_id" element={<LeaguePlayerProfilePage />} />
               <Route path="/league/sealed-draft" element={<SealedDraftSimulationPage />} />

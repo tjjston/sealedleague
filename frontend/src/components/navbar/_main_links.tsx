@@ -89,7 +89,10 @@ export function getBaseLinksDict() {
     {
       link: '/league/sealed-draft',
       label: 'Tools',
-      links: [{ link: '/league/sealed-draft', label: 'Sealed Sim', icon: IconCards }],
+      links: [
+        { link: '/league/sealed-draft', label: 'Sealed Sim', icon: IconCards },
+        { link: '/league/base-health', label: 'Base Health', icon: IconScoreboard },
+      ],
       icon: IconSettings,
     },
   ];

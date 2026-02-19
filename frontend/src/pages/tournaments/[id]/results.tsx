@@ -25,6 +25,7 @@ import MatchModal from '@components/modals/match_modal';
 import { NoContent } from '@components/no_content/empty_table_info';
 import RequestErrorAlert from '@components/utils/error_alert';
 import { Time, formatTime } from '@components/utils/datetime';
+import PreloadLink from '@components/utils/link';
 import { formatMatchInput1, formatMatchInput2 } from '@components/utils/match';
 import { Translator } from '@components/utils/types';
 import { getTournamentIdFromRouter, responseIsValid } from '@components/utils/util';
@@ -55,6 +56,7 @@ function ScheduleRow({
   submittableByUser,
   winnerByStageItemId,
   resolveDeckPreviewForTeam,
+  baseTrackerHref,
 }: {
   data: any;
   openMatchModal: any;
@@ -64,6 +66,7 @@ function ScheduleRow({
   submittableByUser: boolean;
   winnerByStageItemId: Record<number, string>;
   resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
+  baseTrackerHref: string;
 }) {
   const { t } = useTranslation();
   const winColor = '#2a8f37';
@@ -132,105 +135,111 @@ function ScheduleRow({
   };
 
   return (
-    <UnstyledButton
-      style={{ width: '48rem', cursor: editable ? 'pointer' : 'default' }}
-      onClick={() => {
-        if (editable) {
-          openMatchModal(data.match);
-        }
-      }}
-    >
-      <Card
-        shadow="sm"
-        radius="md"
-        withBorder
-        mt="md"
-        pt="0rem"
-        style={
-          submittableByUser
-            ? {
-                backgroundColor: 'rgba(80, 160, 255, 0.14)',
-                borderColor: 'rgba(80, 160, 255, 0.7)',
-              }
-            : undefined
-        }
+    <div style={{ width: '48rem' }}>
+      <Group justify="flex-end" mt="md" mb={4}>
+        <Button component={PreloadLink} href={baseTrackerHref} size="xs" variant="light">
+          Open Base Tracker
+        </Button>
+      </Group>
+      <UnstyledButton
+        style={{ width: '100%', cursor: editable ? 'pointer' : 'default' }}
+        onClick={() => {
+          if (editable) {
+            openMatchModal(data.match);
+          }
+        }}
       >
-        <Card.Section withBorder>
-          <Grid pt="0.75rem" pb="0.5rem">
-            <Grid.Col mb="0rem" span={4}>
-              <Text pl="sm" mt="sm" fw={800}>
-                {data.match.court?.name ?? 'TBD Court'}
-              </Text>
-            </Grid.Col>
-            <Grid.Col mb="0rem" span={4}>
-              <Center>
-                <Text mt="sm" fw={800}>
-                  {data.match.start_time != null ? <Time datetime={data.match.start_time} /> : null}
+        <Card
+          shadow="sm"
+          radius="md"
+          withBorder
+          pt="0rem"
+          style={
+            submittableByUser
+              ? {
+                  backgroundColor: 'rgba(80, 160, 255, 0.14)',
+                  borderColor: 'rgba(80, 160, 255, 0.7)',
+                }
+              : undefined
+          }
+        >
+          <Card.Section withBorder>
+            <Grid pt="0.75rem" pb="0.5rem">
+              <Grid.Col mb="0rem" span={4}>
+                <Text pl="sm" mt="sm" fw={800}>
+                  {data.match.court?.name ?? 'TBD Court'}
                 </Text>
-              </Center>
-            </Grid.Col>
-            <Grid.Col mb="0rem" span={4}>
-              <Flex justify="right">
-                <Badge
-                  color={stringToColour(`${data.stageItem.id}`)}
-                  variant="outline"
-                  mr="md"
-                  mt="0.8rem"
-                  size="md"
-                >
-                  {data.stageItem.name}
-                </Badge>
-                {winnerByStageItemId[data.stageItem.id] != null ? (
-                  <Badge color="yellow" variant="light" mt="0.8rem" size="md">
-                    Winner: {winnerByStageItemId[data.stageItem.id]}
+              </Grid.Col>
+              <Grid.Col mb="0rem" span={4}>
+                <Center>
+                  <Text mt="sm" fw={800}>
+                    {data.match.start_time != null ? <Time datetime={data.match.start_time} /> : null}
+                  </Text>
+                </Center>
+              </Grid.Col>
+              <Grid.Col mb="0rem" span={4}>
+                <Flex justify="right">
+                  <Badge
+                    color={stringToColour(`${data.stageItem.id}`)}
+                    variant="outline"
+                    mr="md"
+                    mt="0.8rem"
+                    size="md"
+                  >
+                    {data.stageItem.name}
                   </Badge>
-                ) : null}
-              </Flex>
-            </Grid.Col>
-          </Grid>
-        </Card.Section>
-        <Stack pt="sm">
-          <Grid>
-            <Grid.Col span="auto" pb="0rem">
-              {renderTeamLabel(team1Label, team1Name)}
-            </Grid.Col>
-            <Grid.Col span="content" pb="0rem">
-              <div
-                style={{
-                  backgroundColor: team1_color,
-                  borderRadius: '0.5rem',
-                  paddingLeft: '1rem',
-                  paddingRight: '1rem',
-                  color: 'white',
-                  fontWeight: 800,
-                }}
-              >
-                {data.match.stage_item_input1_score}
-              </div>
-            </Grid.Col>
-          </Grid>
-          <Grid mb="0rem">
-            <Grid.Col span="auto" pb="0rem">
-              {renderTeamLabel(team2Label, team2Name)}
-            </Grid.Col>
-            <Grid.Col span="content" pb="0rem">
-              <div
-                style={{
-                  backgroundColor: team2_color,
-                  borderRadius: '0.5rem',
-                  paddingLeft: '1rem',
-                  paddingRight: '1rem',
-                  color: 'white',
-                  fontWeight: 800,
-                }}
-              >
-                {data.match.stage_item_input2_score}
-              </div>
-            </Grid.Col>
-          </Grid>
-        </Stack>
-      </Card>
-    </UnstyledButton>
+                  {winnerByStageItemId[data.stageItem.id] != null ? (
+                    <Badge color="yellow" variant="light" mt="0.8rem" size="md">
+                      Winner: {winnerByStageItemId[data.stageItem.id]}
+                    </Badge>
+                  ) : null}
+                </Flex>
+              </Grid.Col>
+            </Grid>
+          </Card.Section>
+          <Stack pt="sm">
+            <Grid>
+              <Grid.Col span="auto" pb="0rem">
+                {renderTeamLabel(team1Label, team1Name)}
+              </Grid.Col>
+              <Grid.Col span="content" pb="0rem">
+                <div
+                  style={{
+                    backgroundColor: team1_color,
+                    borderRadius: '0.5rem',
+                    paddingLeft: '1rem',
+                    paddingRight: '1rem',
+                    color: 'white',
+                    fontWeight: 800,
+                  }}
+                >
+                  {data.match.stage_item_input1_score}
+                </div>
+              </Grid.Col>
+            </Grid>
+            <Grid mb="0rem">
+              <Grid.Col span="auto" pb="0rem">
+                {renderTeamLabel(team2Label, team2Name)}
+              </Grid.Col>
+              <Grid.Col span="content" pb="0rem">
+                <div
+                  style={{
+                    backgroundColor: team2_color,
+                    borderRadius: '0.5rem',
+                    paddingLeft: '1rem',
+                    paddingRight: '1rem',
+                    color: 'white',
+                    fontWeight: 800,
+                  }}
+                >
+                  {data.match.stage_item_input2_score}
+                </div>
+              </Grid.Col>
+            </Grid>
+          </Stack>
+        </Card>
+      </UnstyledButton>
+    </div>
   );
 }
 
@@ -272,6 +281,7 @@ function Schedule({
   isSubmittableByUser,
   winnerByStageItemId,
   resolveDeckPreviewForTeam,
+  buildBaseTrackerHref,
 }: {
   t: Translator;
   stageItemsLookup: any;
@@ -281,6 +291,7 @@ function Schedule({
   isSubmittableByUser: (match: any) => boolean;
   winnerByStageItemId: Record<number, string>;
   resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
+  buildBaseTrackerHref: (match: any) => string;
 }) {
   const matches: any[] = Object.values(matchesLookup ?? {}).filter(
     (value: any) => value != null && value.match != null && value.stageItem != null
@@ -326,6 +337,7 @@ function Schedule({
         submittableByUser={isSubmittableByUser(data.match)}
         winnerByStageItemId={winnerByStageItemId}
         resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
+        baseTrackerHref={buildBaseTrackerHref(data.match)}
       />
     );
   }
@@ -591,6 +603,15 @@ export default function ResultsPage() {
     modalSetOpened(opened);
   }
 
+  const buildBaseTrackerHref = (matchToTrack: any) => {
+    const matchId = Number(matchToTrack?.id ?? 0);
+    const tournamentId = Number(matchToTrack?.tournament_id ?? tournamentData.id ?? 0);
+    if (!Number.isFinite(matchId) || matchId <= 0 || !Number.isFinite(tournamentId) || tournamentId <= 0) {
+      return '/league/base-health';
+    }
+    return `/league/base-health?tournament_id=${tournamentId}&match_id=${matchId}`;
+  };
+
   return (
     <TournamentLayout tournament_id={tournamentData.id}>
       <MatchModal
@@ -604,7 +625,12 @@ export default function ResultsPage() {
         allowAdvancedSettings={isAdmin}
         allowDelete={isAdmin}
       />
-      <Title>{t('results_title')}</Title>
+      <Group justify="space-between" align="center">
+        <Title>{t('results_title')}</Title>
+        <Button component={PreloadLink} href="/league/base-health" variant="light">
+          Base Health Tool
+        </Button>
+      </Group>
       {finishedStageItemWinners.length > 0 ? (
         <Card
           withBorder
@@ -761,6 +787,7 @@ export default function ResultsPage() {
             isSubmittableByUser={(matchToCheck: any) => !isAdmin && userIsInMatch(matchToCheck)}
             winnerByStageItemId={winnerByStageItemId}
             resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
+            buildBaseTrackerHref={buildBaseTrackerHref}
           />
         </SectionErrorBoundary>
       </Center>
