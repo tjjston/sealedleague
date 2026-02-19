@@ -9,6 +9,8 @@ from starlette import status
 
 from bracket.config import config
 from bracket.database import database
+from bracket.schema import courts
+from bracket.models.db.court import CourtInsertable
 from bracket.models.db.player import PlayerBody
 from bracket.models.db.ranking import RankingCreateBody
 from bracket.models.db.tournament import TournamentBody, TournamentUpdateBody
@@ -17,6 +19,7 @@ from bracket.models.league import (
     LeagueAwardAccoladeBody,
     LeagueCommunicationUpdateBody,
     LeagueCommunicationUpsertBody,
+    LeagueDashboardBackgroundSettingsUpdateBody,
     LeagueProjectedScheduleItemUpdateBody,
     LeagueProjectedScheduleItemUpsertBody,
     LeagueSeasonCreateBody,
@@ -35,6 +38,7 @@ from bracket.routes.auth import is_admin_user, user_authenticated_for_tournament
 from bracket.routes.models import (
     LeagueCommunicationResponse,
     LeagueCommunicationsResponse,
+    LeagueDashboardBackgroundSettingsResponse,
     LeagueAdminSeasonsResponse,
     LeagueTournamentApplicationsResponse,
     LeagueUpcomingOpponentResponse,
@@ -54,6 +58,7 @@ from bracket.routes.models import (
 )
 from bracket.sql.league import (
     apply_season_draft_pick,
+    confirm_season_draft_results,
     create_league_communication,
     create_projected_schedule_item,
     create_season,
@@ -61,10 +66,12 @@ from bracket.sql.league import (
     delete_projected_schedule_item,
     delete_season,
     delete_deck,
+    delete_tournament_application,
     ensure_user_registered_as_participant,
     get_card_pool_entries,
     get_deck_by_id,
     get_decks,
+    get_decks_for_tournament_scope,
     get_league_admin_users,
     get_league_meta_analysis,
     get_league_standings,
@@ -77,6 +84,7 @@ from bracket.sql.league import (
     get_projected_schedule_item_by_id,
     get_tournament_ids_for_season,
     list_league_communications,
+    get_dashboard_background_settings,
     list_projected_schedule_items,
     get_seasons_for_tournament,
     get_user_id_by_email,
@@ -84,9 +92,11 @@ from bracket.sql.league import (
     insert_points_ledger_delta,
     list_admin_seasons_for_tournament,
     set_team_logo_for_user_in_tournament,
+    reset_season_draft_results,
     upsert_tournament_application,
     update_season,
     update_league_communication,
+    upsert_dashboard_background_settings,
     update_projected_schedule_item,
     upsert_card_pool_entry,
     upsert_deck,
@@ -202,6 +212,34 @@ async def get_league_communications(
     _: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueCommunicationsResponse:
     return LeagueCommunicationsResponse(data=await list_league_communications(tournament_id))
+
+
+@router.get(
+    "/tournaments/{tournament_id}/league/dashboard_background",
+    response_model=LeagueDashboardBackgroundSettingsResponse,
+)
+async def get_league_dashboard_background(
+    tournament_id: TournamentId,
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueDashboardBackgroundSettingsResponse:
+    return LeagueDashboardBackgroundSettingsResponse(
+        data=await get_dashboard_background_settings(tournament_id)
+    )
+
+
+@router.put(
+    "/tournaments/{tournament_id}/league/admin/dashboard_background",
+    response_model=LeagueDashboardBackgroundSettingsResponse,
+)
+async def put_league_dashboard_background(
+    tournament_id: TournamentId,
+    body: LeagueDashboardBackgroundSettingsUpdateBody,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueDashboardBackgroundSettingsResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    updated = await upsert_dashboard_background_settings(tournament_id, body, user_public.id)
+    return LeagueDashboardBackgroundSettingsResponse(data=updated)
 
 
 @router.post(
@@ -365,6 +403,14 @@ async def post_create_projected_schedule_event(
     async with database.transaction():
         created_tournament_id = await sql_create_tournament(event_body)
         await sql_create_ranking(created_tournament_id, RankingCreateBody(), position=0)
+        await database.execute(
+            query=courts.insert(),
+            values=CourtInsertable(
+                name="Field",
+                created=datetime_utc.now(),
+                tournament_id=created_tournament_id,
+            ).model_dump(),
+        )
         club_users = await get_users_for_club(source_tournament.club_id)
         for club_user in club_users:
             player_name = club_user.name.strip()
@@ -440,18 +486,42 @@ async def list_decks(
 ) -> LeagueDecksResponse:
     await ensure_tournament_records_fresh(tournament_id)
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
+    if season_id is None:
+        if user_id is None:
+            if has_admin_access:
+                return LeagueDecksResponse(data=await get_decks_for_tournament_scope(tournament_id))
+            return LeagueDecksResponse(
+                data=await get_decks_for_tournament_scope(tournament_id, user_public.id)
+            )
+
+        if can_manage_other_users(user_public, user_id) and not has_admin_access:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+        return LeagueDecksResponse(
+            data=await get_decks_for_tournament_scope(tournament_id, user_id)
+        )
+
     season = await resolve_season_for_tournament(tournament_id, season_id)
     if user_id is None:
         if has_admin_access:
-            return LeagueDecksResponse(data=await get_decks(season.id, only_admin_users=True))
+            return LeagueDecksResponse(data=await get_decks(season.id))
         return LeagueDecksResponse(data=await get_decks(season.id, user_public.id))
 
     if can_manage_other_users(user_public, user_id) and not has_admin_access:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
-    return LeagueDecksResponse(
-        data=await get_decks(season.id, user_id, only_admin_users=has_admin_access)
-    )
+    return LeagueDecksResponse(data=await get_decks(season.id, user_id))
+
+
+@router.delete(
+    "/tournaments/{tournament_id}/league/apply",
+    response_model=SuccessResponse,
+)
+async def delete_tournament_application_entry(
+    tournament_id: TournamentId,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> SuccessResponse:
+    await delete_tournament_application(tournament_id, user_public.id)
+    return SuccessResponse()
 
 
 @router.post(
@@ -637,6 +707,17 @@ async def list_admin_seasons(
 
 
 @router.get(
+    "/tournaments/{tournament_id}/league/season_draft",
+    response_model=LeagueSeasonDraftResponse,
+)
+async def get_season_draft(
+    tournament_id: TournamentId,
+    _: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueSeasonDraftResponse:
+    return LeagueSeasonDraftResponse(data=await get_season_draft_view(tournament_id))
+
+
+@router.get(
     "/tournaments/{tournament_id}/league/admin/season_draft",
     response_model=LeagueSeasonDraftResponse,
 )
@@ -686,6 +767,51 @@ async def post_admin_season_draft_pick(
         )
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return SuccessResponse()
+
+
+@router.post(
+    "/tournaments/{tournament_id}/league/admin/season_draft/confirm",
+    response_model=SuccessResponse,
+)
+async def post_admin_season_draft_confirm(
+    tournament_id: TournamentId,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> SuccessResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    draft_view = await get_season_draft_view(tournament_id)
+    if draft_view.from_season_id is None or draft_view.to_season_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No eligible season transition for draft confirmation.")
+    try:
+        await confirm_season_draft_results(
+            tournament_id=tournament_id,
+            from_season_id=int(draft_view.from_season_id),
+            to_season_id=int(draft_view.to_season_id),
+            changed_by_user_id=user_public.id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    return SuccessResponse()
+
+
+@router.post(
+    "/tournaments/{tournament_id}/league/admin/season_draft/reset",
+    response_model=SuccessResponse,
+)
+async def post_admin_season_draft_reset(
+    tournament_id: TournamentId,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> SuccessResponse:
+    if not await user_is_league_admin_for_tournament(tournament_id, user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    draft_view = await get_season_draft_view(tournament_id)
+    if draft_view.from_season_id is None or draft_view.to_season_id is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No eligible season transition for draft reset.")
+    await reset_season_draft_results(
+        from_season_id=int(draft_view.from_season_id),
+        to_season_id=int(draft_view.to_season_id),
+    )
     return SuccessResponse()
 
 

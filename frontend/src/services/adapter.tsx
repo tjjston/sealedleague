@@ -244,14 +244,36 @@ export function getUserDirectory(): SWRResponse<any> {
   return useSWR('users/directory', fetcher);
 }
 
-export function getUserCardCatalog(query: string, limit: number = 100): SWRResponse<any> {
-  if (query.trim() === '') {
+export function getUserCardCatalog(
+  query: string,
+  limit: number = 100,
+  ownedOnly: boolean = false
+): SWRResponse<any> {
+  if (query.trim() === '' && !ownedOnly) {
     return useSWR(null, fetcher);
   }
   const params = new URLSearchParams();
-  params.set('query', query.trim());
+  if (query.trim() !== '') {
+    params.set('query', query.trim());
+  }
   params.set('limit', String(limit));
+  if (ownedOnly) {
+    params.set('owned_only', 'true');
+  }
   return useSWR(`users/card_catalog?${params.toString()}`, fetcher, {
+    revalidateOnFocus: false,
+    dedupingInterval: 3_000,
+  });
+}
+
+export function getUserCardPoolSummary(query: string, limit: number = 2000): SWRResponse<any> {
+  const params = new URLSearchParams();
+  const normalized = query.trim();
+  if (normalized !== '') {
+    params.set('query', normalized);
+  }
+  params.set('limit', String(limit));
+  return useSWR(`users/card_pool_summary?${params.toString()}`, fetcher, {
     revalidateOnFocus: false,
     dedupingInterval: 3_000,
   });
@@ -410,7 +432,7 @@ export function getLeagueSeasonDraft(tournament_id: number | null): SWRResponse<
   if (tournament_id == null || tournament_id <= 0) {
     return useSWR(null, fetcher);
   }
-  return useSWR(`tournaments/${tournament_id}/league/admin/season_draft`, fetcher);
+  return useSWR(`tournaments/${tournament_id}/league/season_draft`, fetcher);
 }
 
 export function getLeagueCommunications(tournament_id: number | null): SWRResponse<any> {
@@ -418,6 +440,13 @@ export function getLeagueCommunications(tournament_id: number | null): SWRRespon
     return useSWR(null, fetcher);
   }
   return useSWR(`tournaments/${tournament_id}/league/communications`, fetcher);
+}
+
+export function getLeagueDashboardBackground(tournament_id: number | null): SWRResponse<any> {
+  if (tournament_id == null || tournament_id <= 0) {
+    return useSWR(null, fetcher);
+  }
+  return useSWR(`tournaments/${tournament_id}/league/dashboard_background`, fetcher);
 }
 
 export function getLeagueProjectedSchedule(tournament_id: number | null): SWRResponse<any> {

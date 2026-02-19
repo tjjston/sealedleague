@@ -1,18 +1,20 @@
-import { Center, Group, Image, Text, Title, UnstyledButton } from '@mantine/core';
+import { Center, Group, Image, Text, UnstyledButton } from '@mantine/core';
 
 import PreloadLink from '@components/utils/link';
 
 export function Brand() {
   return (
-    <Center mr="1rem" miw="12rem">
+    <Center mr="0.75rem" style={{ minWidth: 'fit-content' }}>
       <UnstyledButton component={PreloadLink} href="/">
-        <Group>
+        <Group gap="xs" wrap="nowrap">
           <Image
-            style={{ width: '38px', marginRight: '0px' }}
-            src="/favicon.svg"
-            alt="Sealed League logo"
+            style={{ width: '164px', maxWidth: '42vw', marginRight: '0px' }}
+            src="/swu-banner.png"
+            alt="Star Wars Unlimited banner"
           />
-          <Title style={{ height: '38px', marginBottom: '0.4rem' }}>Sealed League</Title>
+          <Text fw={700} size="sm" style={{ whiteSpace: 'nowrap' }}>
+            The Youngling Training Program Sealed League
+          </Text>
         </Group>
       </UnstyledButton>
     </Center>
@@ -25,13 +27,10 @@ export function BrandFooter() {
       <Center>
         <Image
           mb="0.25rem"
-          style={{ width: '32px', marginRight: '0px' }}
-          src="/favicon.svg"
-          alt="Sealed League logo"
+          style={{ width: '180px', marginRight: '0px' }}
+          src="/swu-banner.png"
+          alt="Star Wars Unlimited banner"
         />
-        <Text size="xl" ml="0.75rem">
-          Sealed League
-        </Text>
       </Center>
     </Center>
   );

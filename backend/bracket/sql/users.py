@@ -95,6 +95,7 @@ async def update_user_preferences(user_id: UserId, body: UserPreferencesToUpdate
     available_columns = await get_users_table_columns()
     updatable_columns = [
         "avatar_url",
+        "avatar_fit_mode",
         "favorite_card_id",
         "favorite_card_name",
         "favorite_card_image_url",
@@ -165,14 +166,81 @@ async def get_users() -> list[UserPublic]:
     return [UserPublic.model_validate(dict(user._mapping)) for user in result]
 
 
+async def get_owned_card_ids_for_user(user_id: UserId) -> set[str]:
+    rows = await database.fetch_all(
+        """
+        SELECT DISTINCT lower(trim(card_id)) AS card_id
+        FROM card_pool_entries
+        WHERE user_id = :user_id
+          AND quantity > 0
+          AND card_id IS NOT NULL
+        """,
+        values={"user_id": user_id},
+    )
+    return {
+        str(row._mapping["card_id"]).strip().lower()
+        for row in rows
+        if row._mapping.get("card_id") is not None and str(row._mapping["card_id"]).strip() != ""
+    }
+
+
+async def get_user_card_pool_totals(user_id: UserId) -> list[dict[str, int | str]]:
+    rows = await database.fetch_all(
+        """
+        SELECT
+            lower(trim(card_id)) AS card_id,
+            COALESCE(SUM(quantity), 0)::INT AS quantity
+        FROM card_pool_entries
+        WHERE user_id = :user_id
+          AND quantity > 0
+          AND card_id IS NOT NULL
+        GROUP BY lower(trim(card_id))
+        ORDER BY COALESCE(SUM(quantity), 0) DESC, lower(trim(card_id)) ASC
+        """,
+        values={"user_id": user_id},
+    )
+    return [
+        {
+            "card_id": str(row._mapping["card_id"]).strip().lower(),
+            "quantity": int(row._mapping["quantity"] or 0),
+        }
+        for row in rows
+        if row._mapping.get("card_id") is not None and str(row._mapping["card_id"]).strip() != ""
+    ]
+
+
 async def get_user_directory() -> list[UserDirectoryEntry]:
     available_columns = await get_users_table_columns()
     has_favorite_media = "favorite_media" in available_columns
+    has_favorite_card_id = "favorite_card_id" in available_columns
+    has_favorite_card_name = "favorite_card_name" in available_columns
+    has_favorite_card_image_url = "favorite_card_image_url" in available_columns
+    has_avatar_fit_mode = "avatar_fit_mode" in available_columns
     has_weapon_icon = "weapon_icon" in available_columns
     favorite_media_select = (
         "u.favorite_media"
         if has_favorite_media
         else "NULL::TEXT AS favorite_media"
+    )
+    favorite_card_id_select = (
+        "u.favorite_card_id"
+        if has_favorite_card_id
+        else "NULL::TEXT AS favorite_card_id"
+    )
+    favorite_card_name_select = (
+        "u.favorite_card_name"
+        if has_favorite_card_name
+        else "NULL::TEXT AS favorite_card_name"
+    )
+    favorite_card_image_url_select = (
+        "u.favorite_card_image_url"
+        if has_favorite_card_image_url
+        else "NULL::TEXT AS favorite_card_image_url"
+    )
+    avatar_fit_mode_select = (
+        "u.avatar_fit_mode"
+        if has_avatar_fit_mode
+        else "'cover'::TEXT AS avatar_fit_mode"
     )
     weapon_icon_select = (
         "u.weapon_icon"
@@ -180,6 +248,12 @@ async def get_user_directory() -> list[UserDirectoryEntry]:
         else "NULL::TEXT AS weapon_icon"
     )
     favorite_media_group_by = ", u.favorite_media" if has_favorite_media else ""
+    favorite_card_id_group_by = ", u.favorite_card_id" if has_favorite_card_id else ""
+    favorite_card_name_group_by = ", u.favorite_card_name" if has_favorite_card_name else ""
+    favorite_card_image_url_group_by = (
+        ", u.favorite_card_image_url" if has_favorite_card_image_url else ""
+    )
+    avatar_fit_mode_group_by = ", u.avatar_fit_mode" if has_avatar_fit_mode else ""
     weapon_icon_group_by = ", u.weapon_icon" if has_weapon_icon else ""
 
     rows = await database.fetch_all(
@@ -189,6 +263,10 @@ async def get_user_directory() -> list[UserDirectoryEntry]:
             u.name AS user_name,
             u.avatar_url,
             {favorite_media_select},
+            {favorite_card_id_select},
+            {favorite_card_name_select},
+            {favorite_card_image_url_select},
+            {avatar_fit_mode_select},
             {weapon_icon_select},
             COALESCE(
                 SUM(
@@ -242,6 +320,10 @@ async def get_user_directory() -> list[UserDirectoryEntry]:
             active_pool.total_cards_active_season,
             career_pool.total_cards_career_pool
             {favorite_media_group_by}
+            {favorite_card_id_group_by}
+            {favorite_card_name_group_by}
+            {favorite_card_image_url_group_by}
+            {avatar_fit_mode_group_by}
             {weapon_icon_group_by}
         ORDER BY u.name ASC
         """

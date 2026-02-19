@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Annotated
 
 from heliclockter import datetime_utc
-from pydantic import BaseModel, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints
 
 from bracket.models.db.account import UserAccountType
 from bracket.models.db.shared import BaseModelORM
@@ -22,10 +22,12 @@ class UserBase(BaseModelORM):
     favorite_card_name: str | None = None
     favorite_card_image_url: str | None = None
     favorite_media: str | None = None
+    avatar_fit_mode: str | None = None
     weapon_icon: str | None = None
     current_leader_card_id: str | None = None
     current_leader_name: str | None = None
     current_leader_image_url: str | None = None
+    current_leader_aspects: list[str] = Field(default_factory=list)
     account_type: UserAccountType
 
     @property
@@ -55,6 +57,7 @@ class UserToUpdate(BaseModel):
 
 class UserPreferencesToUpdate(BaseModel):
     avatar_url: str | None = None
+    avatar_fit_mode: str | None = None
     favorite_card_id: str | None = None
     favorite_card_name: str | None = None
     favorite_card_image_url: str | None = None
@@ -81,6 +84,13 @@ class UserToRegister(BaseModelORM):
     captcha_token: str
 
 
+class AdminUserToCreate(BaseModelORM):
+    email: str
+    name: str
+    password: Annotated[str, StringConstraints(min_length=8, max_length=48)]
+    account_type: UserAccountType = UserAccountType.REGULAR
+
+
 class UserInDB(UserBase):
     id: UserId
     password_hash: str
@@ -90,6 +100,7 @@ class CardCatalogEntry(BaseModelORM):
     card_id: str
     name: str
     character_variant: str | None = None
+    variant_type: str | None = None
     set_code: str
     image_url: str | None = None
 
@@ -102,6 +113,15 @@ class MediaCatalogEntry(BaseModelORM):
     poster_url: str | None = None
 
 
+class UserCardPoolSummaryEntry(BaseModelORM):
+    card_id: str
+    name: str | None = None
+    character_variant: str | None = None
+    set_code: str | None = None
+    image_url: str | None = None
+    quantity: int = 0
+
+
 class UserDirectoryEntry(BaseModelORM):
     user_id: UserId
     user_name: str
@@ -111,6 +131,10 @@ class UserDirectoryEntry(BaseModelORM):
     total_cards_active_season: int = 0
     total_cards_career_pool: int = 0
     favorite_media: str | None = None
+    favorite_card_id: str | None = None
+    favorite_card_name: str | None = None
+    favorite_card_image_url: str | None = None
+    avatar_fit_mode: str | None = None
     current_leader_card_id: str | None = None
     current_leader_name: str | None = None
     current_leader_image_url: str | None = None

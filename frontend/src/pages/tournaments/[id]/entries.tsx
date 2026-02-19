@@ -8,13 +8,14 @@ import { getTournamentIdFromRouter } from '@components/utils/util';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
 import {
   checkForAuthError,
+  getLeagueCardsGlobal,
   getLeagueDecks,
   getLeagueNextOpponent,
   getTournamentApplications,
   getTournamentById,
   getUser,
 } from '@services/adapter';
-import { submitTournamentApplication } from '@services/league';
+import { submitTournamentApplication, withdrawTournamentApplication } from '@services/league';
 
 type TournamentDeck = {
   id: number;
@@ -44,10 +45,12 @@ export default function TournamentEntriesPage() {
   const swrCurrentUserResponse = getUser();
   const swrTournamentResponse = getTournamentById(tournamentData.id);
   const swrDecksResponse = getLeagueDecks(tournamentData.id);
+  const swrCardsResponse = getLeagueCardsGlobal({ limit: 5000, offset: 0 });
 
   checkForAuthError(swrCurrentUserResponse);
   checkForAuthError(swrTournamentResponse);
   checkForAuthError(swrDecksResponse);
+  checkForAuthError(swrCardsResponse);
 
   const isAdmin = String(swrCurrentUserResponse.data?.data?.account_type ?? 'REGULAR') === 'ADMIN';
 
@@ -62,9 +65,26 @@ export default function TournamentEntriesPage() {
   checkForAuthError(swrNextOpponentResponse);
 
   const decks: TournamentDeck[] = swrDecksResponse.data?.data ?? [];
+  const cardLookup: Record<string, string> = useMemo(() => {
+    const rows = swrCardsResponse.data?.data?.cards ?? [];
+    return rows.reduce((result: Record<string, string>, card: any) => {
+      const cardId = String(card?.card_id ?? '').trim().toLowerCase();
+      const cardName = String(card?.name ?? '').trim();
+      if (cardId !== '' && cardName !== '' && result[cardId] == null) {
+        result[cardId] = cardName;
+      }
+      return result;
+    }, {});
+  }, [swrCardsResponse.data?.data?.cards]);
   const applications: TournamentApplication[] = swrApplicationsResponse.data?.data ?? [];
   const myApplication: TournamentApplication | null = (swrMyApplicationResponse.data?.data ?? [])[0] ?? null;
   const nextOpponent = swrNextOpponentResponse.data?.data;
+
+  const formatCardName = (cardId: string | null | undefined) => {
+    const normalized = String(cardId ?? '').trim().toLowerCase();
+    if (normalized === '') return '-';
+    return cardLookup[normalized] ?? cardId ?? '-';
+  };
 
   const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null);
 
@@ -78,9 +98,9 @@ export default function TournamentEntriesPage() {
     () =>
       decks.map((deck) => ({
         value: String(deck.id),
-        label: `${deck.name} (${deck.leader} / ${deck.base}) - ${deck.wins ?? 0}-${deck.draws ?? 0}-${deck.losses ?? 0}`,
+        label: `${deck.name} (${formatCardName(deck.leader)} / ${formatCardName(deck.base)}) - ${deck.wins ?? 0}-${deck.draws ?? 0}-${deck.losses ?? 0}`,
       })),
-    [decks]
+    [decks, cardLookup]
   );
   const selectedDeck = decks.find((deck) => String(deck.id) === selectedDeckId) ?? null;
 
@@ -149,6 +169,17 @@ export default function TournamentEntriesPage() {
                 Submit Selected Deck
               </Button>
               <Button
+                variant="light"
+                color="red"
+                disabled={myApplication == null}
+                onClick={async () => {
+                  await withdrawTournamentApplication(tournamentData.id);
+                  await Promise.all([swrApplicationsResponse.mutate(), swrMyApplicationResponse.mutate()]);
+                }}
+              >
+                Withdraw Submission
+              </Button>
+              <Button
                 variant="outline"
                 component={PreloadLink}
                 href={`/league/deckbuilder`}
@@ -162,7 +193,8 @@ export default function TournamentEntriesPage() {
             {myApplication != null ? (
               <Text size="sm" c="dimmed">
                 Current submission: {myApplication.deck_name ?? `Deck #${myApplication.deck_id ?? '-'}`} (
-                {myApplication.deck_leader ?? '-'} / {myApplication.deck_base ?? '-'}) - {myApplication.status}
+                {formatCardName(myApplication.deck_leader)} / {formatCardName(myApplication.deck_base)}) -{' '}
+                {myApplication.status}
               </Text>
             ) : (
               <Text size="sm" c="dimmed">No submission yet for this tournament.</Text>
@@ -223,7 +255,7 @@ export default function TournamentEntriesPage() {
                     <Table.Td>{application.user_name}</Table.Td>
                     <Table.Td>{application.deck_name ?? (application.deck_id != null ? `Deck #${application.deck_id}` : '-')}</Table.Td>
                     <Table.Td>
-                      {application.deck_leader ?? '-'} / {application.deck_base ?? '-'}
+                      {formatCardName(application.deck_leader)} / {formatCardName(application.deck_base)}
                     </Table.Td>
                     <Table.Td>{application.status}</Table.Td>
                   </Table.Tr>

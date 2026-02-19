@@ -288,6 +288,8 @@ class LeagueSeasonDraftView(BaseModel):
     from_season_name: str | None = None
     to_season_id: int | None = None
     to_season_name: str | None = None
+    pending_pick_count: int = 0
+    confirmed_pick_count: int = 0
     draft_order: list[LeagueSeasonDraftOrderItem] = Field(default_factory=list)
     card_bases: list[LeagueSeasonDraftCardBase] = Field(default_factory=list)
 
@@ -391,6 +393,18 @@ class LeagueCommunicationView(BaseModel):
     updated: datetime_utc
 
 
+class LeagueDashboardBackgroundSettingsView(BaseModel):
+    tournament_id: TournamentId
+    mode: Literal["ROTATE", "FIXED"] = "ROTATE"
+    image_path: str | None = None
+    updated: datetime_utc | None = None
+
+
+class LeagueDashboardBackgroundSettingsUpdateBody(BaseModel):
+    mode: Literal["ROTATE", "FIXED"] = "ROTATE"
+    image_path: str | None = Field(default=None, max_length=512)
+
+
 class LeagueProjectedScheduleItemView(BaseModel):
     id: int
     tournament_id: TournamentId
@@ -452,13 +466,78 @@ class LeagueMetaArchetypeUsage(BaseModel):
     win_rate: float = 0
 
 
+class LeagueMetaPerformancePattern(BaseModel):
+    label: str
+    decks: int = 0
+    avg_win_rate: float = 0
+    summary: str | None = None
+
+
+class LeagueMetaTrendingCard(BaseModel):
+    card_id: str
+    card_name: str | None = None
+    image_url: str | None = None
+    usage_delta: int = 0
+    win_rate_delta: float = 0
+    current_usage: int = 0
+    previous_usage: int = 0
+    current_win_rate: float = 0
+    previous_win_rate: float = 0
+
+
+class LeagueMetaKeywordImpact(BaseModel):
+    keyword: str
+    deck_count: int = 0
+    usage_share_pct: float = 0
+    win_rate_with_keyword: float = 0
+    league_avg_win_rate: float = 0
+    win_impact_score: float = 0
+    top4_conversion_pct: float = 0
+
+
+class LeagueMetaSynergyNode(BaseModel):
+    id: str
+    label: str
+    kind: Literal["Trait", "Keyword"]
+    deck_count: int = 0
+    share_pct: float = 0
+
+
+class LeagueMetaSynergyEdge(BaseModel):
+    source: str
+    target: str
+    cooccurrence_count: int = 0
+    winning_support_pct: float = 0
+    correlation_score: float = 0
+
+
+class LeagueMetaSynergyGraph(BaseModel):
+    winning_deck_count: int = 0
+    nodes: list[LeagueMetaSynergyNode] = Field(default_factory=list)
+    edges: list[LeagueMetaSynergyEdge] = Field(default_factory=list)
+
+
 class LeagueMetaAnalysisView(BaseModel):
     season_id: int
     season_name: str
     total_decks: int
+    top_decks_sample_size: int = 0
     top_cards: list[LeagueMetaCardUsage] = Field(default_factory=list)
     top_leaders: list[LeagueMetaDeckCoreUsage] = Field(default_factory=list)
     top_bases: list[LeagueMetaDeckCoreUsage] = Field(default_factory=list)
     top_traits: list[LeagueMetaCountBucket] = Field(default_factory=list)
     top_keywords: list[LeagueMetaCountBucket] = Field(default_factory=list)
+    top_deck_traits: list[LeagueMetaCountBucket] = Field(default_factory=list)
+    top_deck_keywords: list[LeagueMetaCountBucket] = Field(default_factory=list)
+    top_deck_card_types: list[LeagueMetaCountBucket] = Field(default_factory=list)
     top_archetypes: list[LeagueMetaArchetypeUsage] = Field(default_factory=list)
+    top_cost_curve_patterns: list[LeagueMetaPerformancePattern] = Field(default_factory=list)
+    top_arena_patterns: list[LeagueMetaPerformancePattern] = Field(default_factory=list)
+    hero_villain_breakdown: list[LeagueMetaPerformancePattern] = Field(default_factory=list)
+    aspect_combo_breakdown: list[LeagueMetaPerformancePattern] = Field(default_factory=list)
+    keyword_win_impact: list[LeagueMetaKeywordImpact] = Field(default_factory=list)
+    synergy_graph: LeagueMetaSynergyGraph = Field(default_factory=LeagueMetaSynergyGraph)
+    trending_cards: list[LeagueMetaTrendingCard] = Field(default_factory=list)
+    replacement_signals: list[str] = Field(default_factory=list)
+    live_meta_findings: list[str] = Field(default_factory=list)
+    meta_takeaways: list[str] = Field(default_factory=list)

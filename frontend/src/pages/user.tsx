@@ -32,10 +32,10 @@ export default function UserPage() {
 
   return (
     <Layout>
-      <Group align="end" justify="space-between">
+      <Group align="end" justify="space-between" wrap="wrap">
         <Title>{t('edit_profile_title')}</Title>
         {user != null ? (
-          <Title order={4}>
+          <Title order={5} lineClamp={1}>
             {user.name} | Leader: {currentLeader}
           </Title>
         ) : null}
@@ -46,7 +46,7 @@ export default function UserPage() {
         </Button>
       ) : null}
       {swrUserResponse.error && <RequestErrorAlert error={swrUserResponse.error} />}
-      <Stack style={{ maxWidth: '40rem' }}>{content}</Stack>
+      <Stack style={{ width: '100%' }}>{content}</Stack>
     </Layout>
   );
 }

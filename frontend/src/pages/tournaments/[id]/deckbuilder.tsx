@@ -97,7 +97,18 @@ type SortDirection = 'asc' | 'desc';
 const HEROIC_ASPECT_VALUES = new Set(['heroic', 'heroism']);
 const VILLAINY_ASPECT_VALUES = new Set(['villainy']);
 const DEFAULT_ASPECT_OPTIONS = ['Aggression', 'Cunning', 'Command', 'Vigilance'];
+const ASPECT_ICON_BY_KEY: Record<string, string> = {
+  aggression: '/icons/aspects/aggression.png',
+  command: '/icons/aspects/command.png',
+  cunning: '/icons/aspects/cunning.png',
+  vigilance: '/icons/aspects/vigilance.png',
+  villainy: '/icons/aspects/villainy.png',
+  heroic: '/icons/aspects/heroism.png',
+  heroism: '/icons/aspects/heroism.png',
+};
 const MAX_RENDERED_CARD_ROWS = 250;
+const ALL_DECK_OWNERS_VALUE = '__ALL__';
+const ALL_SEASONS_VALUE = '__ALL_SEASONS__';
 
 function countCards(deck: Record<string, number>) {
   return Object.values(deck).reduce((sum, count) => sum + count, 0);
@@ -142,6 +153,36 @@ function normalizeCardIdLookupKey(value: string | null | undefined) {
     .trim()
     .toLowerCase()
     .replace(/[_\s]+/g, '-');
+}
+
+function normalizeAspectKey(value: string) {
+  return value.trim().toLowerCase();
+}
+
+function AspectIcons({ aspects }: { aspects: string[] }) {
+  if (aspects.length < 1) return <Text size="sm">-</Text>;
+  return (
+    <Group gap={6} wrap="wrap">
+      {aspects.map((aspect) => {
+        const key = normalizeAspectKey(aspect);
+        const iconPath = ASPECT_ICON_BY_KEY[key];
+        return (
+          <Group key={`${aspect}-${iconPath ?? 'no-icon'}`} gap={4} wrap="nowrap">
+            {iconPath != null ? (
+              <img
+                src={iconPath}
+                alt={aspect}
+                width={14}
+                height={14}
+                style={{ objectFit: 'contain' }}
+              />
+            ) : null}
+            <Text size="xs">{aspect}</Text>
+          </Group>
+        );
+      })}
+    </Group>
+  );
 }
 
 function GraphBars({
@@ -213,29 +254,34 @@ export default function DeckbuilderPage({
   );
   const adminUsers = swrAdminUsersResponse.data?.data ?? [];
   const targetUserId =
-    isAdmin && selectedTargetUserId != null && selectedTargetUserId !== ''
+    isAdmin &&
+    selectedTargetUserId != null &&
+    selectedTargetUserId !== '' &&
+    selectedTargetUserId !== ALL_DECK_OWNERS_VALUE
       ? Number(selectedTargetUserId)
       : null;
   const swrSeasonsResponse = getLeagueSeasons(hasTournament ? activeTournamentId : null);
   const seasons = swrSeasonsResponse.data?.data ?? [];
 
   useEffect(() => {
-    setSelectedSeasonId(null);
-    setSelectedTargetUserId(null);
-  }, [activeTournamentId]);
+    setSelectedSeasonId(ALL_SEASONS_VALUE);
+    setSelectedTargetUserId(isAdmin ? ALL_DECK_OWNERS_VALUE : null);
+  }, [activeTournamentId, isAdmin]);
 
   useEffect(() => {
     if (!hasTournament || seasons.length < 1) return;
+    if (selectedSeasonId == null || selectedSeasonId === ALL_SEASONS_VALUE) return;
     const selectedExists = seasons.some((season: any) => String(season.season_id) === selectedSeasonId);
     if (selectedExists) return;
-    const activeSeason = seasons.find((season: any) => season.is_active) ?? seasons[0];
-    if (activeSeason != null) {
-      setSelectedSeasonId(String(activeSeason.season_id));
-    }
+    setSelectedSeasonId(ALL_SEASONS_VALUE);
   }, [hasTournament, seasons, selectedSeasonId]);
 
   const selectedSeasonNumber =
-    selectedSeasonId != null && selectedSeasonId !== '' ? Number(selectedSeasonId) : null;
+    selectedSeasonId != null &&
+    selectedSeasonId !== '' &&
+    selectedSeasonId !== ALL_SEASONS_VALUE
+      ? Number(selectedSeasonId)
+      : null;
 
   useEffect(() => {
     if (!isAdmin || !hasTournament || adminUsers.length < 1) return;
@@ -250,26 +296,21 @@ export default function DeckbuilderPage({
       queryTarget != null
         ? adminUsers.find((row: any) => String(row.user_id) === queryTarget)
         : null;
-    const selectedFromCurrentUser =
-      swrCurrentUserResponse.data?.data?.id != null
-        ? adminUsers.find(
-            (row: any) => Number(row.user_id) === Number(swrCurrentUserResponse.data?.data?.id)
-          )
-        : null;
     const selectedFromTeamName =
       queryTeamName != null && queryTeamName !== ''
         ? adminUsers.find((row: any) => String(row.user_name ?? '').trim().toLowerCase() === queryTeamName)
         : null;
-    const fallback = selectedFromQuery ?? selectedFromTeamName ?? selectedFromCurrentUser ?? adminUsers[0];
+    const fallback = selectedFromQuery ?? selectedFromTeamName;
     if (fallback != null) {
       setSelectedTargetUserId(String(fallback.user_id));
+      return;
     }
+    setSelectedTargetUserId(ALL_DECK_OWNERS_VALUE);
   }, [
     adminUsers,
     hasTournament,
     isAdmin,
     selectedTargetUserId,
-    swrCurrentUserResponse.data?.data?.id,
   ]);
 
   const swrCatalogResponse = hasTournament
@@ -674,14 +715,22 @@ export default function DeckbuilderPage({
 
   async function addToPool(cardId: string, nextQuantity: number) {
     if (!hasTournament) return;
-    await upsertCardPoolEntry(
+    const response = await upsertCardPoolEntry(
       activeTournamentId,
       cardId,
       nextQuantity,
       targetUserId ?? undefined,
       selectedSeasonNumber ?? undefined
     );
+    if (response == null) return;
     await swrCardPoolResponse.mutate();
+    const cardName = cardsById[cardId]?.name ?? cardId;
+    showNotification({
+      id: `card-pool-update-${cardId}`,
+      color: 'green',
+      title: 'Card pool updated',
+      message: `${cardName}: ${nextQuantity}`,
+    });
   }
 
   function addCardToDeck(cardId: string, side: 'main' | 'side') {
@@ -726,7 +775,7 @@ export default function DeckbuilderPage({
       if (!proceed) return;
     }
 
-    await saveDeck(activeTournamentId, {
+    const response = await saveDeck(activeTournamentId, {
       user_id: targetUserId ?? undefined,
       tournament_id: activeTournamentId,
       season_id: selectedSeasonNumber ?? undefined,
@@ -737,7 +786,13 @@ export default function DeckbuilderPage({
       mainboard,
       sideboard,
     });
+    if (response == null) return;
     await swrDecksResponse.mutate();
+    showNotification({
+      color: 'green',
+      title: 'Deck saved',
+      message: '',
+    });
   }
 
   async function onExportSwuDb(deckId: number) {
@@ -1000,7 +1055,7 @@ export default function DeckbuilderPage({
         <Title order={2}>Deckbuilder</Title>
         <Text c="dimmed">
           Search by name, keyword, trait, cost, type, aspect, alignment, set, rules, and arena.
-          Card pools remain user-specific per season.
+          Card pools remain user-specific per season and auto-save on quantity change.
         </Text>
         {(standalone || seasons.length > 0) && (
           <Card withBorder>
@@ -1024,25 +1079,33 @@ export default function DeckbuilderPage({
                 <Select
                   label="Deck/Card Pool Owner"
                   value={selectedTargetUserId}
-                  onChange={setSelectedTargetUserId}
-                  allowDeselect={false}
+                  onChange={(value) => setSelectedTargetUserId(value ?? ALL_DECK_OWNERS_VALUE)}
+                  allowDeselect
+                  clearable
                   searchable
-                  data={adminUsers.map((row: any) => ({
-                    value: String(row.user_id),
-                    label: `${row.user_name} (${row.user_email})`,
-                  }))}
+                  data={[
+                    { value: ALL_DECK_OWNERS_VALUE, label: 'All users (admin view)' },
+                    ...adminUsers.map((row: any) => ({
+                      value: String(row.user_id),
+                      label: `${row.user_name} (${row.user_email})`,
+                    })),
+                  ]}
                 />
               )}
               {seasons.length > 0 && (
                 <Select
                   label="Season"
                   value={selectedSeasonId}
-                  onChange={setSelectedSeasonId}
-                  allowDeselect={false}
-                  data={seasons.map((season: any) => ({
-                    value: String(season.season_id),
-                    label: `${season.name}${season.is_active ? ' (Active)' : ''}`,
-                  }))}
+                  onChange={(value) => setSelectedSeasonId(value ?? ALL_SEASONS_VALUE)}
+                  allowDeselect
+                  clearable
+                  data={[
+                    { value: ALL_SEASONS_VALUE, label: 'All seasons (deck carryover)' },
+                    ...seasons.map((season: any) => ({
+                      value: String(season.season_id),
+                      label: `${season.name}${season.is_active ? ' (Active)' : ''}`,
+                    })),
+                  ]}
                 />
               )}
             </Stack>
@@ -1388,7 +1451,9 @@ export default function DeckbuilderPage({
                             <Table.Td>{card.cost ?? '-'}</Table.Td>
                             <Table.Td>{card.power ?? '-'}</Table.Td>
                             <Table.Td>{card.hp ?? '-'}</Table.Td>
-                            <Table.Td>{(card.aspects ?? []).join(', ') || '-'}</Table.Td>
+                            <Table.Td>
+                              <AspectIcons aspects={card.aspects ?? []} />
+                            </Table.Td>
                             <Table.Td>{(card.arenas ?? []).join(', ') || '-'}</Table.Td>
                             <Table.Td>{card.set_code.toUpperCase()}</Table.Td>
                             <Table.Td>
@@ -1546,7 +1611,9 @@ export default function DeckbuilderPage({
                             <Table.Td>{card?.cost ?? '-'}</Table.Td>
                             <Table.Td>{card?.power ?? '-'}</Table.Td>
                             <Table.Td>{card?.hp ?? '-'}</Table.Td>
-                            <Table.Td>{card != null ? (card.aspects ?? []).join(', ') || '-' : '-'}</Table.Td>
+                            <Table.Td>
+                              {card != null ? <AspectIcons aspects={card.aspects ?? []} /> : '-'}
+                            </Table.Td>
                             <Table.Td>
                               {card != null
                                 ? `${(card.arenas ?? []).join('/') || '-'} / ${card.set_code.toUpperCase()}`
@@ -1661,8 +1728,14 @@ export default function DeckbuilderPage({
                               variant="subtle"
                               color="red"
                               onClick={async () => {
-                                await deleteDeck(activeTournamentId, deck.id);
+                                const response = await deleteDeck(activeTournamentId, deck.id);
+                                if (response == null) return;
                                 await swrDecksResponse.mutate();
+                                showNotification({
+                                  color: 'green',
+                                  title: 'Deck deleted',
+                                  message: '',
+                                });
                               }}
                             >
                               <IconTrash size={15} />

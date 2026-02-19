@@ -97,6 +97,12 @@ export async function submitTournamentApplication(
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function withdrawTournamentApplication(tournament_id: number) {
+  return createAxios()
+    .delete(`tournaments/${tournament_id}/league/apply`)
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function updateSeasonPrivileges(
   tournament_id: number,
   user_id: number,
@@ -158,6 +164,18 @@ export async function submitSeasonDraftPick(
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function confirmSeasonDraftResults(tournament_id: number) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/league/admin/season_draft/confirm`)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function resetSeasonDraftResults(tournament_id: number) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/league/admin/season_draft/reset`)
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function createLeagueCommunication(
   tournament_id: number,
   body: {
@@ -184,6 +202,18 @@ export async function updateLeagueCommunication(
 ) {
   return createAxios()
     .put(`tournaments/${tournament_id}/league/admin/communications/${communication_id}`, body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function updateLeagueDashboardBackground(
+  tournament_id: number,
+  body: {
+    mode: 'ROTATE' | 'FIXED';
+    image_path?: string | null;
+  }
+) {
+  return createAxios()
+    .put(`tournaments/${tournament_id}/league/admin/dashboard_background`, body)
     .catch((response: any) => handleRequestError(response));
 }
 

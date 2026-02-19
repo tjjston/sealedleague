@@ -20,9 +20,11 @@ from bracket.config import config
 from bracket.logic.subscriptions import setup_demo_account
 from bracket.models.db.account import UserAccountType
 from bracket.models.db.user import (
+    AdminUserToCreate,
     CardCatalogEntry,
     DemoUserToRegister,
     MediaCatalogEntry,
+    UserCardPoolSummaryEntry,
     UserDirectoryEntry,
     UserAccountTypeToUpdate,
     UserInsertable,
@@ -45,6 +47,7 @@ from bracket.routes.models import (
     MediaCatalogResponse,
     SuccessResponse,
     TokenResponse,
+    UserCardPoolSummaryResponse,
     UserDirectoryResponse,
     UserPublicResponse,
     UsersResponse,
@@ -53,6 +56,9 @@ from bracket.sql.league import get_user_career_profile
 from bracket.sql.users import (
     check_whether_email_is_in_use,
     create_user,
+    delete_user_and_owned_clubs,
+    get_user_card_pool_totals,
+    get_owned_card_ids_for_user,
     get_user_directory,
     get_users,
     get_user_by_id,
@@ -174,6 +180,102 @@ def _get_cached_normalized_card_catalog() -> list[dict]:
         return normalized
 
 
+def _normalize_variant_type(value: object) -> str:
+    normalized = " ".join(
+        str(value or "")
+        .strip()
+        .lower()
+        .replace("_", " ")
+        .replace("-", " ")
+        .split()
+    )
+    if normalized in {"", "normal", "standard"}:
+        return "normal" if normalized != "" else ""
+    if normalized in {"foil", "traditional foil"}:
+        return "foil"
+    if normalized in {"hyperspace", "hyperspace card"}:
+        return "hyperspace"
+    if normalized in {"hyperspace foil", "hyperspacefoil"}:
+        return "hyperspace foil"
+    if normalized.startswith("showcase"):
+        return "showcase"
+    if normalized in {"serialized", "serialised"}:
+        return "serialized"
+    return normalized
+
+
+def _preferred_catalog_row(previous: dict | None, current: dict) -> dict:
+    if previous is None:
+        return current
+    variant_rank = {
+        "showcase": 0,
+        "hyperspace foil": 1,
+        "hyperspace": 2,
+        "normal": 3,
+        "serialized": 4,
+        "foil": 5,
+        "": 6,
+    }
+    prev_image = str(previous.get("image_url") or "").strip()
+    curr_image = str(current.get("image_url") or "").strip()
+    if prev_image == "" and curr_image != "":
+        return current
+    if prev_image != "" and curr_image == "":
+        return previous
+    prev_rank = variant_rank.get(_normalize_variant_type(previous.get("variant_type")), 99)
+    curr_rank = variant_rank.get(_normalize_variant_type(current.get("variant_type")), 99)
+    if curr_rank < prev_rank:
+        return current
+    return previous
+
+
+def _normalize_card_lookup_id(card_id: str | None) -> str:
+    normalized = (
+        str(card_id or "")
+        .strip()
+        .lower()
+        .replace("_", "-")
+        .replace(" ", "-")
+    )
+    if normalized == "":
+        return ""
+    while "--" in normalized:
+        normalized = normalized.replace("--", "-")
+    normalized = normalized.strip("-")
+    if "-" not in normalized:
+        return normalized
+    set_code, remainder = normalized.split("-", 1)
+    if set_code.strip() == "" or remainder.strip() == "":
+        return normalized
+    number_token = remainder.split("-", 1)[0].strip()
+    digits = "".join(ch for ch in number_token if ch.isdigit())
+    suffix = "".join(ch for ch in number_token if ch.isalpha())
+    if digits == "":
+        return f"{set_code.strip()}-{number_token}"
+    return f"{set_code.strip()}-{int(digits)}{suffix}"
+
+
+def _card_lookup_candidates(card_id: str | None) -> list[str]:
+    normalized = _normalize_card_lookup_id(card_id)
+    if normalized == "":
+        return []
+    candidates = [normalized]
+    if "-" in normalized:
+        set_code, remainder = normalized.split("-", 1)
+        digits = "".join(ch for ch in remainder if ch.isdigit())
+        if digits != "":
+            candidates.append(f"{set_code}-{int(digits)}")
+    return candidates
+
+
+def _resolve_card_lookup_row(card_lookup: dict[str, dict], card_id: str | None) -> dict | None:
+    for candidate in _card_lookup_candidates(card_id):
+        card = card_lookup.get(candidate)
+        if card is not None:
+            return card
+    return None
+
+
 @router.get("/users", response_model=UsersResponse)
 async def list_users(user_public: UserPublic = Depends(user_authenticated)) -> UsersResponse:
     if not is_admin_user(user_public):
@@ -198,6 +300,10 @@ async def list_user_directory(_: UserPublic = Depends(user_authenticated)) -> Us
                     total_cards_active_season=0,
                     total_cards_career_pool=0,
                     favorite_media=user.favorite_media,
+                    favorite_card_id=user.favorite_card_id,
+                    favorite_card_name=user.favorite_card_name,
+                    favorite_card_image_url=user.favorite_card_image_url,
+                    avatar_fit_mode=(user.avatar_fit_mode or "cover"),
                     current_leader_card_id=None,
                     current_leader_name=None,
                     current_leader_image_url=None,
@@ -253,6 +359,10 @@ async def list_user_directory(_: UserPublic = Depends(user_authenticated)) -> Us
                 total_cards_active_season=entry.total_cards_active_season,
                 total_cards_career_pool=entry.total_cards_career_pool,
                 favorite_media=entry.favorite_media,
+                favorite_card_id=entry.favorite_card_id,
+                favorite_card_name=entry.favorite_card_name,
+                favorite_card_image_url=entry.favorite_card_image_url,
+                avatar_fit_mode=(entry.avatar_fit_mode or "cover"),
                 current_leader_card_id=entry.current_leader_card_id,
                 current_leader_name=None if leader_card is None else str(leader_card.get("name") or ""),
                 current_leader_image_url=None if leader_card is None else leader_card.get("image_url"),
@@ -264,26 +374,70 @@ async def list_user_directory(_: UserPublic = Depends(user_authenticated)) -> Us
 
 @router.get("/users/card_catalog", response_model=CardCatalogResponse)
 async def get_card_catalog(
-    _: UserPublic = Depends(user_authenticated),
+    user_public: UserPublic = Depends(user_authenticated),
     query: str | None = Query(default=None),
-    limit: int = Query(default=100, ge=1, le=500),
+    owned_only: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=1000),
 ) -> CardCatalogResponse:
     normalized_query = (query or "").strip().lower()
-    if normalized_query == "":
+    if normalized_query == "" and not owned_only:
         return CardCatalogResponse(data=[])
 
     try:
         cards = await asyncio.to_thread(_get_cached_normalized_card_catalog)
     except (URLError, HTTPError, TimeoutError, ValueError, OSError):
         return CardCatalogResponse(data=[])
+
+    owned_card_ids: set[str] | None = None
+    if owned_only:
+        owned_card_ids = await get_owned_card_ids_for_user(user_public.id)
+        if len(owned_card_ids) < 1:
+            return CardCatalogResponse(data=[])
+
     filtered = [
         card
         for card in cards
-        if normalized_query == ""
-        or normalized_query in str(card.get("name", "")).lower()
-        or normalized_query in str(card.get("character_variant", "")).lower()
-        or normalized_query in str(card.get("card_id", "")).lower()
+        if (
+            (owned_card_ids is None or str(card.get("card_id", "")).strip().lower() in owned_card_ids)
+            and (
+                normalized_query == ""
+                or normalized_query in str(card.get("name", "")).lower()
+                or normalized_query in str(card.get("character_variant", "")).lower()
+                or normalized_query in str(card.get("variant_type", "")).lower()
+                or normalized_query in str(card.get("card_id", "")).lower()
+            )
+        )
     ]
+    allowed_variant_types = {"", "normal", "hyperspace", "hyperspace foil", "showcase", "serialized"}
+    grouped_cards: dict[tuple[str, str], dict] = {}
+    fallback_image_by_card_id: dict[str, str] = {}
+    for card in filtered:
+        card_id = str(card.get("card_id", "")).strip().lower()
+        if card_id == "":
+            continue
+        variant_type = _normalize_variant_type(card.get("variant_type"))
+        image_url = str(card.get("image_url", "")).strip()
+        if image_url != "":
+            fallback_image_by_card_id[card_id] = image_url
+        if variant_type not in allowed_variant_types:
+            continue
+        key = (card_id, variant_type)
+        previous = grouped_cards.get(key)
+        if previous is None:
+            grouped_cards[key] = card
+            continue
+        prev_image = str(previous.get("image_url", "")).strip()
+        if prev_image == "" and image_url != "":
+            grouped_cards[key] = card
+
+    deduped = list(grouped_cards.values())
+    deduped.sort(
+        key=lambda card: (
+            str(card.get("name", "")).lower(),
+            str(card.get("character_variant", "")).lower(),
+            _normalize_variant_type(card.get("variant_type")),
+        )
+    )
     return CardCatalogResponse(
         data=[
             CardCatalogEntry(
@@ -292,12 +446,73 @@ async def get_card_catalog(
                 character_variant=(
                     str(card.get("character_variant", "")).strip() or None
                 ),
+                variant_type=(str(card.get("variant_type", "")).strip() or None),
                 set_code=str(card.get("set_code", "")),
-                image_url=card.get("image_url"),
+                image_url=(
+                    card.get("image_url")
+                    if str(card.get("image_url", "")).strip() != ""
+                    else fallback_image_by_card_id.get(str(card.get("card_id", "")).strip().lower())
+                ),
             )
-            for card in filtered[:limit]
+            for card in deduped[:limit]
         ]
     )
+
+
+@router.get("/users/card_pool_summary", response_model=UserCardPoolSummaryResponse)
+async def get_user_card_pool_summary(
+    user_public: UserPublic = Depends(user_authenticated),
+    query: str | None = Query(default=None),
+    limit: int = Query(default=2000, ge=1, le=5000),
+) -> UserCardPoolSummaryResponse:
+    normalized_query = (query or "").strip().lower()
+    totals = await get_user_card_pool_totals(user_public.id)
+    if len(totals) < 1:
+        return UserCardPoolSummaryResponse(data=[])
+
+    card_lookup: dict[str, dict] = {}
+    try:
+        cards = await asyncio.to_thread(_get_cached_normalized_card_catalog)
+        for card in cards:
+            card_id = str(card.get("card_id", "")).strip().lower()
+            if card_id == "":
+                continue
+            previous = card_lookup.get(card_id)
+            card_lookup[card_id] = _preferred_catalog_row(previous, card)
+    except (URLError, HTTPError, TimeoutError, ValueError, OSError):
+        card_lookup = {}
+
+    entries: list[UserCardPoolSummaryEntry] = []
+    for row in totals:
+        card_id = str(row.get("card_id", "")).strip().lower()
+        quantity = int(row.get("quantity", 0))
+        if card_id == "" or quantity <= 0:
+            continue
+        card = card_lookup.get(card_id, {})
+        name = str(card.get("name", "")).strip() or None
+        character_variant = str(card.get("character_variant", "")).strip() or None
+        haystack = " ".join(
+            [
+                card_id,
+                str(name or ""),
+                str(character_variant or ""),
+                str(card.get("set_code", "") or ""),
+            ]
+        ).lower()
+        if normalized_query != "" and normalized_query not in haystack:
+            continue
+        entries.append(
+            UserCardPoolSummaryEntry(
+                card_id=card_id,
+                name=name,
+                character_variant=character_variant,
+                set_code=(str(card.get("set_code", "")).strip() or None),
+                image_url=(str(card.get("image_url", "")).strip() or None),
+                quantity=quantity,
+            )
+        )
+
+    return UserCardPoolSummaryResponse(data=entries[:limit])
 
 
 def _search_star_wars_media_fallback(query: str, limit: int) -> list[MediaCatalogEntry]:
@@ -502,8 +717,41 @@ async def get_media_catalog(
 @router.get("/users/me", response_model=UserPublicResponse)
 async def get_user(user_public: UserPublic = Depends(user_authenticated)) -> UserPublicResponse:
     leader_card_id = await get_latest_leader_card_id_for_user(user_public.id)
+    leader_name: str | None = None
+    leader_image_url: str | None = None
+    leader_aspects: list[str] = []
+    if leader_card_id is not None and leader_card_id.strip() != "":
+        try:
+            card_lookup: dict[str, dict] = {}
+            cards = await asyncio.to_thread(_get_cached_normalized_card_catalog)
+            for card in cards:
+                card_id = _normalize_card_lookup_id(str(card.get("card_id") or ""))
+                if card_id == "":
+                    continue
+                previous = card_lookup.get(card_id)
+                card_lookup[card_id] = _preferred_catalog_row(previous, card)
+            leader_card = _resolve_card_lookup_row(card_lookup, leader_card_id)
+            if leader_card is not None:
+                leader_name = str(leader_card.get("name") or "").strip() or None
+                leader_image_url = str(leader_card.get("image_url") or "").strip() or None
+                leader_aspects = [
+                    str(aspect).strip()
+                    for aspect in (leader_card.get("aspects") or [])
+                    if str(aspect).strip() != ""
+                ]
+        except Exception:
+            leader_name = None
+            leader_image_url = None
+            leader_aspects = []
     return UserPublicResponse(
-        data=user_public.model_copy(update={"current_leader_card_id": leader_card_id})
+        data=user_public.model_copy(
+            update={
+                "current_leader_card_id": leader_card_id,
+                "current_leader_name": leader_name,
+                "current_leader_image_url": leader_image_url,
+                "current_leader_aspects": leader_aspects,
+            }
+        )
     )
 
 
@@ -515,6 +763,47 @@ async def get_me(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Can't view details of this user")
 
     return UserPublicResponse(data=user_public)
+
+
+@router.post("/users/admin", response_model=UserPublicResponse)
+async def create_user_as_admin(
+    body: AdminUserToCreate,
+    user_public: UserPublic = Depends(user_authenticated),
+) -> UserPublicResponse:
+    if not is_admin_user(user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    if body.account_type == UserAccountType.DEMO:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Demo account type cannot be created manually")
+    if await check_whether_email_is_in_use(body.email):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Email address already in use")
+
+    created = await create_user(
+        UserInsertable(
+            email=body.email.strip(),
+            name=body.name.strip(),
+            password_hash=hash_password(body.password),
+            created=datetime_utc.now(),
+            account_type=body.account_type,
+        )
+    )
+    created_public = await get_user_by_id(created.id)
+    return UserPublicResponse(data=assert_some(created_public))
+
+
+@router.delete("/users/{user_id}", response_model=SuccessResponse)
+async def delete_user_as_admin(
+    user_id: UserId,
+    user_public: UserPublic = Depends(user_authenticated),
+) -> SuccessResponse:
+    if not is_admin_user(user_public):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+    if user_public.id == user_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot delete your own account")
+    user_to_delete = await get_user_by_id(user_id)
+    if user_to_delete is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found")
+    await delete_user_and_owned_clubs(user_id)
+    return SuccessResponse()
 
 
 @router.put("/users/{user_id}", response_model=UserPublicResponse)
@@ -600,6 +889,7 @@ async def upload_user_avatar(
         user_id,
         UserPreferencesToUpdate(
             avatar_url=new_avatar,
+            avatar_fit_mode=(user.avatar_fit_mode or "cover"),
             favorite_card_id=user.favorite_card_id,
             favorite_card_name=user.favorite_card_name,
             favorite_card_image_url=user.favorite_card_image_url,

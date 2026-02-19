@@ -1,6 +1,7 @@
 import {
   Alert,
   Button,
+  Divider,
   Group,
   PasswordInput,
   Select,
@@ -13,7 +14,13 @@ import { useEffect, useMemo, useState } from 'react';
 
 import RequestErrorAlert from '@components/utils/error_alert';
 import { checkForAuthError, getUser, getUsersAdmin } from '@services/adapter';
-import { updatePassword, updateUser, updateUserAccountType } from '@services/user';
+import {
+  createAdminUser,
+  deleteUserAsAdmin,
+  updatePassword,
+  updateUser,
+  updateUserAccountType,
+} from '@services/user';
 import Layout from './_layout';
 
 type UserItem = {
@@ -38,6 +45,10 @@ export default function AdminUsersPage() {
   const [email, setEmail] = useState('');
   const [accountType, setAccountType] = useState<'REGULAR' | 'ADMIN'>('REGULAR');
   const [newPassword, setNewPassword] = useState('');
+  const [newUserName, setNewUserName] = useState('');
+  const [newUserEmail, setNewUserEmail] = useState('');
+  const [newUserPassword, setNewUserPassword] = useState('');
+  const [newUserAccountType, setNewUserAccountType] = useState<'REGULAR' | 'ADMIN'>('REGULAR');
 
   useEffect(() => {
     if (users.length > 0 && selectedUserId == null) {
@@ -80,6 +91,59 @@ export default function AdminUsersPage() {
 
       {!isUnauthorized && (
         <Stack style={{ maxWidth: '44rem' }} mt="md">
+          <Title order={4}>Create Account</Title>
+          <TextInput
+            label="Name"
+            value={newUserName}
+            onChange={(event) => setNewUserName(event.currentTarget.value)}
+          />
+          <TextInput
+            label="Email"
+            value={newUserEmail}
+            onChange={(event) => setNewUserEmail(event.currentTarget.value)}
+          />
+          <PasswordInput
+            label="Password"
+            value={newUserPassword}
+            onChange={(event) => setNewUserPassword(event.currentTarget.value)}
+          />
+          <Select
+            label="Account Type"
+            value={newUserAccountType}
+            onChange={(value) => setNewUserAccountType((value as 'REGULAR' | 'ADMIN') ?? 'REGULAR')}
+            data={[
+              { value: 'REGULAR', label: 'USER' },
+              { value: 'ADMIN', label: 'ADMIN' },
+            ]}
+            allowDeselect={false}
+          />
+          <Group>
+            <Button
+              disabled={
+                newUserName.trim() === '' ||
+                newUserEmail.trim() === '' ||
+                newUserPassword.trim().length < 8
+              }
+              onClick={async () => {
+                await createAdminUser({
+                  name: newUserName.trim(),
+                  email: newUserEmail.trim(),
+                  password: newUserPassword,
+                  account_type: newUserAccountType,
+                });
+                setNewUserName('');
+                setNewUserEmail('');
+                setNewUserPassword('');
+                setNewUserAccountType('REGULAR');
+                await refreshUsers();
+              }}
+            >
+              Create Account
+            </Button>
+          </Group>
+
+          <Divider my="xs" />
+          <Title order={4}>Manage Existing Account</Title>
           <Select
             label="User"
             value={selectedUserId}
@@ -151,6 +215,19 @@ export default function AdminUsersPage() {
               }}
             >
               Reset Password
+            </Button>
+            <Button
+              disabled={selected == null}
+              color="red"
+              onClick={async () => {
+                if (selected == null) return;
+                if (!window.confirm(`Delete ${selected.name} (${selected.email})?`)) return;
+                await deleteUserAsAdmin(selected.id);
+                setSelectedUserId(null);
+                await refreshUsers();
+              }}
+            >
+              Delete Account
             </Button>
           </Group>
         </Stack>

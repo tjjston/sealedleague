@@ -244,21 +244,35 @@ async def recalculate_tournament_records(
                 FROM team_match_rows
                 GROUP BY team_id
             ),
+            team_points AS (
+                SELECT
+                    sii.team_id AS team_id,
+                    COALESCE(SUM(sii.points), 0) AS swiss_score
+                FROM stage_item_inputs sii
+                JOIN stage_items si ON si.id = sii.stage_item_id
+                JOIN stages s ON s.id = si.stage_id
+                WHERE s.tournament_id = :tournament_id
+                  AND sii.team_id IS NOT NULL
+                GROUP BY sii.team_id
+            ),
             scoped_team_stats AS (
                 SELECT
                     t.id AS team_id,
                     ts.wins,
                     ts.draws,
-                    ts.losses
+                    ts.losses,
+                    tp.swiss_score
                 FROM teams t
                 LEFT JOIN team_stats ts ON ts.team_id = t.id
+                LEFT JOIN team_points tp ON tp.team_id = t.id
                 WHERE t.tournament_id = :tournament_id
             )
             UPDATE teams t
             SET
                 wins = COALESCE(sts.wins, 0),
                 draws = COALESCE(sts.draws, 0),
-                losses = COALESCE(sts.losses, 0)
+                losses = COALESCE(sts.losses, 0),
+                swiss_score = COALESCE(sts.swiss_score, 0)
             FROM scoped_team_stats sts
             WHERE t.id = sts.team_id
             """,
@@ -272,7 +286,8 @@ async def recalculate_tournament_records(
                     p.id AS player_id,
                     COALESCE(SUM(t.wins), 0) AS wins,
                     COALESCE(SUM(t.draws), 0) AS draws,
-                    COALESCE(SUM(t.losses), 0) AS losses
+                    COALESCE(SUM(t.losses), 0) AS losses,
+                    COALESCE(SUM(t.swiss_score), 0) AS swiss_score
                 FROM players p
                 LEFT JOIN players_x_teams pxt ON pxt.player_id = p.id
                 LEFT JOIN teams t
@@ -285,7 +300,8 @@ async def recalculate_tournament_records(
             SET
                 wins = ps.wins,
                 draws = ps.draws,
-                losses = ps.losses
+                losses = ps.losses,
+                swiss_score = ps.swiss_score
             FROM player_stats ps
             WHERE p.id = ps.player_id
               AND p.tournament_id = :tournament_id

@@ -44,6 +44,16 @@ type CardItem = {
   image_url?: string | null;
 };
 
+const ASPECT_ICON_BY_KEY: Record<string, string> = {
+  aggression: '/icons/aspects/aggression.png',
+  command: '/icons/aspects/command.png',
+  cunning: '/icons/aspects/cunning.png',
+  vigilance: '/icons/aspects/vigilance.png',
+  villainy: '/icons/aspects/villainy.png',
+  heroic: '/icons/aspects/heroism.png',
+  heroism: '/icons/aspects/heroism.png',
+};
+
 function countCards(deck: Record<string, number>) {
   return Object.values(deck).reduce((sum, count) => sum + count, 0);
 }
@@ -59,6 +69,30 @@ function parseCardNumber(value: string | null | undefined) {
   if (Number.isFinite(numeric)) return numeric;
   const match = cleaned.match(/\d+/);
   return match != null ? Number(match[0]) : Number.NEGATIVE_INFINITY;
+}
+
+function normalizeAspectKey(value: string) {
+  return value.trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+function AspectIcons({ aspects }: { aspects: string[] }) {
+  if (aspects.length < 1) return <Text size="sm">-</Text>;
+  return (
+    <Group gap={6}>
+      {aspects.map((aspect) => {
+        const key = normalizeAspectKey(aspect);
+        const iconSrc = ASPECT_ICON_BY_KEY[key];
+        return (
+          <Group gap={4} key={`${aspect}-${iconSrc ?? 'none'}`} wrap="nowrap">
+            {iconSrc != null ? (
+              <Image src={iconSrc} alt={aspect} w={14} h={14} fit="contain" />
+            ) : null}
+            <Text size="xs">{aspect}</Text>
+          </Group>
+        );
+      })}
+    </Group>
+  );
 }
 
 function triggerDownload(filename: string, content: string, type: string) {
@@ -350,7 +384,7 @@ export default function SealedDraftSimulationPage() {
       return;
     }
 
-    await saveDeck(activeTournamentId, {
+    const response = await saveDeck(activeTournamentId, {
       tournament_id: activeTournamentId,
       name: deckName,
       leader: leaderCardId,
@@ -359,6 +393,7 @@ export default function SealedDraftSimulationPage() {
       mainboard,
       sideboard,
     });
+    if (response == null) return;
     showNotification({ color: 'green', title: 'Sealed deck saved', message: '' });
   }
 
@@ -656,7 +691,9 @@ export default function SealedDraftSimulationPage() {
                             </Stack>
                           </Table.Td>
                           <Table.Td>{card.type}</Table.Td>
-                          <Table.Td>{(card.aspects ?? []).join(', ') || '-'}</Table.Td>
+                          <Table.Td>
+                            <AspectIcons aspects={card.aspects ?? []} />
+                          </Table.Td>
                           <Table.Td>{(card.arenas ?? []).join(', ') || '-'}</Table.Td>
                           <Table.Td>{card.set_code.toUpperCase()}</Table.Td>
                           <Table.Td>{poolCountMap[card.card_id] ?? 0}</Table.Td>

@@ -13,6 +13,7 @@ from bracket.models.league import (
     LeagueCommunicationView,
     LeagueDeckView,
     LeagueMetaAnalysisView,
+    LeagueDashboardBackgroundSettingsView,
     LeagueProjectedScheduleEventCreateResult,
     LeagueProjectedScheduleItemView,
     LeagueSeasonDraftView,
@@ -31,7 +32,12 @@ from bracket.models.db.stage_item_inputs import (
 from bracket.models.db.team import FullTeamWithPlayers, Team
 from bracket.models.db.tournament import Tournament
 from bracket.models.db.user import UserPublic
-from bracket.models.db.user import CardCatalogEntry, MediaCatalogEntry, UserDirectoryEntry
+from bracket.models.db.user import (
+    CardCatalogEntry,
+    MediaCatalogEntry,
+    UserCardPoolSummaryEntry,
+    UserDirectoryEntry,
+)
 from bracket.models.db.util import StageWithStageItems
 from bracket.routes.auth import Token
 from bracket.utils.id_types import StageId, StageItemId
@@ -112,6 +118,10 @@ class UserDirectoryResponse(DataResponse[list[UserDirectoryEntry]]):
 
 
 class CardCatalogResponse(DataResponse[list[CardCatalogEntry]]):
+    pass
+
+
+class UserCardPoolSummaryResponse(DataResponse[list[UserCardPoolSummaryEntry]]):
     pass
 
 
@@ -206,6 +216,10 @@ class LeagueCommunicationsResponse(DataResponse[list[LeagueCommunicationView]]):
 
 
 class LeagueCommunicationResponse(DataResponse[LeagueCommunicationView]):
+    pass
+
+
+class LeagueDashboardBackgroundSettingsResponse(DataResponse[LeagueDashboardBackgroundSettingsView]):
     pass
 
 

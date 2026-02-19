@@ -6,8 +6,12 @@ import RequestErrorAlert from '@components/utils/error_alert';
 import { getTournamentIdFromRouter } from '@components/utils/util';
 import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
-import { getLeagueSeasonDraft, getTournaments } from '@services/adapter';
-import { submitSeasonDraftPick } from '@services/league';
+import { getLeagueSeasonDraft, getTournaments, getUser } from '@services/adapter';
+import {
+  confirmSeasonDraftResults,
+  resetSeasonDraftResults,
+  submitSeasonDraftPick,
+} from '@services/league';
 
 function formatBuckets(rows: any[] | null | undefined) {
   if (rows == null || rows.length < 1) return '-';
@@ -62,6 +66,8 @@ export default function SeasonDraftPage({
   const tournaments = swrTournamentsResponse.data?.data ?? [];
   const [selectedTournamentId, setSelectedTournamentId] = useState<string | null>(null);
   const [selectedSourceByTarget, setSelectedSourceByTarget] = useState<Record<string, string | null>>({});
+  const swrUserResponse = getUser();
+  const isAdmin = String(swrUserResponse.data?.data?.account_type ?? 'REGULAR') === 'ADMIN';
 
   useEffect(() => {
     if (!standalone || tournaments.length < 1 || selectedTournamentId != null) return;
@@ -112,12 +118,67 @@ export default function SeasonDraftPage({
 
       {draftData != null && draftData.from_season_id != null && (
         <Card withBorder>
-          <Group justify="space-between">
-            <Title order={4}>Season Transition</Title>
-            <Text fw={600}>
-              {draftData.from_season_name} {'->'} {draftData.to_season_name}
+          <Stack>
+            <Group justify="space-between">
+              <Title order={4}>Season Transition</Title>
+              <Text fw={600}>
+                {draftData.from_season_name} {'->'} {draftData.to_season_name}
+              </Text>
+            </Group>
+            <Text size="sm" c="dimmed">
+              Draft picks are staged first. Player card pools are changed only after an admin confirms results.
             </Text>
-          </Group>
+            <Group gap="md">
+              <Text size="sm">
+                Pending Picks: <b>{Number(draftData.pending_pick_count ?? 0)}</b>
+              </Text>
+              <Text size="sm">
+                Confirmed Picks: <b>{Number(draftData.confirmed_pick_count ?? 0)}</b>
+              </Text>
+            </Group>
+            {isAdmin ? (
+              <Group>
+                <Button
+                  disabled={Number(draftData.pending_pick_count ?? 0) < 1}
+                  onClick={async () => {
+                    const proceed = window.confirm(
+                      'Are you sure you want to confirm draft results and apply them to player card pools?'
+                    );
+                    if (!proceed) return;
+                    await confirmSeasonDraftResults(activeTournamentId);
+                    showNotification({
+                      color: 'green',
+                      title: 'Draft results confirmed',
+                      message: '',
+                    });
+                    await swrDraftResponse.mutate();
+                  }}
+                >
+                  Confirm Results
+                </Button>
+                <Button
+                  variant="light"
+                  color="red"
+                  disabled={Number(draftData.pending_pick_count ?? 0) < 1}
+                  onClick={async () => {
+                    const proceed = window.confirm(
+                      'Are you sure you want to reset staged draft picks?'
+                    );
+                    if (!proceed) return;
+                    await resetSeasonDraftResults(activeTournamentId);
+                    showNotification({
+                      color: 'yellow',
+                      title: 'Draft picks reset',
+                      message: '',
+                    });
+                    await swrDraftResponse.mutate();
+                  }}
+                >
+                  Reset Draft
+                </Button>
+              </Group>
+            ) : null}
+          </Stack>
         </Card>
       )}
 
@@ -153,7 +214,10 @@ export default function SeasonDraftPage({
                         : 'Not drafted'}
                     </Table.Td>
                     <Table.Td>
-                      {row.picked_source_user_id == null && draftData.from_season_id != null && draftData.to_season_id != null ? (
+                      {isAdmin &&
+                      row.picked_source_user_id == null &&
+                      draftData.from_season_id != null &&
+                      draftData.to_season_id != null ? (
                         <Group justify="flex-end" wrap="nowrap">
                           <Select
                             placeholder="Choose card base"
@@ -182,18 +246,22 @@ export default function SeasonDraftPage({
                               });
                               showNotification({
                                 color: 'green',
-                                title: 'Draft pick saved',
-                                message: '',
+                                title: 'Draft pick staged',
+                                message: 'Card pools update only after Confirm Results.',
                               });
                               await swrDraftResponse.mutate();
                             }}
                           >
-                            Assign
+                            Stage Pick
                           </Button>
                         </Group>
                       ) : (
                         <Text size="sm" c="dimmed">
-                          {pickLocked ? 'Waiting for earlier picks' : '-'}
+                          {pickLocked
+                            ? 'Waiting for earlier picks'
+                            : !isAdmin && row.picked_source_user_id == null
+                              ? 'Admin can assign picks'
+                              : '-'}
                         </Text>
                       )}
                     </Table.Td>

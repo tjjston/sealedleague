@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import aiofiles.os
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from heliclockter import datetime_utc
 from starlette import status
 
 from bracket.config import config
@@ -28,6 +29,8 @@ from bracket.routes.auth import (
 )
 from bracket.routes.models import SuccessResponse, TournamentResponse, TournamentsResponse
 from bracket.routes.util import disallow_archived_tournament
+from bracket.models.db.court import CourtInsertable
+from bracket.schema import courts
 from bracket.schema import tournaments
 from bracket.sql.rankings import sql_create_ranking
 from bracket.sql.tournaments import (
@@ -183,6 +186,14 @@ async def create_tournament(
 
         ranking = RankingCreateBody()
         await sql_create_ranking(tournament_id, ranking, position=0)
+        await database.execute(
+            query=courts.insert(),
+            values=CourtInsertable(
+                name="Field",
+                created=datetime_utc.now(),
+                tournament_id=tournament_id,
+            ).model_dump(),
+        )
 
         # Prepopulate tournament entrants from users in the same club.
         for club_user in club_users:

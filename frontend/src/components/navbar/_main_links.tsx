@@ -8,7 +8,7 @@ import {
   IconChartBar,
   IconChecklist,
   IconHome,
-  IconLogout,
+  IconLayoutGrid,
   IconScoreboard,
   IconSettings,
   IconTrophy,
@@ -20,7 +20,6 @@ import { useLocation } from 'react-router';
 
 import PreloadLink from '@components/utils/link';
 import { capitalize } from '@components/utils/util';
-import { getUser } from '@services/adapter';
 import classes from './_main_links.module.css';
 
 interface MainLinkProps {
@@ -71,34 +70,27 @@ function MainLink({ item, pathName }: { item: MainLinkProps; pathName: String })
 }
 
 export function getBaseLinksDict() {
-  const { t } = useTranslation();
-  const swrUserResponse = getUser();
-  const user = swrUserResponse.data?.data ?? null;
-  const currentLeader =
-    (user as any)?.current_leader_name ??
-    (user as any)?.current_leader_card_id ??
-    'No leader';
-  const accountLabel = user != null ? `Account (${user.name} | ${currentLeader})` : 'Account';
-
   return [
     { link: '/dashboard', label: 'Dashboard', links: [], icon: IconHome },
-    { link: '/league/communications', label: 'League Notes', links: [], icon: IconChecklist },
-    { link: '/league/projected_schedule', label: 'Projected Schedule', links: [], icon: IconCalendar },
     { link: '/league/deckbuilder', label: 'Deckbuilder', links: [], icon: IconBrackets },
-    { link: '/league/sealed-draft', label: 'Sealed Draft', links: [], icon: IconCards },
-    { link: '/league/season-draft', label: 'Season Draft', links: [], icon: IconChecklist },
-    { link: '/league/season-standings', label: 'Season Standings', links: [], icon: IconChartBar },
-    { link: '/league/meta-analysis', label: 'Meta Analysis', links: [], icon: IconAdjustments },
-    { link: '/league/players', label: 'Players', links: [], icon: IconUser },
     {
-      link: '/user',
-      label: accountLabel,
+      link: '/league/season-standings',
+      label: 'League',
       links: [
-        { link: '/user', label: 'Profile', icon: IconUser },
-        { link: '/user/settings', label: 'Settings', icon: IconSettings },
-        { link: '/logout', label: 'Logout', icon: IconLogout },
+        { link: '/league/season-standings', label: 'Standings', icon: IconChartBar },
+        { link: '/league/communications', label: 'Announcements', icon: IconChecklist },
+        { link: '/league/projected_schedule', label: 'Schedule', icon: IconCalendar },
+        { link: '/league/season-draft', label: 'Draft', icon: IconChecklist },
+        { link: '/league/players', label: 'Players', icon: IconUser },
+        { link: '/league/meta-analysis', label: 'Meta', icon: IconAdjustments },
       ],
-      icon: IconUser,
+      icon: IconLayoutGrid,
+    },
+    {
+      link: '/league/sealed-draft',
+      label: 'Tools',
+      links: [{ link: '/league/sealed-draft', label: 'Sealed Sim', icon: IconCards }],
+      icon: IconSettings,
     },
   ];
 }
@@ -106,9 +98,21 @@ export function getBaseLinksDict() {
 export function getBaseLinks() {
   const location = useLocation();
   const pathName = location.pathname.replace(/\/+$/, '');
-  return getBaseLinksDict()
-    .filter((link) => link.links.length < 1)
-    .map((link) => <MainLinkMobile key={link.label} item={link} pathName={pathName} />);
+  const mobileLinks: MainLinkProps[] = getBaseLinksDict().flatMap((link) => {
+    if (link.links == null || link.links.length < 1) {
+      return [link];
+    }
+    return [
+      { icon: link.icon, label: link.label, link: link.link, links: [] },
+      ...link.links.map((nestedLink) => ({ ...nestedLink, links: [] })),
+    ];
+  });
+  const dedupedLinks = mobileLinks.filter(
+    (item, index) => mobileLinks.findIndex((candidate) => candidate.link === item.link) === index
+  );
+  return dedupedLinks.map((link) => (
+    <MainLinkMobile key={link.label + link.link} item={link} pathName={pathName} />
+  ));
 }
 
 export function TournamentLinks({ tournament_id }: any) {

@@ -333,6 +333,7 @@ users = Table(
     Column("password_hash", String, nullable=False),
     Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
     Column("avatar_url", String, nullable=True),
+    Column("avatar_fit_mode", String, nullable=True),
     Column("favorite_card_id", String, nullable=True),
     Column("favorite_card_name", String, nullable=True),
     Column("favorite_card_image_url", String, nullable=True),

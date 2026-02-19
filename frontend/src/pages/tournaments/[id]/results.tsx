@@ -7,6 +7,8 @@ import {
   Flex,
   Grid,
   Group,
+  HoverCard,
+  Image,
   Table,
   Stack,
   Text,
@@ -28,8 +30,21 @@ import { Translator } from '@components/utils/types';
 import { getTournamentIdFromRouter, responseIsValid } from '@components/utils/util';
 import { MatchWithDetails } from '@openapi';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
-import { getCourts, getPlayers, getStages, getUser } from '@services/adapter';
+import {
+  getCourts,
+  getLeagueCardsGlobal,
+  getStages,
+  getTournamentApplications,
+  getUser,
+} from '@services/adapter';
 import { getMatchLookup, getStageItemLookup, stringToColour } from '@services/lookups';
+
+type TeamDeckPreview = {
+  leaderName: string;
+  baseName: string;
+  leaderImageUrl: string | null;
+  baseImageUrl: string | null;
+};
 
 function ScheduleRow({
   data,
@@ -39,6 +54,7 @@ function ScheduleRow({
   editable,
   submittableByUser,
   winnerByStageItemId,
+  resolveDeckPreviewForTeam,
 }: {
   data: any;
   openMatchModal: any;
@@ -47,6 +63,7 @@ function ScheduleRow({
   editable: boolean;
   submittableByUser: boolean;
   winnerByStageItemId: Record<number, string>;
+  resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
 }) {
   const { t } = useTranslation();
   const winColor = '#2a8f37';
@@ -66,6 +83,53 @@ function ScheduleRow({
       : team1Score === team2Score
         ? drawColor
         : loseColor;
+  const team1Name = String(data?.match?.stage_item_input1?.team?.name ?? '').trim();
+  const team2Name = String(data?.match?.stage_item_input2?.team?.name ?? '').trim();
+  const team1Label =
+    team1Name !== '' ? team1Name : formatMatchInput1(t, stageItemsLookup, matchesLookup, data.match);
+  const team2Label =
+    team2Name !== '' ? team2Name : formatMatchInput2(t, stageItemsLookup, matchesLookup, data.match);
+
+  const renderTeamLabel = (teamLabel: string, teamNameForLookup: string) => {
+    const preview = resolveDeckPreviewForTeam(teamNameForLookup);
+    if (preview == null) {
+      return <Text fw={500}>{teamLabel}</Text>;
+    }
+    return (
+      <HoverCard width={280} shadow="md" position="right">
+        <HoverCard.Target>
+          <Text fw={500} td="underline" style={{ textDecorationStyle: 'dotted' }}>
+            {teamLabel}
+          </Text>
+        </HoverCard.Target>
+        <HoverCard.Dropdown>
+          <Stack gap="xs">
+            <Text fw={700}>Submitted Deck</Text>
+            <Group grow>
+              <Stack gap={4}>
+                <Text size="xs" c="dimmed">
+                  Leader
+                </Text>
+                {preview.leaderImageUrl != null && preview.leaderImageUrl !== '' ? (
+                  <Image src={preview.leaderImageUrl} h={110} fit="contain" radius="sm" />
+                ) : null}
+                <Text size="sm">{preview.leaderName}</Text>
+              </Stack>
+              <Stack gap={4}>
+                <Text size="xs" c="dimmed">
+                  Base
+                </Text>
+                {preview.baseImageUrl != null && preview.baseImageUrl !== '' ? (
+                  <Image src={preview.baseImageUrl} h={110} fit="contain" radius="sm" />
+                ) : null}
+                <Text size="sm">{preview.baseName}</Text>
+              </Stack>
+            </Group>
+          </Stack>
+        </HoverCard.Dropdown>
+      </HoverCard>
+    );
+  };
 
   return (
     <UnstyledButton
@@ -128,9 +192,7 @@ function ScheduleRow({
         <Stack pt="sm">
           <Grid>
             <Grid.Col span="auto" pb="0rem">
-              <Text fw={500}>
-                {formatMatchInput1(t, stageItemsLookup, matchesLookup, data.match)}
-              </Text>
+              {renderTeamLabel(team1Label, team1Name)}
             </Grid.Col>
             <Grid.Col span="content" pb="0rem">
               <div
@@ -149,9 +211,7 @@ function ScheduleRow({
           </Grid>
           <Grid mb="0rem">
             <Grid.Col span="auto" pb="0rem">
-              <Text fw={500}>
-                {formatMatchInput2(t, stageItemsLookup, matchesLookup, data.match)}
-              </Text>
+              {renderTeamLabel(team2Label, team2Name)}
             </Grid.Col>
             <Grid.Col span="content" pb="0rem">
               <div
@@ -211,6 +271,7 @@ function Schedule({
   canEditMatch,
   isSubmittableByUser,
   winnerByStageItemId,
+  resolveDeckPreviewForTeam,
 }: {
   t: Translator;
   stageItemsLookup: any;
@@ -219,6 +280,7 @@ function Schedule({
   canEditMatch: (match: any) => boolean;
   isSubmittableByUser: (match: any) => boolean;
   winnerByStageItemId: Record<number, string>;
+  resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
 }) {
   const matches: any[] = Object.values(matchesLookup ?? {}).filter(
     (value: any) => value != null && value.match != null && value.stageItem != null
@@ -263,6 +325,7 @@ function Schedule({
         editable={canEditMatch(data.match)}
         submittableByUser={isSubmittableByUser(data.match)}
         winnerByStageItemId={winnerByStageItemId}
+        resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
       />
     );
   }
@@ -312,7 +375,8 @@ export default function ResultsPage() {
   const includeTeamPlayers = currentUser == null ? false : !isAdmin;
   const swrStagesResponse = getStages(tournamentData.id, true, includeTeamPlayers);
   const swrCourtsResponse = getCourts(tournamentData.id);
-  const swrPlayersResponse = getPlayers(tournamentData.id);
+  const swrApplicationsResponse = getTournamentApplications(tournamentData.id, 'all');
+  const swrCardsResponse = getLeagueCardsGlobal({ limit: 5000, offset: 0 });
 
   const stageItemsLookup = responseIsValid(swrStagesResponse)
     ? getStageItemLookup(swrStagesResponse)
@@ -367,10 +431,37 @@ export default function ResultsPage() {
     return summaries;
   }, [stages]);
   const eventStandings = useMemo(() => {
-    const players = swrPlayersResponse.data?.data?.players ?? [];
-    const sorted = [...players].sort((left: any, right: any) => {
-      const leftPoints = Number(left?.swiss_score ?? 0);
-      const rightPoints = Number(right?.swiss_score ?? 0);
+    const statsByTeamName = new Map<
+      string,
+      { name: string; swiss_points: number; wins: number; draws: number; losses: number }
+    >();
+    stages.forEach((stage: any) => {
+      (stage.stage_items ?? []).forEach((stageItem: any) => {
+        const hasNonDraftRounds = (stageItem.rounds ?? []).some((round: any) => !round?.is_draft);
+        if (!hasNonDraftRounds) return;
+        (stageItem.inputs ?? []).forEach((input: any) => {
+          const teamName = String(input?.team?.name ?? '').trim();
+          if (teamName === '') return;
+          const key = teamName.toLowerCase();
+          const current = statsByTeamName.get(key) ?? {
+            name: teamName,
+            swiss_points: 0,
+            wins: 0,
+            draws: 0,
+            losses: 0,
+          };
+          current.swiss_points += Number(input?.points ?? 0);
+          current.wins += Number(input?.wins ?? 0);
+          current.draws += Number(input?.draws ?? 0);
+          current.losses += Number(input?.losses ?? 0);
+          statsByTeamName.set(key, current);
+        });
+      });
+    });
+
+    const sorted = [...statsByTeamName.values()].sort((left, right) => {
+      const leftPoints = Number(left?.swiss_points ?? 0);
+      const rightPoints = Number(right?.swiss_points ?? 0);
       if (rightPoints !== leftPoints) return rightPoints - leftPoints;
       const winsDiff = Number(right?.wins ?? 0) - Number(left?.wins ?? 0);
       if (winsDiff !== 0) return winsDiff;
@@ -380,22 +471,61 @@ export default function ResultsPage() {
       if (lossesDiff !== 0) return lossesDiff;
       return String(left?.name ?? '').localeCompare(String(right?.name ?? ''));
     });
-    return sorted.map((player: any, index: number) => {
-      const wins = Number(player?.wins ?? 0);
-      const draws = Number(player?.draws ?? 0);
-      const losses = Number(player?.losses ?? 0);
+    return sorted.map((team: any, index: number) => {
+      const wins = Number(team?.wins ?? 0);
+      const draws = Number(team?.draws ?? 0);
+      const losses = Number(team?.losses ?? 0);
       const matches = wins + draws + losses;
       return {
         rank: index + 1,
-        name: String(player?.name ?? ''),
-        swiss_points: Number(player?.swiss_score ?? 0),
+        name: String(team?.name ?? ''),
+        swiss_points: Number(team?.swiss_points ?? 0),
         wins,
         draws,
         losses,
         win_rate: matches > 0 ? ((wins / matches) * 100).toFixed(2) : '0.00',
       };
     });
-  }, [swrPlayersResponse.data?.data?.players]);
+  }, [stages]);
+
+  const cardLookupById = useMemo(() => {
+    const rows = swrCardsResponse.data?.data?.cards ?? [];
+    return rows.reduce((result: Record<string, { name: string; image_url: string | null }>, card: any) => {
+      const id = String(card?.card_id ?? '').trim().toLowerCase();
+      if (id === '' || result[id] != null) return result;
+      result[id] = {
+        name: String(card?.name ?? card?.card_id ?? id),
+        image_url: card?.image_url ?? null,
+      };
+      return result;
+    }, {});
+  }, [swrCardsResponse.data?.data?.cards]);
+
+  const applicationByUserName = useMemo(() => {
+    const applications = swrApplicationsResponse.data?.data ?? [];
+    return applications.reduce((result: Record<string, any>, row: any) => {
+      const key = String(row?.user_name ?? '').trim().toLowerCase();
+      if (key === '' || result[key] != null) return result;
+      result[key] = row;
+      return result;
+    }, {});
+  }, [swrApplicationsResponse.data?.data]);
+
+  const resolveDeckPreviewForTeam = (teamName: string | null | undefined): TeamDeckPreview | null => {
+    const key = String(teamName ?? '').trim().toLowerCase();
+    if (key === '') return null;
+    const application = applicationByUserName[key];
+    if (application == null) return null;
+    const leaderId = String(application.deck_leader ?? '').trim().toLowerCase();
+    const baseId = String(application.deck_base ?? '').trim().toLowerCase();
+    if (leaderId === '' || baseId === '') return null;
+    return {
+      leaderName: cardLookupById[leaderId]?.name ?? application.deck_leader ?? '-',
+      baseName: cardLookupById[baseId]?.name ?? application.deck_base ?? '-',
+      leaderImageUrl: cardLookupById[leaderId]?.image_url ?? null,
+      baseImageUrl: cardLookupById[baseId]?.image_url ?? null,
+    };
+  };
   const winnerByStageItemId = useMemo(
     () =>
       finishedStageItemWinners.reduce(
@@ -412,13 +542,12 @@ export default function ResultsPage() {
     eliminationStageItems[0] ??
     null;
 
-  if (swrStagesResponse.error || swrCourtsResponse.error || swrPlayersResponse.error) {
+  if (swrStagesResponse.error || swrCourtsResponse.error) {
     return (
       <TournamentLayout tournament_id={tournamentData.id}>
         <Title>{t('results_title')}</Title>
         {swrStagesResponse.error != null ? <RequestErrorAlert error={swrStagesResponse.error} /> : null}
         {swrCourtsResponse.error != null ? <RequestErrorAlert error={swrCourtsResponse.error} /> : null}
-        {swrPlayersResponse.error != null ? <RequestErrorAlert error={swrPlayersResponse.error} /> : null}
       </TournamentLayout>
     );
   }
@@ -519,17 +648,57 @@ export default function ResultsPage() {
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
-                {eventStandings.map((row) => (
-                  <Table.Tr key={`${row.rank}-${row.name}`}>
-                    <Table.Td>{row.rank}</Table.Td>
-                    <Table.Td>{row.name}</Table.Td>
-                    <Table.Td>{row.swiss_points}</Table.Td>
-                    <Table.Td>{row.wins}</Table.Td>
-                    <Table.Td>{row.draws}</Table.Td>
-                    <Table.Td>{row.losses}</Table.Td>
-                    <Table.Td>{row.win_rate}</Table.Td>
-                  </Table.Tr>
-                ))}
+                {eventStandings.map((row) => {
+                  const preview = resolveDeckPreviewForTeam(row.name);
+                  return (
+                    <Table.Tr key={`${row.rank}-${row.name}`}>
+                      <Table.Td>{row.rank}</Table.Td>
+                      <Table.Td>
+                        {preview != null ? (
+                          <HoverCard width={280} shadow="md" position="right">
+                            <HoverCard.Target>
+                              <Text td="underline" style={{ textDecorationStyle: 'dotted' }}>
+                                {row.name}
+                              </Text>
+                            </HoverCard.Target>
+                            <HoverCard.Dropdown>
+                              <Stack gap="xs">
+                                <Text fw={700}>Submitted Deck</Text>
+                                <Group grow>
+                                  <Stack gap={4}>
+                                    <Text size="xs" c="dimmed">
+                                      Leader
+                                    </Text>
+                                    {preview.leaderImageUrl != null ? (
+                                      <Image src={preview.leaderImageUrl} h={110} fit="contain" radius="sm" />
+                                    ) : null}
+                                    <Text size="sm">{preview.leaderName}</Text>
+                                  </Stack>
+                                  <Stack gap={4}>
+                                    <Text size="xs" c="dimmed">
+                                      Base
+                                    </Text>
+                                    {preview.baseImageUrl != null ? (
+                                      <Image src={preview.baseImageUrl} h={110} fit="contain" radius="sm" />
+                                    ) : null}
+                                    <Text size="sm">{preview.baseName}</Text>
+                                  </Stack>
+                                </Group>
+                              </Stack>
+                            </HoverCard.Dropdown>
+                          </HoverCard>
+                        ) : (
+                          row.name
+                        )}
+                      </Table.Td>
+                      <Table.Td>{row.swiss_points}</Table.Td>
+                      <Table.Td>{row.wins}</Table.Td>
+                      <Table.Td>{row.draws}</Table.Td>
+                      <Table.Td>{row.losses}</Table.Td>
+                      <Table.Td>{row.win_rate}</Table.Td>
+                    </Table.Tr>
+                  );
+                })}
               </Table.Tbody>
             </Table>
           </Stack>
@@ -591,6 +760,7 @@ export default function ResultsPage() {
             canEditMatch={canEditMatch}
             isSubmittableByUser={(matchToCheck: any) => !isAdmin && userIsInMatch(matchToCheck)}
             winnerByStageItemId={winnerByStageItemId}
+            resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
           />
         </SectionErrorBoundary>
       </Center>

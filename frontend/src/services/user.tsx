@@ -43,6 +43,7 @@ export async function updateUserPreferences(
   user_id: number,
   body: {
     avatar_url: string | null;
+    avatar_fit_mode: string | null;
     favorite_card_id: string | null;
     favorite_card_name: string | null;
     favorite_card_image_url: string | null;
@@ -71,6 +72,23 @@ export async function updateUserAccountType(
 ) {
   return createAxios()
     .put(`users/${user_id}/account_type`, { account_type: accountType })
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function createAdminUser(body: {
+  email: string;
+  name: string;
+  password: string;
+  account_type: 'REGULAR' | 'ADMIN';
+}) {
+  return createAxios()
+    .post('users/admin', body)
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function deleteUserAsAdmin(user_id: number) {
+  return createAxios()
+    .delete(`users/${user_id}`)
     .catch((response: any) => handleRequestError(response));
 }
 

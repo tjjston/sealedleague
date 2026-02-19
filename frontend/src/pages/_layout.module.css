@@ -8,18 +8,43 @@
 .inner {
   height: 100%;
   display: flex;
+  gap: var(--mantine-spacing-sm);
   justify-content: space-between;
   align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.leftSection {
+  min-width: 0;
+  flex: 1;
+}
+
+.breadcrumbs {
+  min-width: 0;
+}
+
+.topLinks {
+  max-width: min(42vw, 24rem);
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+
+.mainContent {
+  position: relative;
+  z-index: 1;
 }
 
 .link {
   display: block;
+  white-space: nowrap;
   line-height: 1;
-  padding: rem(8px) rem(12px);
+  padding: rem(5px) rem(8px);
   border-radius: var(--mantine-radius-sm);
   text-decoration: none;
   color: light-dark(var(--mantine-color-gray-7), var(--mantine-color-dark-0));
-  font-size: var(--mantine-font-size-sm);
+  font-size: var(--mantine-font-size-xs);
   font-weight: 500;
 
   @mixin hover {

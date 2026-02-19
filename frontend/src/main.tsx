@@ -50,6 +50,25 @@ import TeamsPage from './pages/tournaments/[id]/teams';
 import UserPage from './pages/user';
 
 const theme = createTheme({
+  primaryColor: 'blue',
+  defaultRadius: 'md',
+  fontSizes: {
+    xs: '0.78rem',
+    sm: '0.9rem',
+    md: '1rem',
+    lg: '1.12rem',
+    xl: '1.28rem',
+  },
+  headings: {
+    sizes: {
+      h1: { fontSize: '2.05rem', lineHeight: '1.18' },
+      h2: { fontSize: '1.72rem', lineHeight: '1.2' },
+      h3: { fontSize: '1.42rem', lineHeight: '1.24' },
+      h4: { fontSize: '1.2rem', lineHeight: '1.24' },
+      h5: { fontSize: '1.08rem', lineHeight: '1.26' },
+      h6: { fontSize: '0.98rem', lineHeight: '1.28' },
+    },
+  },
   colors: {
     dark: [
       '#C1C2C5',
@@ -96,7 +115,7 @@ createRoot(document.getElementById('root')!).render(
               <Route path="/admin/users" element={<AdminUsersPage />} />
               <Route path="/demo" element={<CreateDemoAccountPage />} />
               <Route path="/user" element={<UserPage />} />
-              <Route path="/user/settings" element={<UserPage />} />
+              <Route path="/user/settings" element={<Navigate to="/user" replace />} />
               <Route path="/password-reset" element={<PasswordResetPage />} />
               <Route path="/create-account" element={<CreateAccountPage />} />
               <Route path="/league/deckbuilder" element={<LeagueDeckbuilderEntryPage />} />

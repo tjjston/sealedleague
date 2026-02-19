@@ -1,14 +1,14 @@
 import { Badge, Button, Card, Group, Image, Text, UnstyledButton } from '@mantine/core';
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SWRResponse } from 'swr';
 
 import { EmptyTableInfo } from '@components/no_content/empty_table_info';
 import { DateTime } from '@components/utils/datetime';
 import RequestErrorAlert from '@components/utils/error_alert';
 import PreloadLink from '@components/utils/link';
 import { TableSkeletonSingleColumn } from '@components/utils/skeletons';
-import { Tournament, TournamentsResponse } from '@openapi';
-import { getBaseApiUrl, getLeagueNextOpponent } from '@services/adapter';
+import { Tournament } from '@openapi';
+import { getBaseApiUrl } from '@services/adapter';
 import classes from './tournaments.module.css';
 
 export function TournamentLogo({ tournament }: { tournament: Tournament }) {
@@ -38,10 +38,20 @@ function Stat({ title, value }: { title: string; value: any }) {
 
 function TournamentCard({ tournament }: { tournament: Tournament }) {
   const { t } = useTranslation();
-  const swrNextOpponentResponse = getLeagueNextOpponent(tournament.id);
-  const nextOpponent = swrNextOpponentResponse.data?.data;
-  const tournamentRunning =
-    tournament.status === 'OPEN' && new Date(tournament.start_time).getTime() <= Date.now();
+  const lifecycleStatus = useMemo(() => {
+    if (tournament.status === 'ARCHIVED') return 'CLOSED';
+    if (new Date(tournament.start_time).getTime() > Date.now()) return 'PLANNED';
+    return 'IN_PROGRESS';
+  }, [tournament.start_time, tournament.status]);
+  const lifecycleStatusLabel =
+    lifecycleStatus === 'IN_PROGRESS'
+      ? 'In Progress'
+      : lifecycleStatus === 'PLANNED'
+        ? 'Planned'
+        : lifecycleStatus === 'CLOSED'
+          ? 'Closed'
+          : lifecycleStatus;
+  const winnerName = String((tournament as any)?.winner_name ?? '').trim();
 
   return (
     <Group key={tournament.id} className={classes.card}>
@@ -62,29 +72,16 @@ function TournamentCard({ tournament }: { tournament: Tournament }) {
           </Card.Section>
 
           <Card.Section className={classes.section}>
+            <Stat title="Status" value={lifecycleStatusLabel} />
+          </Card.Section>
+
+          <Card.Section className={classes.section}>
             <Stat title={t('start_time')} value={<DateTime datetime={tournament.start_time} />} />
           </Card.Section>
 
-          {tournamentRunning ? (
+          {winnerName !== '' ? (
             <Card.Section className={classes.section}>
-              <Stat
-                title="Your Next Opponent"
-                value={
-                  nextOpponent != null ? (
-                    <>
-                      {nextOpponent.opponent_team_name ?? 'TBD'}
-                      {nextOpponent.start_time != null ? (
-                        <>
-                          {' at '}
-                          <DateTime datetime={nextOpponent.start_time} />
-                        </>
-                      ) : null}
-                    </>
-                  ) : (
-                    'No pending match'
-                  )
-                }
-              />
+              <Stat title="Winner" value={winnerName} />
             </Card.Section>
           ) : null}
 
@@ -117,23 +114,24 @@ function TournamentCard({ tournament }: { tournament: Tournament }) {
 }
 
 export default function TournamentsCardTable({
-  swrTournamentsResponse,
+  tournaments,
+  isLoading,
+  error,
 }: {
-  swrTournamentsResponse: SWRResponse<TournamentsResponse>;
+  tournaments: Tournament[];
+  isLoading: boolean;
+  error: any;
 }) {
   const { t } = useTranslation();
 
-  if (swrTournamentsResponse.error) {
-    return <RequestErrorAlert error={swrTournamentsResponse.error} />;
+  if (error) {
+    return <RequestErrorAlert error={error} />;
   }
-  if (swrTournamentsResponse.isLoading) {
+  if (isLoading) {
     return <TableSkeletonSingleColumn />;
   }
 
-  const tournaments: Tournament[] =
-    swrTournamentsResponse.data != null ? swrTournamentsResponse.data.data : [];
-
-  const rows = tournaments
+  const rows = [...tournaments]
     .sort(
       (t1: Tournament, t2: Tournament) =>
         new Date(t1.start_time).getTime() - new Date(t2.start_time).getTime()

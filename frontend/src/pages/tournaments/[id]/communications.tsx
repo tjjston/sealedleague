@@ -15,6 +15,7 @@ import { showNotification } from '@mantine/notifications';
 import { useEffect, useMemo, useState } from 'react';
 
 import RequestErrorAlert from '@components/utils/error_alert';
+import MarkdownContent from '@components/utils/markdown';
 import { getTournamentIdFromRouter } from '@components/utils/util';
 import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
@@ -63,14 +64,28 @@ export default function CommunicationsPage({ standalone = false }: { standalone?
     [swrCommunicationsResponse.data]
   );
   const announcements = rows.filter((row: any) => row.kind === 'ANNOUNCEMENT');
-  const rules = rows.filter((row: any) => row.kind === 'RULE');
+  const rules = [...rows]
+    .filter((row: any) => row.kind === 'RULE')
+    .sort((left: any, right: any) => {
+      const leftTime = new Date(left.updated ?? 0).getTime();
+      const rightTime = new Date(right.updated ?? 0).getTime();
+      return rightTime - leftTime;
+    });
   const notes = rows.filter((row: any) => row.kind === 'NOTE');
+  const primaryRule = rules[0] ?? null;
 
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [kind, setKind] = useState<'NOTE' | 'ANNOUNCEMENT' | 'RULE'>('ANNOUNCEMENT');
+  const [kind, setKind] = useState<'NOTE' | 'ANNOUNCEMENT'>('ANNOUNCEMENT');
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [pinned, setPinned] = useState(false);
+  const [ruleBody, setRuleBody] = useState('');
+  const [ruleTitle, setRuleTitle] = useState('League Rules');
+
+  useEffect(() => {
+    setRuleBody(String(primaryRule?.body ?? ''));
+    setRuleTitle(String(primaryRule?.title ?? 'League Rules'));
+  }, [primaryRule?.id, primaryRule?.body, primaryRule?.title]);
 
   const resetForm = () => {
     setEditingId(null);
@@ -81,8 +96,11 @@ export default function CommunicationsPage({ standalone = false }: { standalone?
   };
 
   const startEdit = (row: any) => {
+    if (row.kind !== 'NOTE' && row.kind !== 'ANNOUNCEMENT') {
+      return;
+    }
     setEditingId(Number(row.id));
-    if (row.kind === 'NOTE' || row.kind === 'RULE' || row.kind === 'ANNOUNCEMENT') {
+    if (row.kind === 'NOTE' || row.kind === 'ANNOUNCEMENT') {
       setKind(row.kind);
     } else {
       setKind('ANNOUNCEMENT');
@@ -106,19 +124,18 @@ export default function CommunicationsPage({ standalone = false }: { standalone?
       {isAdmin && (
         <Card withBorder>
           <Stack>
-            <Title order={4}>{editingId == null ? 'New Message' : 'Edit Message'}</Title>
+            <Title order={4}>{editingId == null ? 'New Announcement / Note' : 'Edit Message'}</Title>
             <Select
               label="Type"
               value={kind}
               allowDeselect={false}
               data={[
                 { value: 'ANNOUNCEMENT', label: 'Announcement' },
-                { value: 'RULE', label: 'League Rule' },
                 { value: 'NOTE', label: 'League Note' },
               ]}
               onChange={(value) =>
                 setKind(
-                  value === 'NOTE' || value === 'RULE' || value === 'ANNOUNCEMENT'
+                  value === 'NOTE' || value === 'ANNOUNCEMENT'
                     ? value
                     : 'ANNOUNCEMENT'
                 )
@@ -135,7 +152,7 @@ export default function CommunicationsPage({ standalone = false }: { standalone?
               value={body}
               minRows={4}
               onChange={(event) => setBody(event.currentTarget.value)}
-              placeholder="Add your announcement or note details"
+              placeholder="Markdown supported. Mentions like @username and #event will be highlighted."
             />
             <Checkbox
               label="Pin message"
@@ -187,6 +204,66 @@ export default function CommunicationsPage({ standalone = false }: { standalone?
         </Card>
       )}
 
+      {isAdmin && (
+        <Card withBorder>
+          <Stack>
+            <Title order={4}>League Rules (Single Markdown Block)</Title>
+            <TextInput
+              label="Rule Block Title"
+              value={ruleTitle}
+              onChange={(event) => setRuleTitle(event.currentTarget.value)}
+              placeholder="League Rules"
+            />
+            <Textarea
+              label="Rules Markdown"
+              value={ruleBody}
+              autosize
+              minRows={8}
+              maxRows={32}
+              styles={{ input: { resize: 'vertical' } }}
+              onChange={(event) => setRuleBody(event.currentTarget.value)}
+              placeholder="Write all league rules in one markdown block."
+            />
+            <Group>
+              <Button
+                onClick={async () => {
+                  if (activeTournamentId <= 0 || ruleBody.trim() === '') return;
+                  if (primaryRule == null) {
+                    await createLeagueCommunication(activeTournamentId, {
+                      kind: 'RULE',
+                      title: ruleTitle.trim() === '' ? 'League Rules' : ruleTitle.trim(),
+                      body: ruleBody.trim(),
+                      pinned: false,
+                    });
+                  } else {
+                    await updateLeagueCommunication(activeTournamentId, Number(primaryRule.id), {
+                      kind: 'RULE',
+                      title: ruleTitle.trim() === '' ? 'League Rules' : ruleTitle.trim(),
+                      body: ruleBody.trim(),
+                      pinned: false,
+                    });
+                    const duplicateRules = rules.slice(1);
+                    await Promise.all(
+                      duplicateRules.map((duplicate: any) =>
+                        deleteLeagueCommunication(activeTournamentId, Number(duplicate.id))
+                      )
+                    );
+                  }
+                  showNotification({
+                    color: 'green',
+                    title: 'Rules updated',
+                    message: '',
+                  });
+                  await swrCommunicationsResponse.mutate();
+                }}
+              >
+                Save Rules
+              </Button>
+            </Group>
+          </Stack>
+        </Card>
+      )}
+
       <Card withBorder>
         <Title order={4} mb="sm">
           Announcements
@@ -223,7 +300,7 @@ export default function CommunicationsPage({ standalone = false }: { standalone?
                   </Group>
                 )}
               </Group>
-              <Text style={{ whiteSpace: 'pre-wrap' }}>{row.body}</Text>
+              <MarkdownContent text={row.body} />
               <Text mt="xs" size="xs" c="dimmed">
                 {row.created_by_user_name ?? 'League admin'} | Updated {formatDate(row.updated)}
               </Text>
@@ -237,29 +314,25 @@ export default function CommunicationsPage({ standalone = false }: { standalone?
           League Rules
         </Title>
         <Stack>
-          {rules.length < 1 && (
+          {primaryRule == null && (
             <Text c="dimmed" size="sm">
               No rules posted yet.
             </Text>
           )}
-          {rules.map((row: any) => (
-            <Card key={`rule-${row.id}`} withBorder>
+          {primaryRule != null ? (
+            <Card key={`rule-${primaryRule.id}`} withBorder>
               <Group justify="space-between" mb={6}>
                 <Group>
-                  <Text fw={700}>{row.title}</Text>
-                  {row.pinned ? <Badge color="yellow">Pinned</Badge> : null}
+                  <Text fw={700}>{primaryRule.title}</Text>
                 </Group>
                 {isAdmin && (
                   <Group gap={8}>
-                    <Button size="xs" variant="light" onClick={() => startEdit(row)}>
-                      Edit
-                    </Button>
                     <Button
                       size="xs"
                       color="red"
                       variant="light"
                       onClick={async () => {
-                        await deleteLeagueCommunication(activeTournamentId, Number(row.id));
+                        await deleteLeagueCommunication(activeTournamentId, Number(primaryRule.id));
                         await swrCommunicationsResponse.mutate();
                       }}
                     >
@@ -268,12 +341,17 @@ export default function CommunicationsPage({ standalone = false }: { standalone?
                   </Group>
                 )}
               </Group>
-              <Text style={{ whiteSpace: 'pre-wrap' }}>{row.body}</Text>
+              <MarkdownContent text={primaryRule.body} />
               <Text mt="xs" size="xs" c="dimmed">
-                {row.created_by_user_name ?? 'League admin'} | Updated {formatDate(row.updated)}
+                {primaryRule.created_by_user_name ?? 'League admin'} | Updated {formatDate(primaryRule.updated)}
               </Text>
             </Card>
-          ))}
+          ) : null}
+          {rules.length > 1 ? (
+            <Text size="xs" c="dimmed">
+              {rules.length - 1} duplicate rule block(s) exist from older entries; saving rules will consolidate to one.
+            </Text>
+          ) : null}
         </Stack>
       </Card>
 
@@ -313,7 +391,7 @@ export default function CommunicationsPage({ standalone = false }: { standalone?
                   </Group>
                 )}
               </Group>
-              <Text style={{ whiteSpace: 'pre-wrap' }}>{row.body}</Text>
+              <MarkdownContent text={row.body} />
               <Text mt="xs" size="xs" c="dimmed">
                 {row.created_by_user_name ?? 'League admin'} | Updated {formatDate(row.updated)}
               </Text>

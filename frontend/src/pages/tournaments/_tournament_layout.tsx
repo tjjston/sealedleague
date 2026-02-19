@@ -16,11 +16,11 @@ export default function TournamentLayout({ children, tournament_id }: any) {
   const tournamentLinks = <TournamentLinks tournament_id={tournament_id} />;
   const tournamentHeaderLinks = getTournamentHeaderLinks(tournament_id);
   const breadcrumbs = responseIsValid(tournamentResponse) ? (
-    <Group gap="xs" miw="25rem">
-      <Title order={2} maw="20rem">
+    <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
+      <Title order={3} maw="20rem" style={{ whiteSpace: 'nowrap' }}>
         /
       </Title>
-      <Title order={2} maw="20rem" lineClamp={1}>
+      <Title order={3} maw="20rem" lineClamp={1}>
         {tournamentResponse.data?.data.name}
       </Title>
 

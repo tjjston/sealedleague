@@ -3,6 +3,7 @@ from collections import Counter
 from collections.abc import Sequence
 from heliclockter import datetime_utc
 import json
+import re
 
 from bracket.database import database
 from bracket.models.db.league import Season
@@ -14,13 +15,18 @@ from bracket.models.league import (
     LeagueFavoriteCard,
     LeagueDistributionBucket,
     LeagueMetaAnalysisView,
-    LeagueMetaArchetypeUsage,
     LeagueMetaCardUsage,
     LeagueMetaCountBucket,
     LeagueMetaDeckCoreUsage,
+    LeagueMetaKeywordImpact,
+    LeagueMetaPerformancePattern,
+    LeagueMetaSynergyGraph,
+    LeagueMetaTrendingCard,
     LeagueCommunicationUpsertBody,
     LeagueCommunicationUpdateBody,
     LeagueCommunicationView,
+    LeagueDashboardBackgroundSettingsUpdateBody,
+    LeagueDashboardBackgroundSettingsView,
     LeaguePlayerCareerProfile,
     LeagueProjectedScheduleItemUpsertBody,
     LeagueProjectedScheduleItemUpdateBody,
@@ -258,7 +264,12 @@ async def get_league_standings(
             )
         """
     )
-    live_cte = f"""
+    season_points_user_filter = (
+        "spl.season_id = :season_id"
+        if season_id is not None
+        else f"spl.season_id IN ({season_ids_subquery()})"
+    )
+    live_cte = """
         ,
         live_match_points AS (
             SELECT
@@ -266,10 +277,10 @@ async def get_league_standings(
                 COALESCE(SUM((p.wins * 3) + p.draws), 0) AS live_points,
                 COALESCE(SUM(p.wins), 0) AS event_wins
             FROM tournament_users tu
-            JOIN tournaments t
-                ON {tournament_scope_filter}
+            JOIN scoped_tournaments st
+                ON TRUE
             LEFT JOIN players p
-                ON p.tournament_id = t.id
+                ON p.tournament_id = st.id
                AND lower(trim(p.name)) = lower(trim(tu.name))
             GROUP BY tu.id
         )
@@ -281,12 +292,35 @@ async def get_league_standings(
     live_group_by = "lmp.live_points,\n            lmp.event_wins,\n            "
     live_points_expression = "COALESCE(lmp.live_points, 0)"
     query = """
-        WITH tournament_users AS (
-            SELECT DISTINCT u.id, u.name, u.email
+        WITH
+        scoped_tournaments AS (
+            SELECT DISTINCT t.id
             FROM tournaments t
-            JOIN users_x_clubs uxc ON uxc.club_id = t.club_id
-            JOIN users u ON u.id = uxc.user_id
-            WHERE t.id = :tournament_id
+            WHERE {tournament_scope_filter}
+        ),
+        tournament_users AS (
+            SELECT DISTINCT u.id, u.name, u.email
+            FROM users u
+            WHERE u.id IN (
+                SELECT uxc.user_id
+                FROM users_x_clubs uxc
+                WHERE uxc.club_id = (
+                    SELECT club_id
+                    FROM tournaments
+                    WHERE id = :tournament_id
+                )
+                UNION
+                SELECT ta.user_id
+                FROM tournament_applications ta
+                WHERE ta.tournament_id IN (
+                    SELECT id
+                    FROM scoped_tournaments
+                )
+                UNION
+                SELECT spl.user_id
+                FROM season_points_ledger spl
+                WHERE {season_points_user_filter}
+            )
         )
         {live_cte}
         SELECT
@@ -359,8 +393,10 @@ async def get_league_standings(
             sm.can_manage_tournaments
         ORDER BY points DESC, tu.name ASC
     """.format(
+        tournament_scope_filter=tournament_scope_filter,
         membership_filter=membership_filter,
         season_filter=season_filter,
+        season_points_user_filter=season_points_user_filter,
         live_cte=live_cte,
         live_join=live_join,
         live_group_by=live_group_by,
@@ -562,9 +598,12 @@ def _distribution_buckets(counter: Counter[str]) -> list[LeagueDistributionBucke
     ]
 
 
-def _parse_pool_draft_reason(reason: str) -> tuple[int, int, int] | None:
-    # Format: POOL_DRAFT_PICK:from=<season_id>:source=<source_user_id>:target=<target_user_id>
-    if not reason.startswith("POOL_DRAFT_PICK:"):
+def _parse_pool_draft_reason(reason: str) -> tuple[str, int, int, int] | None:
+    # Format: POOL_DRAFT_<STATUS>:from=<season_id>:source=<source_user_id>:target=<target_user_id>
+    if not reason.startswith("POOL_DRAFT_"):
+        return None
+    prefix = reason.split(":", 1)[0]
+    if prefix not in {"POOL_DRAFT_PICK", "POOL_DRAFT_PENDING"}:
         return None
     values: dict[str, int] = {}
     for chunk in reason.split(":")[1:]:
@@ -577,10 +616,29 @@ def _parse_pool_draft_reason(reason: str) -> tuple[int, int, int] | None:
             return None
     if "from" not in values or "source" not in values or "target" not in values:
         return None
-    return values["from"], values["source"], values["target"]
+    return prefix, values["from"], values["source"], values["target"]
 
 
-async def _get_draft_pick_mappings(from_season_id: int, to_season_id: int) -> dict[int, int]:
+def _pool_draft_reason(
+    *,
+    pending: bool,
+    from_season_id: int,
+    source_user_id: int,
+    target_user_id: int,
+) -> str:
+    status_label = "PENDING" if pending else "PICK"
+    return (
+        f"POOL_DRAFT_{status_label}:from={from_season_id}:"
+        f"source={int(source_user_id)}:target={int(target_user_id)}"
+    )
+
+
+async def _get_draft_pick_mappings(
+    from_season_id: int,
+    to_season_id: int,
+    *,
+    pending: bool | None = None,
+) -> dict[int, int]:
     rows = await database.fetch_all(
         """
         SELECT reason, created
@@ -591,7 +649,7 @@ async def _get_draft_pick_mappings(from_season_id: int, to_season_id: int) -> di
         """,
         values={
             "to_season_id": to_season_id,
-            "reason_prefix": f"POOL_DRAFT_PICK:from={from_season_id}:%",
+            "reason_prefix": f"POOL_DRAFT_%:from={from_season_id}:%",
         },
     )
     target_to_source: dict[int, int] = {}
@@ -599,8 +657,12 @@ async def _get_draft_pick_mappings(from_season_id: int, to_season_id: int) -> di
         parsed = _parse_pool_draft_reason(str(row._mapping["reason"] or ""))
         if parsed is None:
             continue
-        parsed_from_season_id, source_user_id, target_user_id = parsed
+        prefix, parsed_from_season_id, source_user_id, target_user_id = parsed
         if parsed_from_season_id != from_season_id:
+            continue
+        if pending is True and prefix != "POOL_DRAFT_PENDING":
+            continue
+        if pending is False and prefix != "POOL_DRAFT_PICK":
             continue
         target_to_source[target_user_id] = source_user_id
     return target_to_source
@@ -614,7 +676,11 @@ async def apply_season_draft_pick(
     source_user_id: UserId,
     changed_by_user_id: UserId,
 ) -> None:
-    existing_mappings = await _get_draft_pick_mappings(from_season_id, to_season_id)
+    existing_mappings = await _get_draft_pick_mappings(
+        from_season_id,
+        to_season_id,
+        pending=True,
+    )
     source_to_target = {source: target for target, source in existing_mappings.items()}
     already_claimed_by = source_to_target.get(int(source_user_id))
     if already_claimed_by is not None and already_claimed_by != int(target_user_id):
@@ -644,39 +710,12 @@ async def apply_season_draft_pick(
                 """,
                 values={
                     "to_season_id": to_season_id,
-                    "reason": (
-                        f"POOL_DRAFT_PICK:from={from_season_id}:"
-                        f"source={old_source_for_target}:target={int(target_user_id)}"
+                    "reason": _pool_draft_reason(
+                        pending=True,
+                        from_season_id=from_season_id,
+                        source_user_id=old_source_for_target,
+                        target_user_id=int(target_user_id),
                     ),
-                },
-            )
-
-        await database.execute(
-            """
-            DELETE FROM card_pool_entries
-            WHERE season_id = :to_season_id
-              AND user_id = :target_user_id
-            """,
-            values={"to_season_id": to_season_id, "target_user_id": target_user_id},
-        )
-
-        for source_row in source_rows:
-            quantity = int(source_row._mapping["quantity"] or 0)
-            if quantity <= 0:
-                continue
-            await database.execute(
-                """
-                INSERT INTO card_pool_entries (season_id, user_id, card_id, quantity, created)
-                VALUES (:season_id, :user_id, :card_id, :quantity, :created)
-                ON CONFLICT (season_id, user_id, card_id)
-                DO UPDATE SET quantity = EXCLUDED.quantity
-                """,
-                values={
-                    "season_id": to_season_id,
-                    "user_id": target_user_id,
-                    "card_id": str(source_row._mapping["card_id"]),
-                    "quantity": quantity,
-                    "created": datetime_utc.now(),
                 },
             )
 
@@ -706,13 +745,164 @@ async def apply_season_draft_pick(
                 "user_id": target_user_id,
                 "changed_by_user_id": changed_by_user_id,
                 "tournament_id": tournament_id,
-                "reason": (
-                    f"POOL_DRAFT_PICK:from={from_season_id}:"
-                    f"source={int(source_user_id)}:target={int(target_user_id)}"
+                "reason": _pool_draft_reason(
+                    pending=True,
+                    from_season_id=from_season_id,
+                    source_user_id=int(source_user_id),
+                    target_user_id=int(target_user_id),
                 ),
                 "created": datetime_utc.now(),
             },
         )
+
+
+async def confirm_season_draft_results(
+    tournament_id: TournamentId,
+    from_season_id: int,
+    to_season_id: int,
+    changed_by_user_id: UserId,
+) -> None:
+    pending_mappings = await _get_draft_pick_mappings(
+        from_season_id,
+        to_season_id,
+        pending=True,
+    )
+    if len(pending_mappings) < 1:
+        raise ValueError("No pending draft picks to confirm.")
+
+    confirmed_mappings = await _get_draft_pick_mappings(
+        from_season_id,
+        to_season_id,
+        pending=False,
+    )
+    target_ids_to_refresh = sorted({*pending_mappings.keys(), *confirmed_mappings.keys()})
+
+    async with database.transaction():
+        for target_user_id in target_ids_to_refresh:
+            await database.execute(
+                """
+                DELETE FROM card_pool_entries
+                WHERE season_id = :to_season_id
+                  AND user_id = :target_user_id
+                """,
+                values={
+                    "to_season_id": to_season_id,
+                    "target_user_id": int(target_user_id),
+                },
+            )
+
+        await database.execute(
+            """
+            DELETE FROM season_points_ledger
+            WHERE season_id = :to_season_id
+              AND reason LIKE :reason_prefix
+            """,
+            values={
+                "to_season_id": to_season_id,
+                "reason_prefix": f"POOL_DRAFT_PICK:from={from_season_id}:%",
+            },
+        )
+
+        for target_user_id, source_user_id in sorted(pending_mappings.items(), key=lambda item: item[0]):
+            source_rows = await database.fetch_all(
+                """
+                SELECT card_id, quantity
+                FROM card_pool_entries
+                WHERE season_id = :from_season_id
+                  AND user_id = :source_user_id
+                ORDER BY card_id ASC
+                """,
+                values={
+                    "from_season_id": from_season_id,
+                    "source_user_id": int(source_user_id),
+                },
+            )
+            if len(source_rows) < 1:
+                raise ValueError("Selected card base has no cards in the previous season.")
+            for source_row in source_rows:
+                quantity = int(source_row._mapping["quantity"] or 0)
+                if quantity <= 0:
+                    continue
+                await database.execute(
+                    """
+                    INSERT INTO card_pool_entries (season_id, user_id, card_id, quantity, created)
+                    VALUES (:season_id, :user_id, :card_id, :quantity, :created)
+                    ON CONFLICT (season_id, user_id, card_id)
+                    DO UPDATE SET quantity = EXCLUDED.quantity
+                    """,
+                    values={
+                        "season_id": to_season_id,
+                        "user_id": int(target_user_id),
+                        "card_id": str(source_row._mapping["card_id"]),
+                        "quantity": quantity,
+                        "created": datetime_utc.now(),
+                    },
+                )
+
+            await database.execute(
+                """
+                INSERT INTO season_points_ledger (
+                    season_id,
+                    user_id,
+                    changed_by_user_id,
+                    tournament_id,
+                    points_delta,
+                    reason,
+                    created
+                )
+                VALUES (
+                    :season_id,
+                    :user_id,
+                    :changed_by_user_id,
+                    :tournament_id,
+                    0,
+                    :reason,
+                    :created
+                )
+                """,
+                values={
+                    "season_id": to_season_id,
+                    "user_id": int(target_user_id),
+                    "changed_by_user_id": int(changed_by_user_id),
+                    "tournament_id": int(tournament_id),
+                    "reason": _pool_draft_reason(
+                        pending=False,
+                        from_season_id=from_season_id,
+                        source_user_id=int(source_user_id),
+                        target_user_id=int(target_user_id),
+                    ),
+                    "created": datetime_utc.now(),
+                },
+            )
+
+        await database.execute(
+            """
+            DELETE FROM season_points_ledger
+            WHERE season_id = :to_season_id
+              AND reason LIKE :reason_prefix
+            """,
+            values={
+                "to_season_id": to_season_id,
+                "reason_prefix": f"POOL_DRAFT_PENDING:from={from_season_id}:%",
+            },
+        )
+
+
+async def reset_season_draft_results(
+    from_season_id: int,
+    to_season_id: int,
+) -> None:
+    await database.execute(
+        """
+        DELETE FROM season_points_ledger
+        WHERE season_id = :to_season_id
+          AND reason LIKE :reason_prefix
+        """,
+        values={
+            "to_season_id": to_season_id,
+            "reason_prefix": f"POOL_DRAFT_PENDING:from={from_season_id}:%",
+        },
+    )
 
 
 async def get_season_draft_view(tournament_id: TournamentId) -> LeagueSeasonDraftView:
@@ -765,7 +955,13 @@ async def get_season_draft_view(tournament_id: TournamentId) -> LeagueSeasonDraf
                 int(row._mapping["losses"] or 0),
             )
 
-    picks_by_target = await _get_draft_pick_mappings(previous.id, active.id)
+    pending_picks_by_target = await _get_draft_pick_mappings(previous.id, active.id, pending=True)
+    confirmed_picks_by_target = await _get_draft_pick_mappings(previous.id, active.id, pending=False)
+    picks_by_target = (
+        pending_picks_by_target
+        if len(pending_picks_by_target) > 0
+        else confirmed_picks_by_target
+    )
     picks_by_source = {source: target for target, source in picks_by_target.items()}
 
     card_pool_entries = await get_card_pool_entries(previous.id, None)
@@ -904,6 +1100,8 @@ async def get_season_draft_view(tournament_id: TournamentId) -> LeagueSeasonDraf
         from_season_name=previous.name,
         to_season_id=int(active.id),
         to_season_name=active.name,
+        pending_pick_count=len(pending_picks_by_target),
+        confirmed_pick_count=len(confirmed_picks_by_target),
         draft_order=draft_order,
         card_bases=card_bases,
     )
@@ -916,6 +1114,7 @@ async def get_decks(
     only_admin_users: bool = False,
 ) -> list[LeagueDeckView]:
     values: dict[str, int] = {"season_id": season_id}
+    scope_filter = "d.season_id = :season_id"
     condition = ""
     if user_id is not None:
         condition = "AND d.user_id = :user_id"
@@ -923,7 +1122,46 @@ async def get_decks(
     if only_admin_users:
         condition += " AND u.account_type = 'ADMIN'"
 
-    query = f"""
+    query = _build_get_decks_query(scope_filter=scope_filter, condition=condition)
+    rows = await database.fetch_all(query=query, values=values)
+    return [LeagueDeckView.model_validate(dict(row._mapping)) for row in rows]
+
+
+async def get_decks_for_tournament_scope(
+    tournament_id: TournamentId,
+    user_id: UserId | None = None,
+    *,
+    only_admin_users: bool = False,
+) -> list[LeagueDeckView]:
+    values: dict[str, int] = {"tournament_id": int(tournament_id)}
+    scope_filter = f"""
+        (
+            d.season_id IN ({season_ids_subquery()})
+            OR d.tournament_id IN (
+                SELECT club_tournaments.id
+                FROM tournaments club_tournaments
+                WHERE club_tournaments.club_id = (
+                    SELECT t0.club_id
+                    FROM tournaments t0
+                    WHERE t0.id = :tournament_id
+                )
+            )
+        )
+    """
+    condition = ""
+    if user_id is not None:
+        condition = "AND d.user_id = :user_id"
+        values["user_id"] = user_id
+    if only_admin_users:
+        condition += " AND u.account_type = 'ADMIN'"
+
+    query = _build_get_decks_query(scope_filter=scope_filter, condition=condition)
+    rows = await database.fetch_all(query=query, values=values)
+    return [LeagueDeckView.model_validate(dict(row._mapping)) for row in rows]
+
+
+def _build_get_decks_query(*, scope_filter: str, condition: str) -> str:
+    return f"""
         WITH deck_stats AS (
             SELECT
                 ta.deck_id,
@@ -976,22 +1214,109 @@ async def get_decks(
         FROM decks d
         JOIN users u ON u.id = d.user_id
         LEFT JOIN deck_stats ds ON ds.deck_id = d.id
-        WHERE d.season_id = :season_id
+        WHERE {scope_filter}
         {condition}
         ORDER BY d.updated DESC, d.name ASC
     """
-    rows = await database.fetch_all(query=query, values=values)
-    return [LeagueDeckView.model_validate(dict(row._mapping)) for row in rows]
 
 
 def _extract_set_code_from_card_id(card_id: str) -> str | None:
-    normalized = str(card_id).strip().lower()
+    normalized = _normalize_meta_card_id(card_id)
     if normalized == "":
         return None
     if "-" in normalized:
         prefix = normalized.split("-", 1)[0].strip()
         return prefix or None
     return None
+
+
+def _normalize_meta_card_id(card_id: str | None) -> str:
+    normalized = (
+        str(card_id or "")
+        .strip()
+        .lower()
+        .replace("_", "-")
+        .replace(" ", "-")
+    )
+    if normalized == "":
+        return ""
+    while "--" in normalized:
+        normalized = normalized.replace("--", "-")
+    normalized = normalized.strip("-")
+    if "-" not in normalized:
+        return normalized
+
+    set_code, remainder = normalized.split("-", 1)
+    set_code = set_code.strip()
+    remainder = remainder.strip()
+    if set_code == "" or remainder == "":
+        return normalized
+
+    number_token = remainder.split("-", 1)[0].strip()
+    if number_token == "":
+        return f"{set_code}-{remainder}"
+
+    parsed = re.fullmatch(r"0*(\d+)([a-z]*)", number_token)
+    if parsed is None:
+        return f"{set_code}-{number_token}"
+
+    numeric = str(int(parsed.group(1)))
+    suffix = parsed.group(2) or ""
+    return f"{set_code}-{numeric}{suffix}"
+
+
+def _meta_card_lookup_keys(card_id: str | None) -> list[str]:
+    normalized = _normalize_meta_card_id(card_id)
+    if normalized == "":
+        return []
+
+    keys: list[str] = [normalized]
+    if "-" not in normalized:
+        return keys
+
+    set_code, remainder = normalized.split("-", 1)
+    base_match = re.fullmatch(r"(\d+)[a-z]+", remainder)
+    if base_match is not None:
+        keys.append(f"{set_code}-{base_match.group(1)}")
+    return keys
+
+
+def _resolve_meta_card(card_lookup: dict[str, dict], card_id: str | None) -> dict | None:
+    for key in _meta_card_lookup_keys(card_id):
+        card = card_lookup.get(key)
+        if card is not None:
+            return card
+    return None
+
+
+def _normalize_variant_type(value: str | None) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _preferred_card_row(previous: dict | None, current: dict) -> dict:
+    if previous is None:
+        return current
+    variant_rank = {
+        "showcase": 0,
+        "hyperspace foil": 1,
+        "hyperspace": 2,
+        "normal": 3,
+        "serialized": 4,
+        "foil": 5,
+        "": 6,
+    }
+    prev_image = str(previous.get("image_url") or "").strip()
+    curr_image = str(current.get("image_url") or "").strip()
+    if prev_image == "" and curr_image != "":
+        return current
+    if prev_image != "" and curr_image == "":
+        return previous
+
+    prev_rank = variant_rank.get(_normalize_variant_type(previous.get("variant_type")), 99)
+    curr_rank = variant_rank.get(_normalize_variant_type(current.get("variant_type")), 99)
+    if curr_rank < prev_rank:
+        return current
+    return previous
 
 
 async def get_league_meta_analysis(
@@ -1005,52 +1330,155 @@ async def get_league_meta_analysis(
             season_id=season_id,
             season_name=season_name,
             total_decks=0,
+            top_decks_sample_size=0,
         )
 
+    def win_rate_from(wins: int, matches: int) -> float:
+        if matches <= 0:
+            return 0
+        return round((wins / matches) * 100, 2)
+
+    season_scoped_deck_stats_rows = await database.fetch_all(
+        """
+        WITH scoped_tournaments AS (
+            SELECT tournament_id
+            FROM season_tournaments
+            WHERE season_id = :season_id
+            UNION
+            SELECT tournament_id
+            FROM seasons
+            WHERE id = :season_id
+        )
+        SELECT
+            ta.deck_id,
+            COALESCE(SUM(p.wins), 0) AS wins,
+            COALESCE(SUM(p.draws), 0) AS draws,
+            COALESCE(SUM(p.losses), 0) AS losses
+        FROM tournament_applications ta
+        JOIN scoped_tournaments st ON st.tournament_id = ta.tournament_id
+        JOIN decks d2 ON d2.id = ta.deck_id
+        JOIN users u2 ON u2.id = d2.user_id
+        LEFT JOIN players p
+            ON p.tournament_id = ta.tournament_id
+           AND lower(trim(p.name)) = lower(trim(u2.name))
+        WHERE ta.deck_id IS NOT NULL
+          AND d2.season_id = :season_id
+        GROUP BY ta.deck_id
+        """,
+        values={"season_id": season_id},
+    )
+    season_scoped_stats_by_deck_id: dict[int, tuple[int, int, int]] = {
+        int(row._mapping["deck_id"]): (
+            int(row._mapping["wins"] or 0),
+            int(row._mapping["draws"] or 0),
+            int(row._mapping["losses"] or 0),
+        )
+        for row in season_scoped_deck_stats_rows
+        if row._mapping.get("deck_id") is not None
+    }
+
+    def deck_performance(deck: LeagueDeckView) -> tuple[int, int, int, int, float]:
+        wins, draws, losses = season_scoped_stats_by_deck_id.get(
+            int(deck.id),
+            (int(deck.wins), int(deck.draws), int(deck.losses)),
+        )
+        matches = wins + draws + losses
+        return wins, draws, losses, matches, win_rate_from(wins, matches)
+
+    deck_stats_cache: dict[int, tuple[int, int, int, int, float]] = {
+        int(deck.id): deck_performance(deck) for deck in decks
+    }
+    total_league_wins = sum(int(stats[0]) for stats in deck_stats_cache.values())
+    total_league_matches = sum(int(stats[3]) for stats in deck_stats_cache.values())
+    league_average_win_rate = win_rate_from(total_league_wins, total_league_matches)
+
+    top4_rows = await database.fetch_all(
+        """
+        WITH scoped_tournaments AS (
+            SELECT tournament_id
+            FROM season_tournaments
+            WHERE season_id = :season_id
+            UNION
+            SELECT tournament_id
+            FROM seasons
+            WHERE id = :season_id
+        ),
+        ranked_players AS (
+            SELECT
+                p.tournament_id,
+                lower(trim(p.name)) AS player_name_normalized,
+                ROW_NUMBER() OVER (
+                    PARTITION BY p.tournament_id
+                    ORDER BY p.wins DESC, p.swiss_score DESC, p.elo_score DESC, p.id ASC
+                ) AS placement_rank
+            FROM players p
+            JOIN scoped_tournaments st ON st.tournament_id = p.tournament_id
+            WHERE COALESCE(p.active, TRUE) = TRUE
+        )
+        SELECT
+            ta.deck_id,
+            COUNT(*)::INT AS appearances,
+            COUNT(*) FILTER (WHERE rp.placement_rank <= 4)::INT AS top4_finishes
+        FROM tournament_applications ta
+        JOIN decks d ON d.id = ta.deck_id AND d.season_id = :season_id
+        JOIN users u ON u.id = d.user_id
+        LEFT JOIN ranked_players rp
+          ON rp.tournament_id = ta.tournament_id
+         AND rp.player_name_normalized = lower(trim(u.name))
+        WHERE ta.deck_id IS NOT NULL
+        GROUP BY ta.deck_id
+        """,
+        values={"season_id": season_id},
+    )
+    top4_by_deck_id: dict[int, tuple[int, int]] = {
+        int(row._mapping["deck_id"]): (
+            int(row._mapping["top4_finishes"] or 0),
+            int(row._mapping["appearances"] or 0),
+        )
+        for row in top4_rows
+        if row._mapping.get("deck_id") is not None
+    }
+
     leader_counts: Counter[str] = Counter()
-    base_counts: Counter[str] = Counter()
     leader_wins: Counter[str] = Counter()
     leader_matches: Counter[str] = Counter()
-    base_wins: Counter[str] = Counter()
-    base_matches: Counter[str] = Counter()
-    archetype_counts: Counter[tuple[str, str]] = Counter()
-    archetype_wins: Counter[tuple[str, str]] = Counter()
-    archetype_matches: Counter[tuple[str, str]] = Counter()
 
     card_total_copies: Counter[str] = Counter()
     card_deck_counts: Counter[str] = Counter()
+    cost_curve_totals: Counter[str] = Counter()
+    cost_curve_wins: Counter[str] = Counter()
+    cost_curve_matches: Counter[str] = Counter()
+    arena_pattern_totals: Counter[str] = Counter()
+    arena_pattern_wins: Counter[str] = Counter()
+    arena_pattern_matches: Counter[str] = Counter()
+    hero_villain_totals: Counter[str] = Counter()
+    hero_villain_wins: Counter[str] = Counter()
+    hero_villain_matches: Counter[str] = Counter()
+    aspect_combo_totals: Counter[str] = Counter()
+    aspect_combo_wins: Counter[str] = Counter()
+    aspect_combo_matches: Counter[str] = Counter()
 
     for deck in decks:
-        leader_id = str(deck.leader).strip().lower()
-        base_id = str(deck.base).strip().lower()
+        deck_wins, _, _, deck_matches, _ = deck_stats_cache[int(deck.id)]
+        leader_id = _normalize_meta_card_id(deck.leader)
         if leader_id != "":
             leader_counts[leader_id] += 1
-            leader_wins[leader_id] += int(deck.wins)
-            leader_matches[leader_id] += int(deck.matches)
-        if base_id != "":
-            base_counts[base_id] += 1
-            base_wins[base_id] += int(deck.wins)
-            base_matches[base_id] += int(deck.matches)
-        if leader_id != "" and base_id != "":
-            archetype_key = (leader_id, base_id)
-            archetype_counts[archetype_key] += 1
-            archetype_wins[archetype_key] += int(deck.wins)
-            archetype_matches[archetype_key] += int(deck.matches)
+            leader_wins[leader_id] += deck_wins
+            leader_matches[leader_id] += deck_matches
 
         deck_card_ids: set[str] = set()
-        for card_id, count in {**deck.mainboard, **deck.sideboard}.items():
-            normalized_card_id = str(card_id).strip().lower()
-            if normalized_card_id == "":
-                continue
-            deck_card_ids.add(normalized_card_id)
+        for card_id in {**deck.mainboard, **deck.sideboard}.keys():
+            normalized_card_id = _normalize_meta_card_id(card_id)
+            if normalized_card_id != "":
+                deck_card_ids.add(normalized_card_id)
 
         for card_id, count in deck.mainboard.items():
-            normalized_card_id = str(card_id).strip().lower()
+            normalized_card_id = _normalize_meta_card_id(card_id)
             if normalized_card_id == "":
                 continue
             card_total_copies[normalized_card_id] += int(count)
         for card_id, count in deck.sideboard.items():
-            normalized_card_id = str(card_id).strip().lower()
+            normalized_card_id = _normalize_meta_card_id(card_id)
             if normalized_card_id == "":
                 continue
             card_total_copies[normalized_card_id] += int(count)
@@ -1059,7 +1487,9 @@ async def get_league_meta_analysis(
 
     needed_card_ids = set(card_total_copies.keys())
     needed_card_ids.update(leader_counts.keys())
-    needed_card_ids.update(base_counts.keys())
+    needed_card_ids.update(
+        _normalize_meta_card_id(deck.base) for deck in decks if _normalize_meta_card_id(deck.base) != ""
+    )
     set_codes = sorted(
         {
             set_code
@@ -1075,14 +1505,140 @@ async def get_league_meta_analysis(
         try:
             cards_raw = await asyncio.to_thread(fetch_swu_cards_cached, set_codes, 8, 1800)
             cards = [normalize_card_for_deckbuilding(card) for card in cards_raw]
-            card_lookup = {str(card["card_id"]).strip().lower(): card for card in cards}
+            for card in cards:
+                normalized_card_id = _normalize_meta_card_id(card.get("card_id"))
+                if normalized_card_id == "":
+                    continue
+                previous = card_lookup.get(normalized_card_id)
+                card_lookup[normalized_card_id] = _preferred_card_row(previous, card)
         except Exception:
             card_lookup = {}
+
+    HEROIC_ASPECT_VALUES = {"heroic", "heroism"}
+    VILLAINY_ASPECT_VALUES = {"villainy"}
+
+    deck_trait_presence_by_deck: dict[int, set[str]] = {}
+    deck_keyword_presence_by_deck: dict[int, set[str]] = {}
+
+    for deck in decks:
+        deck_wins, _, _, deck_matches, _ = deck_stats_cache[int(deck.id)]
+        low_cost_copies = 0
+        mid_cost_copies = 0
+        high_cost_copies = 0
+        space_unit_copies = 0
+        ground_unit_copies = 0
+        total_mainboard_copies = 0
+        total_arena_unit_copies = 0
+
+        leader_card = _resolve_meta_card(card_lookup, deck.leader) or {}
+        base_card = _resolve_meta_card(card_lookup, deck.base) or {}
+        leader_aspects = {
+            str(aspect).strip().lower()
+            for aspect in (leader_card.get("aspects") or [])
+            if str(aspect).strip() != ""
+        }
+        deck_aspects = {
+            str(aspect).strip().lower()
+            for aspect in [*(leader_card.get("aspects") or []), *(base_card.get("aspects") or [])]
+            if str(aspect).strip() != ""
+        }
+        if any(aspect in VILLAINY_ASPECT_VALUES for aspect in leader_aspects):
+            alignment_label = "Villainy"
+        elif any(aspect in HEROIC_ASPECT_VALUES for aspect in leader_aspects):
+            alignment_label = "Heroic"
+        else:
+            alignment_label = "Unknown"
+        hero_villain_totals[alignment_label] += 1
+        hero_villain_wins[alignment_label] += deck_wins
+        hero_villain_matches[alignment_label] += deck_matches
+
+        color_aspects = sorted(
+            {
+                aspect.title()
+                for aspect in deck_aspects
+                if aspect not in HEROIC_ASPECT_VALUES and aspect not in VILLAINY_ASPECT_VALUES
+            }
+        )
+        combo_label = " + ".join(color_aspects) if len(color_aspects) > 0 else "Colorless / Neutral"
+        aspect_combo_totals[combo_label] += 1
+        aspect_combo_wins[combo_label] += deck_wins
+        aspect_combo_matches[combo_label] += deck_matches
+
+        deck_traits: set[str] = set()
+        deck_keywords: set[str] = set()
+        for card_id, count in deck.mainboard.items():
+            normalized_card_id = _normalize_meta_card_id(card_id)
+            normalized_count = int(count)
+            if normalized_card_id == "" or normalized_count <= 0:
+                continue
+            total_mainboard_copies += normalized_count
+            card = _resolve_meta_card(card_lookup, normalized_card_id)
+            if card is None:
+                continue
+            cost = card.get("cost")
+            if isinstance(cost, int):
+                if cost <= 2:
+                    low_cost_copies += normalized_count
+                elif cost >= 6:
+                    high_cost_copies += normalized_count
+                else:
+                    mid_cost_copies += normalized_count
+
+            arenas = [str(arena).strip().lower() for arena in (card.get("arenas") or [])]
+            card_type = str(card.get("type") or "").strip().lower()
+            if card_type == "unit":
+                if "space" in arenas:
+                    space_unit_copies += normalized_count
+                if "ground" in arenas:
+                    ground_unit_copies += normalized_count
+                if "space" in arenas or "ground" in arenas:
+                    total_arena_unit_copies += normalized_count
+
+            for trait in card.get("traits", []):
+                normalized_trait = str(trait).strip()
+                if normalized_trait != "":
+                    deck_traits.add(normalized_trait)
+            for keyword in card.get("keywords", []):
+                normalized_keyword = str(keyword).strip()
+                if normalized_keyword != "":
+                    deck_keywords.add(normalized_keyword)
+
+        if total_mainboard_copies > 0:
+            low_ratio = low_cost_copies / total_mainboard_copies
+            mid_ratio = mid_cost_copies / total_mainboard_copies
+            high_ratio = high_cost_copies / total_mainboard_copies
+            if high_ratio >= 0.40:
+                curve_label = "High Curve Finishers"
+            elif low_ratio >= 0.45:
+                curve_label = "Low Curve Tempo"
+            elif mid_ratio >= 0.55:
+                curve_label = "Midrange Curve"
+            else:
+                curve_label = "Balanced Curve"
+            cost_curve_totals[curve_label] += 1
+            cost_curve_wins[curve_label] += deck_wins
+            cost_curve_matches[curve_label] += deck_matches
+
+        if total_arena_unit_copies > 0:
+            space_ratio = space_unit_copies / total_arena_unit_copies
+            ground_ratio = ground_unit_copies / total_arena_unit_copies
+            if space_ratio >= 0.60:
+                arena_label = "Space Unit Pressure"
+            elif ground_ratio >= 0.60:
+                arena_label = "Ground Unit Pressure"
+            else:
+                arena_label = "Dual-Arena Mix"
+            arena_pattern_totals[arena_label] += 1
+            arena_pattern_wins[arena_label] += deck_wins
+            arena_pattern_matches[arena_label] += deck_matches
+
+        deck_trait_presence_by_deck[int(deck.id)] = deck_traits
+        deck_keyword_presence_by_deck[int(deck.id)] = deck_keywords
 
     trait_counts: Counter[str] = Counter()
     keyword_counts: Counter[str] = Counter()
     for card_id, copies in card_total_copies.items():
-        card = card_lookup.get(card_id)
+        card = _resolve_meta_card(card_lookup, card_id)
         if card is None:
             continue
         for trait in card.get("traits", []):
@@ -1094,64 +1650,38 @@ async def get_league_meta_analysis(
             if normalized_keyword != "":
                 keyword_counts[normalized_keyword] += int(copies)
 
-    def win_rate_from(wins: int, matches: int) -> float:
-        if matches <= 0:
-            return 0
-        return round((wins / matches) * 100, 2)
-
-    top_cards = [
-        LeagueMetaCardUsage(
-            card_id=card_id,
-            card_name=(card_lookup.get(card_id) or {}).get("name"),
-            image_url=(card_lookup.get(card_id) or {}).get("image_url"),
-            set_code=(card_lookup.get(card_id) or {}).get("set_code"),
-            card_type=(card_lookup.get(card_id) or {}).get("type"),
-            traits=list((card_lookup.get(card_id) or {}).get("traits", []) or []),
-            keywords=list((card_lookup.get(card_id) or {}).get("keywords", []) or []),
-            rules_text=(card_lookup.get(card_id) or {}).get("rules_text"),
-            deck_count=int(card_deck_counts[card_id]),
-            total_copies=int(total_copies),
+    top_cards: list[LeagueMetaCardUsage] = []
+    for card_id, total_copies in card_total_copies.most_common(120):
+        card = _resolve_meta_card(card_lookup, card_id)
+        if card is None:
+            continue
+        image_url = str(card.get("image_url") or "").strip()
+        if not (image_url.startswith("http://") or image_url.startswith("https://")):
+            continue
+        top_cards.append(
+            LeagueMetaCardUsage(
+                card_id=card_id,
+                card_name=card.get("name"),
+                image_url=image_url,
+                set_code=card.get("set_code"),
+                card_type=card.get("type"),
+                traits=list(card.get("traits", []) or []),
+                keywords=list(card.get("keywords", []) or []),
+                rules_text=card.get("rules_text"),
+                deck_count=int(card_deck_counts[card_id]),
+                total_copies=int(total_copies),
+            )
         )
-        for card_id, total_copies in card_total_copies.most_common(40)
-    ]
 
     top_leaders = [
         LeagueMetaDeckCoreUsage(
             card_id=card_id,
-            card_name=(card_lookup.get(card_id) or {}).get("name"),
-            image_url=(card_lookup.get(card_id) or {}).get("image_url"),
+            card_name=(_resolve_meta_card(card_lookup, card_id) or {}).get("name"),
+            image_url=(_resolve_meta_card(card_lookup, card_id) or {}).get("image_url"),
             count=int(count),
             win_rate=win_rate_from(int(leader_wins[card_id]), int(leader_matches[card_id])),
         )
         for card_id, count in leader_counts.most_common(20)
-    ]
-
-    top_bases = [
-        LeagueMetaDeckCoreUsage(
-            card_id=card_id,
-            card_name=(card_lookup.get(card_id) or {}).get("name"),
-            image_url=(card_lookup.get(card_id) or {}).get("image_url"),
-            count=int(count),
-            win_rate=win_rate_from(int(base_wins[card_id]), int(base_matches[card_id])),
-        )
-        for card_id, count in base_counts.most_common(20)
-    ]
-
-    top_archetypes = [
-        LeagueMetaArchetypeUsage(
-            leader_card_id=leader_id,
-            leader_name=(card_lookup.get(leader_id) or {}).get("name"),
-            leader_image_url=(card_lookup.get(leader_id) or {}).get("image_url"),
-            base_card_id=base_id,
-            base_name=(card_lookup.get(base_id) or {}).get("name"),
-            base_image_url=(card_lookup.get(base_id) or {}).get("image_url"),
-            count=int(count),
-            win_rate=win_rate_from(
-                int(archetype_wins[(leader_id, base_id)]),
-                int(archetype_matches[(leader_id, base_id)]),
-            ),
-        )
-        for (leader_id, base_id), count in archetype_counts.most_common(20)
     ]
 
     top_traits = [
@@ -1163,16 +1693,528 @@ async def get_league_meta_analysis(
         for label, count in keyword_counts.most_common(25)
     ]
 
+    ranked_decks = sorted(
+        decks,
+        key=lambda deck: (
+            -float(deck_stats_cache[int(deck.id)][4]),
+            -int(deck_stats_cache[int(deck.id)][3]),
+            -int(deck_stats_cache[int(deck.id)][0]),
+            str(deck.name).lower(),
+        ),
+    )
+    top_decks_sample_size = max(1, min(len(ranked_decks), (len(ranked_decks) * 35 + 99) // 100))
+    top_decks = ranked_decks[:top_decks_sample_size]
+
+    top_deck_trait_counts: Counter[str] = Counter()
+    top_deck_keyword_counts: Counter[str] = Counter()
+    top_deck_card_type_counts: Counter[str] = Counter()
+    for deck in top_decks:
+        for card_id, copies in deck.mainboard.items():
+            normalized_card_id = _normalize_meta_card_id(card_id)
+            normalized_copies = int(copies)
+            if normalized_card_id == "" or normalized_copies <= 0:
+                continue
+            card = _resolve_meta_card(card_lookup, normalized_card_id)
+            if card is None:
+                continue
+
+            card_type = str(card.get("type") or "").strip()
+            if card_type != "":
+                top_deck_card_type_counts[card_type.title()] += normalized_copies
+
+            for trait in card.get("traits", []):
+                normalized_trait = str(trait).strip()
+                if normalized_trait != "":
+                    top_deck_trait_counts[normalized_trait] += normalized_copies
+            for keyword in card.get("keywords", []):
+                normalized_keyword = str(keyword).strip()
+                if normalized_keyword != "":
+                    top_deck_keyword_counts[normalized_keyword] += normalized_copies
+
+    top_deck_traits = [
+        LeagueMetaCountBucket(label=label, count=int(count))
+        for label, count in top_deck_trait_counts.most_common(25)
+    ]
+    top_deck_keywords = [
+        LeagueMetaCountBucket(label=label, count=int(count))
+        for label, count in top_deck_keyword_counts.most_common(25)
+    ]
+    top_deck_card_types = [
+        LeagueMetaCountBucket(label=label, count=int(count))
+        for label, count in top_deck_card_type_counts.most_common(12)
+    ]
+
+    keyword_deck_counts: Counter[str] = Counter()
+    keyword_wins: Counter[str] = Counter()
+    keyword_matches: Counter[str] = Counter()
+    keyword_top4_finishes: Counter[str] = Counter()
+    keyword_top4_appearances: Counter[str] = Counter()
+    trait_top4_finishes: Counter[str] = Counter()
+    trait_top4_appearances: Counter[str] = Counter()
+
+    for deck in decks:
+        deck_id = int(deck.id)
+        deck_wins, _, _, deck_matches, _ = deck_stats_cache[deck_id]
+        top4_finishes, top4_appearances = top4_by_deck_id.get(deck_id, (0, 0))
+        for keyword in deck_keyword_presence_by_deck.get(deck_id, set()):
+            keyword_deck_counts[keyword] += 1
+            keyword_wins[keyword] += deck_wins
+            keyword_matches[keyword] += deck_matches
+            keyword_top4_finishes[keyword] += int(top4_finishes)
+            keyword_top4_appearances[keyword] += int(top4_appearances)
+        for trait in deck_trait_presence_by_deck.get(deck_id, set()):
+            trait_top4_finishes[trait] += int(top4_finishes)
+            trait_top4_appearances[trait] += int(top4_appearances)
+
+    keyword_win_impact = [
+        LeagueMetaKeywordImpact(
+            keyword=keyword,
+            deck_count=int(deck_count),
+            usage_share_pct=round((int(deck_count) / len(decks)) * 100, 2),
+            win_rate_with_keyword=win_rate_from(int(keyword_wins[keyword]), int(keyword_matches[keyword])),
+            league_avg_win_rate=league_average_win_rate,
+            win_impact_score=round(
+                win_rate_from(int(keyword_wins[keyword]), int(keyword_matches[keyword]))
+                - league_average_win_rate,
+                2,
+            ),
+            top4_conversion_pct=(
+                round((int(keyword_top4_finishes[keyword]) / int(keyword_top4_appearances[keyword])) * 100, 2)
+                if int(keyword_top4_appearances[keyword]) > 0
+                else 0
+            ),
+        )
+        for keyword, deck_count in keyword_deck_counts.items()
+    ]
+    keyword_win_impact.sort(
+        key=lambda row: (
+            -abs(float(row.win_impact_score)),
+            -int(row.deck_count),
+            str(row.keyword).lower(),
+        )
+    )
+    synergy_graph = LeagueMetaSynergyGraph()
+
+    def to_pattern_rows(
+        totals: Counter[str],
+        wins: Counter[str],
+        matches: Counter[str],
+        summaries: dict[str, str],
+    ) -> list[LeagueMetaPerformancePattern]:
+        rows = [
+            LeagueMetaPerformancePattern(
+                label=label,
+                decks=int(total_decks),
+                avg_win_rate=win_rate_from(int(wins[label]), int(matches[label])),
+                summary=summaries.get(label),
+            )
+            for label, total_decks in totals.items()
+        ]
+        rows.sort(
+            key=lambda row: (
+                -float(row.avg_win_rate),
+                -int(row.decks),
+                str(row.label).lower(),
+            )
+        )
+        return rows
+
+    cost_curve_summaries = {
+        "High Curve Finishers": "Higher top-end concentration that closes games with late power spikes.",
+        "Low Curve Tempo": "Lower-cost pressure creates early tempo and punishes slow starts.",
+        "Midrange Curve": "Dense 3-5 cost band with flexible pressure across turns.",
+        "Balanced Curve": "Even curve distribution to adapt by matchup and game length.",
+    }
+    arena_summaries = {
+        "Space Unit Pressure": "Winning lists skew toward space units and evasion race lines.",
+        "Ground Unit Pressure": "Winning lists lean on board-centric ground combat to snowball advantage.",
+        "Dual-Arena Mix": "Balanced arena split supports flexible sequencing and matchup coverage.",
+    }
+    hero_villain_summaries = {
+        "Heroic": "Heroic alignment deck share and win trend.",
+        "Villainy": "Villainy alignment deck share and win trend.",
+        "Unknown": "Decks where leader alignment could not be resolved.",
+    }
+    top_cost_curve_patterns = to_pattern_rows(
+        totals=cost_curve_totals,
+        wins=cost_curve_wins,
+        matches=cost_curve_matches,
+        summaries=cost_curve_summaries,
+    )
+    top_arena_patterns = to_pattern_rows(
+        totals=arena_pattern_totals,
+        wins=arena_pattern_wins,
+        matches=arena_pattern_matches,
+        summaries=arena_summaries,
+    )
+    hero_villain_breakdown = to_pattern_rows(
+        totals=hero_villain_totals,
+        wins=hero_villain_wins,
+        matches=hero_villain_matches,
+        summaries=hero_villain_summaries,
+    )
+    aspect_combo_breakdown = to_pattern_rows(
+        totals=aspect_combo_totals,
+        wins=aspect_combo_wins,
+        matches=aspect_combo_matches,
+        summaries={},
+    )
+
+    trending_rows = await database.fetch_all(
+        """
+        WITH scoped_tournaments AS (
+            SELECT tournament_id
+            FROM season_tournaments
+            WHERE season_id = :season_id
+            UNION
+            SELECT tournament_id
+            FROM seasons
+            WHERE id = :season_id
+        ),
+        ordered_tournaments AS (
+            SELECT
+                t.id AS tournament_id,
+                ROW_NUMBER() OVER (
+                    ORDER BY COALESCE(t.start_time, t.created) DESC, t.id DESC
+                ) AS rn
+            FROM tournaments t
+            JOIN scoped_tournaments st ON st.tournament_id = t.id
+        ),
+        recent AS (
+            SELECT tournament_id, rn
+            FROM ordered_tournaments
+            WHERE rn <= 2
+        ),
+        card_usage AS (
+            SELECT
+                recent.rn,
+                lower(trim(cards.card_id)) AS card_id,
+                COUNT(DISTINCT ta.user_id) AS decks_using_card,
+                COALESCE(SUM(p.wins), 0) AS wins,
+                COALESCE(SUM(p.draws), 0) AS draws,
+                COALESCE(SUM(p.losses), 0) AS losses
+            FROM recent
+            JOIN tournament_applications ta
+              ON ta.tournament_id = recent.tournament_id
+             AND ta.deck_id IS NOT NULL
+            JOIN decks d
+              ON d.id = ta.deck_id
+             AND d.season_id = :season_id
+            JOIN users u ON u.id = d.user_id
+            CROSS JOIN LATERAL json_each_text(d.mainboard::json) AS cards(card_id, qty)
+            LEFT JOIN players p
+              ON p.tournament_id = ta.tournament_id
+             AND lower(trim(p.name)) = lower(trim(u.name))
+            WHERE COALESCE(NULLIF(trim(cards.qty), ''), '0')::INT > 0
+            GROUP BY recent.rn, lower(trim(cards.card_id))
+        ),
+        pivot AS (
+            SELECT
+                card_id,
+                MAX(CASE WHEN rn = 1 THEN decks_using_card ELSE 0 END)::INT AS current_usage,
+                MAX(CASE WHEN rn = 2 THEN decks_using_card ELSE 0 END)::INT AS previous_usage,
+                MAX(CASE WHEN rn = 1 THEN wins ELSE 0 END)::INT AS current_wins,
+                MAX(CASE WHEN rn = 2 THEN wins ELSE 0 END)::INT AS previous_wins,
+                MAX(CASE WHEN rn = 1 THEN draws ELSE 0 END)::INT AS current_draws,
+                MAX(CASE WHEN rn = 2 THEN draws ELSE 0 END)::INT AS previous_draws,
+                MAX(CASE WHEN rn = 1 THEN losses ELSE 0 END)::INT AS current_losses,
+                MAX(CASE WHEN rn = 2 THEN losses ELSE 0 END)::INT AS previous_losses
+            FROM card_usage
+            GROUP BY card_id
+        )
+        SELECT *
+        FROM pivot
+        """,
+        values={"season_id": season_id},
+    )
+
+    trending_cards: list[LeagueMetaTrendingCard] = []
+    for row in trending_rows:
+        card_id = _normalize_meta_card_id(row._mapping.get("card_id"))
+        if card_id == "":
+            continue
+        card = _resolve_meta_card(card_lookup, card_id) or {}
+        current_usage = int(row._mapping.get("current_usage") or 0)
+        previous_usage = int(row._mapping.get("previous_usage") or 0)
+        current_wins = int(row._mapping.get("current_wins") or 0)
+        current_draws = int(row._mapping.get("current_draws") or 0)
+        current_losses = int(row._mapping.get("current_losses") or 0)
+        previous_wins = int(row._mapping.get("previous_wins") or 0)
+        previous_draws = int(row._mapping.get("previous_draws") or 0)
+        previous_losses = int(row._mapping.get("previous_losses") or 0)
+        current_matches = current_wins + current_draws + current_losses
+        previous_matches = previous_wins + previous_draws + previous_losses
+        current_win_rate = win_rate_from(current_wins, current_matches)
+        previous_win_rate = win_rate_from(previous_wins, previous_matches)
+        usage_delta = current_usage - previous_usage
+        win_rate_delta = round(current_win_rate - previous_win_rate, 2)
+        if usage_delta == 0 and abs(win_rate_delta) < 0.01:
+            continue
+        trending_cards.append(
+            LeagueMetaTrendingCard(
+                card_id=card_id,
+                card_name=card.get("name"),
+                image_url=card.get("image_url"),
+                usage_delta=usage_delta,
+                win_rate_delta=win_rate_delta,
+                current_usage=current_usage,
+                previous_usage=previous_usage,
+                current_win_rate=current_win_rate,
+                previous_win_rate=previous_win_rate,
+            )
+        )
+
+    trending_cards.sort(
+        key=lambda row: (
+            -(abs(int(row.usage_delta)) * 3 + abs(float(row.win_rate_delta))),
+            -int(row.usage_delta),
+            -float(row.win_rate_delta),
+            str(row.card_name or row.card_id).lower(),
+        )
+    )
+    trending_cards = trending_cards[:16]
+
+    replacement_signals: list[str] = []
+    rising = [row for row in trending_cards if int(row.usage_delta) > 0]
+    falling = [row for row in trending_cards if int(row.usage_delta) < 0]
+    rising.sort(key=lambda row: (-int(row.usage_delta), -float(row.win_rate_delta)))
+    falling.sort(key=lambda row: (int(row.usage_delta), float(row.win_rate_delta)))
+    for index, rising_row in enumerate(rising[:4]):
+        if index < len(falling):
+            falling_row = falling[index]
+            replacement_signals.append(
+                (
+                    f"{rising_row.card_name or rising_row.card_id} (+{rising_row.usage_delta} decks, "
+                    f"{rising_row.win_rate_delta:+.2f}% win-rate delta) may be replacing "
+                    f"{falling_row.card_name or falling_row.card_id} ({falling_row.usage_delta} decks, "
+                    f"{falling_row.win_rate_delta:+.2f}% win-rate delta)."
+                )
+            )
+        else:
+            replacement_signals.append(
+                (
+                    f"{rising_row.card_name or rising_row.card_id} is trending up "
+                    f"(+{rising_row.usage_delta} decks, {rising_row.win_rate_delta:+.2f}% win-rate delta)."
+                )
+            )
+
+    recent_feature_rows = await database.fetch_all(
+        """
+        WITH scoped_tournaments AS (
+            SELECT tournament_id
+            FROM season_tournaments
+            WHERE season_id = :season_id
+            UNION
+            SELECT tournament_id
+            FROM seasons
+            WHERE id = :season_id
+        ),
+        ordered_tournaments AS (
+            SELECT
+                t.id AS tournament_id,
+                ROW_NUMBER() OVER (
+                    ORDER BY COALESCE(t.start_time, t.created) DESC, t.id DESC
+                ) AS rn
+            FROM tournaments t
+            JOIN scoped_tournaments st ON st.tournament_id = t.id
+        )
+        SELECT
+            ot.rn,
+            ta.deck_id,
+            COALESCE(p.wins, 0)::INT AS wins,
+            COALESCE(p.draws, 0)::INT AS draws,
+            COALESCE(p.losses, 0)::INT AS losses
+        FROM ordered_tournaments ot
+        JOIN tournament_applications ta
+          ON ta.tournament_id = ot.tournament_id
+         AND ta.deck_id IS NOT NULL
+        JOIN decks d
+          ON d.id = ta.deck_id
+         AND d.season_id = :season_id
+        JOIN users u ON u.id = d.user_id
+        LEFT JOIN players p
+          ON p.tournament_id = ta.tournament_id
+         AND lower(trim(p.name)) = lower(trim(u.name))
+        WHERE ot.rn <= 2
+        """,
+        values={"season_id": season_id},
+    )
+    recent_keyword_wins_by_rn: dict[int, Counter[str]] = {1: Counter(), 2: Counter()}
+    recent_keyword_matches_by_rn: dict[int, Counter[str]] = {1: Counter(), 2: Counter()}
+    recent_trait_wins_by_rn: dict[int, Counter[str]] = {1: Counter(), 2: Counter()}
+    recent_trait_matches_by_rn: dict[int, Counter[str]] = {1: Counter(), 2: Counter()}
+    for row in recent_feature_rows:
+        rn = int(row._mapping.get("rn") or 0)
+        deck_id = int(row._mapping.get("deck_id") or 0)
+        if rn not in {1, 2} or deck_id <= 0:
+            continue
+        wins = int(row._mapping.get("wins") or 0)
+        draws = int(row._mapping.get("draws") or 0)
+        losses = int(row._mapping.get("losses") or 0)
+        matches = wins + draws + losses
+        for keyword in deck_keyword_presence_by_deck.get(deck_id, set()):
+            recent_keyword_wins_by_rn[rn][keyword] += wins
+            recent_keyword_matches_by_rn[rn][keyword] += matches
+        for trait in deck_trait_presence_by_deck.get(deck_id, set()):
+            recent_trait_wins_by_rn[rn][trait] += wins
+            recent_trait_matches_by_rn[rn][trait] += matches
+
+    def keyword_impact_by_name(keyword_name: str) -> LeagueMetaKeywordImpact | None:
+        target = keyword_name.strip().lower()
+        for row in keyword_win_impact:
+            if str(row.keyword).strip().lower() == target:
+                return row
+        return None
+
+    def counter_value_ci(counter: Counter[str], label: str) -> int:
+        target = label.strip().lower()
+        return sum(int(value) for key, value in counter.items() if str(key).strip().lower() == target)
+
+    live_meta_findings: list[str] = []
+    shield_impact = keyword_impact_by_name("shield")
+    if shield_impact is not None and int(shield_impact.deck_count) >= 2:
+        shield_phrase = "outperform field by" if float(shield_impact.win_impact_score) >= 0 else "trail field by"
+        live_meta_findings.append(
+            f"Shield decks {shield_phrase} {shield_impact.win_impact_score:+.2f}%."
+        )
+
+    raid_impact = keyword_impact_by_name("raid")
+    if raid_impact is not None and int(raid_impact.deck_count) >= 2:
+        if float(raid_impact.win_impact_score) < 0:
+            live_meta_findings.append(
+                f"Raid-heavy decks are popular ({raid_impact.usage_share_pct:.1f}% of field) but underperform by {raid_impact.win_impact_score:.2f}%."
+            )
+        elif float(raid_impact.usage_share_pct) >= 15:
+            live_meta_findings.append(
+                f"Raid-heavy decks remain a major share ({raid_impact.usage_share_pct:.1f}% of field) with {raid_impact.win_impact_score:+.2f}% win impact."
+            )
+
+    vehicle_current_matches = counter_value_ci(recent_trait_matches_by_rn[1], "vehicle")
+    vehicle_previous_matches = counter_value_ci(recent_trait_matches_by_rn[2], "vehicle")
+    if vehicle_current_matches > 0 and vehicle_previous_matches > 0:
+        vehicle_current = win_rate_from(
+            counter_value_ci(recent_trait_wins_by_rn[1], "vehicle"),
+            vehicle_current_matches,
+        )
+        vehicle_previous = win_rate_from(
+            counter_value_ci(recent_trait_wins_by_rn[2], "vehicle"),
+            vehicle_previous_matches,
+        )
+        vehicle_delta = round(vehicle_current - vehicle_previous, 2)
+        if vehicle_delta <= -1.0:
+            live_meta_findings.append(
+                f"Vehicle-heavy decks are declining in win rate ({vehicle_previous:.2f}% -> {vehicle_current:.2f}%)."
+            )
+
+    trait_top4_conversion_rows = [
+        (
+            trait,
+            round((int(trait_top4_finishes[trait]) / int(trait_top4_appearances[trait])) * 100, 2),
+            int(trait_top4_appearances[trait]),
+        )
+        for trait in trait_top4_appearances
+        if int(trait_top4_appearances[trait]) > 0
+    ]
+    trait_top4_conversion_rows.sort(key=lambda row: (-float(row[1]), -int(row[2]), str(row[0]).lower()))
+    if len(trait_top4_conversion_rows) > 0:
+        best_trait, best_trait_conversion, best_trait_appearances = trait_top4_conversion_rows[0]
+        if str(best_trait).strip().lower() == "force" and best_trait_appearances >= 2:
+            live_meta_findings.append(
+                f"Force trait decks have highest Top 4 conversion at {best_trait_conversion:.2f}%."
+            )
+    if len(live_meta_findings) < 1 and len(keyword_win_impact) > 0:
+        best_keyword = max(keyword_win_impact, key=lambda row: float(row.win_impact_score))
+        worst_keyword = min(keyword_win_impact, key=lambda row: float(row.win_impact_score))
+        if int(best_keyword.deck_count) >= 2:
+            live_meta_findings.append(
+                f"{best_keyword.keyword} decks are beating the field by {best_keyword.win_impact_score:+.2f}%."
+            )
+        if int(worst_keyword.deck_count) >= 2 and worst_keyword.keyword != best_keyword.keyword:
+            live_meta_findings.append(
+                f"{worst_keyword.keyword} decks are lagging the field by {worst_keyword.win_impact_score:+.2f}%."
+            )
+
+    meta_takeaways: list[str] = [
+        "Computed across all players and all mapped tournaments/weeks in this season.",
+    ]
+    if total_league_matches > 0:
+        meta_takeaways.append(f"League baseline win rate: {league_average_win_rate:.2f}%.")
+    if len(top_cost_curve_patterns) > 0:
+        top_curve = top_cost_curve_patterns[0]
+        meta_takeaways.append(
+            f"Top cost-curve performer: {top_curve.label} ({top_curve.avg_win_rate:.2f}% win rate across {top_curve.decks} decks)."
+        )
+    if len(top_arena_patterns) > 0:
+        top_arena = top_arena_patterns[0]
+        meta_takeaways.append(
+            f"Top arena trend: {top_arena.label} ({top_arena.avg_win_rate:.2f}% win rate across {top_arena.decks} decks)."
+        )
+    if len(top_cards) > 0:
+        most_played = top_cards[0]
+        meta_takeaways.append(
+            f"Most played card: {most_played.card_name or most_played.card_id} in {most_played.deck_count} decks."
+        )
+    if len(top_deck_card_types) > 0:
+        best_type = top_deck_card_types[0]
+        meta_takeaways.append(
+            f"Top decks lean most on {best_type.label} cards ({best_type.count} copies in the top sample)."
+        )
+    if len(top_deck_traits) > 0:
+        meta_takeaways.append(f"Top-deck trait trend: {top_deck_traits[0].label}.")
+    if len(top_deck_keywords) > 0:
+        meta_takeaways.append(f"Top-deck keyword trend: {top_deck_keywords[0].label}.")
+    for finding in live_meta_findings[:4]:
+        meta_takeaways.append(finding)
+
+    deduped_top_cards: list[LeagueMetaCardUsage] = []
+    by_card_name: dict[str, LeagueMetaCardUsage] = {}
+    for row in top_cards:
+        normalized_name = str(row.card_name or "").strip().lower()
+        aggregate_key = normalized_name if normalized_name != "" else _normalize_meta_card_id(row.card_id)
+        if aggregate_key == "":
+            continue
+        existing = by_card_name.get(aggregate_key)
+        if existing is None:
+            by_card_name[aggregate_key] = row
+            continue
+        existing.total_copies += int(row.total_copies)
+        existing.deck_count += int(row.deck_count)
+        if (existing.image_url is None or existing.image_url == "") and row.image_url not in {None, ""}:
+            existing.image_url = row.image_url
+        if (existing.rules_text is None or existing.rules_text == "") and row.rules_text not in {None, ""}:
+            existing.rules_text = row.rules_text
+        if existing.card_type in {None, ""} and row.card_type not in {None, ""}:
+            existing.card_type = row.card_type
+
+    deduped_top_cards = sorted(
+        by_card_name.values(),
+        key=lambda row: (-int(row.total_copies), -int(row.deck_count), str(row.card_name or row.card_id).lower()),
+    )[:40]
+
     return LeagueMetaAnalysisView(
         season_id=season_id,
         season_name=season_name,
         total_decks=len(decks),
-        top_cards=top_cards,
+        top_decks_sample_size=top_decks_sample_size,
+        top_cards=deduped_top_cards,
         top_leaders=top_leaders,
-        top_bases=top_bases,
+        top_bases=[],
         top_traits=top_traits,
         top_keywords=top_keywords,
-        top_archetypes=top_archetypes,
+        top_deck_traits=top_deck_traits,
+        top_deck_keywords=top_deck_keywords,
+        top_deck_card_types=top_deck_card_types,
+        top_archetypes=[],
+        top_cost_curve_patterns=top_cost_curve_patterns,
+        top_arena_patterns=top_arena_patterns,
+        hero_villain_breakdown=hero_villain_breakdown,
+        aspect_combo_breakdown=aspect_combo_breakdown,
+        keyword_win_impact=keyword_win_impact,
+        synergy_graph=synergy_graph,
+        trending_cards=trending_cards,
+        replacement_signals=replacement_signals,
+        live_meta_findings=live_meta_findings,
+        meta_takeaways=meta_takeaways,
     )
 
 
@@ -1722,6 +2764,23 @@ async def upsert_tournament_application(
     )
 
 
+async def delete_tournament_application(
+    tournament_id: TournamentId,
+    user_id: UserId,
+) -> None:
+    await database.execute(
+        """
+        DELETE FROM tournament_applications
+        WHERE tournament_id = :tournament_id
+          AND user_id = :user_id
+        """,
+        values={
+            "tournament_id": int(tournament_id),
+            "user_id": int(user_id),
+        },
+    )
+
+
 async def _get_league_communication_by_id(
     tournament_id: TournamentId, communication_id: int
 ) -> LeagueCommunicationView | None:
@@ -1765,6 +2824,7 @@ async def list_league_communications(tournament_id: TournamentId) -> list[League
         FROM league_communications lc
         LEFT JOIN users u ON u.id = lc.created_by_user_id
         WHERE lc.tournament_id = :tournament_id
+          AND lc.kind IN ('ANNOUNCEMENT', 'RULE', 'NOTE')
         ORDER BY
             CASE
                 WHEN lc.kind = 'ANNOUNCEMENT' THEN 0
@@ -1778,6 +2838,162 @@ async def list_league_communications(tournament_id: TournamentId) -> list[League
         values={"tournament_id": int(tournament_id)},
     )
     return [LeagueCommunicationView.model_validate(dict(row._mapping)) for row in rows]
+
+
+def _normalize_dashboard_background_mode(value: object) -> str:
+    normalized = str(value or "").strip().upper()
+    return "FIXED" if normalized == "FIXED" else "ROTATE"
+
+
+def _normalize_dashboard_background_path(value: object) -> str | None:
+    normalized = str(value or "").strip()
+    if normalized == "":
+        return None
+    if not normalized.startswith("/backgrounds/"):
+        return None
+    return normalized
+
+
+def _parse_dashboard_background_payload(value: object) -> tuple[str, str | None]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            value = {}
+    if not isinstance(value, dict):
+        value = {}
+    mode = _normalize_dashboard_background_mode(value.get("mode"))
+    image_path = _normalize_dashboard_background_path(value.get("image_path"))
+    if mode != "FIXED":
+        image_path = None
+    return mode, image_path
+
+
+async def get_dashboard_background_settings(
+    tournament_id: TournamentId,
+) -> LeagueDashboardBackgroundSettingsView:
+    row = await database.fetch_one(
+        """
+        SELECT body, updated
+        FROM league_communications
+        WHERE tournament_id = :tournament_id
+          AND kind = 'SYSTEM'
+          AND title = 'DASHBOARD_BACKGROUND'
+        ORDER BY updated DESC, id DESC
+        LIMIT 1
+        """,
+        values={"tournament_id": int(tournament_id)},
+    )
+    if row is None:
+        return LeagueDashboardBackgroundSettingsView(
+            tournament_id=tournament_id,
+            mode="ROTATE",
+            image_path=None,
+            updated=None,
+        )
+    mode, image_path = _parse_dashboard_background_payload(row._mapping["body"])
+    return LeagueDashboardBackgroundSettingsView(
+        tournament_id=tournament_id,
+        mode=mode,
+        image_path=image_path,
+        updated=row._mapping["updated"],
+    )
+
+
+async def upsert_dashboard_background_settings(
+    tournament_id: TournamentId,
+    body: LeagueDashboardBackgroundSettingsUpdateBody,
+    user_id: UserId,
+) -> LeagueDashboardBackgroundSettingsView:
+    mode = _normalize_dashboard_background_mode(body.mode)
+    image_path = _normalize_dashboard_background_path(body.image_path)
+    if mode != "FIXED":
+        image_path = None
+
+    payload = json.dumps(
+        {
+            "mode": mode,
+            "image_path": image_path,
+        }
+    )
+    rows = await database.fetch_all(
+        """
+        SELECT id
+        FROM league_communications
+        WHERE tournament_id = :tournament_id
+          AND kind = 'SYSTEM'
+          AND title = 'DASHBOARD_BACKGROUND'
+        ORDER BY updated DESC, id DESC
+        """,
+        values={"tournament_id": int(tournament_id)},
+    )
+    now = datetime_utc.now()
+    if len(rows) < 1:
+        await database.execute(
+            """
+            INSERT INTO league_communications (
+                tournament_id,
+                kind,
+                title,
+                body,
+                pinned,
+                created_by_user_id,
+                created,
+                updated
+            )
+            VALUES (
+                :tournament_id,
+                'SYSTEM',
+                'DASHBOARD_BACKGROUND',
+                :body,
+                FALSE,
+                :user_id,
+                :created,
+                :updated
+            )
+            """,
+            values={
+                "tournament_id": int(tournament_id),
+                "body": payload,
+                "user_id": int(user_id),
+                "created": now,
+                "updated": now,
+            },
+        )
+    else:
+        primary_id = int(rows[0]._mapping["id"])
+        await database.execute(
+            """
+            UPDATE league_communications
+            SET body = :body,
+                created_by_user_id = :user_id,
+                updated = :updated
+            WHERE id = :primary_id
+              AND tournament_id = :tournament_id
+            """,
+            values={
+                "body": payload,
+                "user_id": int(user_id),
+                "updated": now,
+                "primary_id": primary_id,
+                "tournament_id": int(tournament_id),
+            },
+        )
+        duplicate_ids = [int(row._mapping["id"]) for row in rows[1:]]
+        if len(duplicate_ids) > 0:
+            await database.execute(
+                """
+                DELETE FROM league_communications
+                WHERE tournament_id = :tournament_id
+                  AND id = ANY(:duplicate_ids)
+                """,
+                values={
+                    "tournament_id": int(tournament_id),
+                    "duplicate_ids": duplicate_ids,
+                },
+            )
+
+    return await get_dashboard_background_settings(tournament_id)
 
 
 async def create_league_communication(
@@ -1821,6 +3037,23 @@ async def create_league_communication(
         },
     )
     communication_id = int(assert_some(row)._mapping["id"])
+    if body.kind == "ANNOUNCEMENT" and bool(body.pinned):
+        await database.execute(
+            """
+            UPDATE league_communications
+            SET pinned = FALSE,
+                updated = :updated
+            WHERE tournament_id = :tournament_id
+              AND kind = 'ANNOUNCEMENT'
+              AND id <> :communication_id
+              AND pinned = TRUE
+            """,
+            values={
+                "tournament_id": int(tournament_id),
+                "communication_id": communication_id,
+                "updated": datetime_utc.now(),
+            },
+        )
     return assert_some(await _get_league_communication_by_id(tournament_id, communication_id))
 
 
@@ -1863,7 +3096,29 @@ async def update_league_communication(
     )
     if row is None:
         return None
-    return await _get_league_communication_by_id(tournament_id, int(row._mapping["id"]))
+    updated = await _get_league_communication_by_id(tournament_id, int(row._mapping["id"]))
+    if (
+        updated is not None
+        and str(updated.kind).upper() == "ANNOUNCEMENT"
+        and bool(updated.pinned)
+    ):
+        await database.execute(
+            """
+            UPDATE league_communications
+            SET pinned = FALSE,
+                updated = :updated
+            WHERE tournament_id = :tournament_id
+              AND kind = 'ANNOUNCEMENT'
+              AND id <> :communication_id
+              AND pinned = TRUE
+            """,
+            values={
+                "tournament_id": int(tournament_id),
+                "communication_id": int(updated.id),
+                "updated": datetime_utc.now(),
+            },
+        )
+    return updated
 
 
 async def delete_league_communication(tournament_id: TournamentId, communication_id: int) -> None:

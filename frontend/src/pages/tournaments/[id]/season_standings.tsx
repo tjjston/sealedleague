@@ -2,8 +2,10 @@ import {
   Badge,
   Button,
   Card,
+  HoverCard,
   FileInput,
   Group,
+  Image,
   Stack,
   Table,
   Text,
@@ -21,6 +23,7 @@ import {
   getLeagueAdminUsers,
   getLeagueSeasonHistory,
   getTournaments,
+  getUserDirectory,
 } from '@services/adapter';
 import {
   createLeagueSeason,
@@ -29,7 +32,6 @@ import {
   importSeasonStandingsCsv,
   updateLeagueSeason,
 } from '@services/league';
-
 export default function SeasonStandingsPage({
   standalone = false,
 }: {
@@ -53,6 +55,7 @@ export default function SeasonStandingsPage({
     : tournamentData.id;
 
   const swrStandingsResponse = getLeagueSeasonHistory(activeTournamentId);
+  const swrUserDirectoryResponse = getUserDirectory();
   const swrAdminUsersResponse = getLeagueAdminUsers(activeTournamentId);
   const swrAdminSeasonsResponse = getLeagueAdminSeasons(activeTournamentId);
   const isAdmin = swrAdminUsersResponse.data != null || swrAdminSeasonsResponse.data != null;
@@ -92,6 +95,19 @@ export default function SeasonStandingsPage({
     });
   }, [seasonRows]);
 
+  const showcaseByUserName = useMemo(() => {
+    const rows = swrUserDirectoryResponse.data?.data ?? [];
+    return rows.reduce((result: Record<string, any>, row: any) => {
+      const key = String(row?.user_name ?? '').trim().toLowerCase();
+      if (key === '' || result[key] != null) return result;
+      result[key] = {
+        cardName: row?.favorite_card_name ?? row?.favorite_card_id ?? null,
+        imageUrl: row?.favorite_card_image_url ?? null,
+      };
+      return result;
+    }, {});
+  }, [swrUserDirectoryResponse.data?.data]);
+
   function StandingsTable({ rows }: { rows: any[] }) {
     return (
       <Table stickyHeader>
@@ -109,40 +125,64 @@ export default function SeasonStandingsPage({
           </Table.Tr>
         </Table.Thead>
         <Table.Tbody>
-          {rows.map((row: any, index: number) => (
-            <Table.Tr key={`${row.user_id}-${index}`}>
-              <Table.Td>{index + 1}</Table.Td>
-              <Table.Td>
-                <Stack gap={0}>
-                  <Text fw={600}>{row.user_name}</Text>
-                  <Text size="xs" c="dimmed">
-                    {row.user_email}
-                  </Text>
-                </Stack>
-              </Table.Td>
-              <Table.Td>{row.points}</Table.Td>
-              <Table.Td>{row.event_wins ?? 0}</Table.Td>
-              <Table.Td>{row.tournament_wins ?? 0}</Table.Td>
-              <Table.Td>{row.tournament_placements ?? 0}</Table.Td>
-              <Table.Td>{row.prize_packs ?? 0}</Table.Td>
-              <Table.Td>
-                <Group gap={6}>
-                  {row.role != null && <Badge variant="light">{row.role}</Badge>}
-                  {row.can_manage_points && <Badge color="teal">Points</Badge>}
-                  {row.can_manage_tournaments && <Badge color="indigo">Tournaments</Badge>}
-                </Group>
-              </Table.Td>
-              <Table.Td>
-                <Group gap={6}>
-                  {(row.accolades ?? []).map((accolade: string) => (
-                    <Badge key={`${row.user_id}-${accolade}`} color="yellow" variant="light">
-                      {accolade}
-                    </Badge>
-                  ))}
-                </Group>
-              </Table.Td>
-            </Table.Tr>
-          ))}
+          {rows.map((row: any, index: number) => {
+            const showcase = showcaseByUserName[String(row.user_name ?? '').trim().toLowerCase()] ?? null;
+            return (
+              <Table.Tr key={`${row.user_id}-${index}`}>
+                <Table.Td>{index + 1}</Table.Td>
+                <Table.Td>
+                  <Stack gap={0}>
+                    {showcase != null ? (
+                      <HoverCard width={240} shadow="md" position="right">
+                        <HoverCard.Target>
+                          <Text fw={600} td="underline" style={{ textDecorationStyle: 'dotted' }}>
+                            {row.user_name}
+                          </Text>
+                        </HoverCard.Target>
+                        <HoverCard.Dropdown>
+                          <Stack gap={6}>
+                            <Text fw={700} size="sm">
+                              Showcase Card
+                            </Text>
+                            {showcase.imageUrl ? (
+                              <Image src={showcase.imageUrl} h={130} fit="contain" radius="sm" />
+                            ) : null}
+                            <Text size="sm">{showcase.cardName ?? 'No showcase card selected'}</Text>
+                          </Stack>
+                        </HoverCard.Dropdown>
+                      </HoverCard>
+                    ) : (
+                      <Text fw={600}>{row.user_name}</Text>
+                    )}
+                    <Text size="xs" c="dimmed">
+                      {row.user_email}
+                    </Text>
+                  </Stack>
+                </Table.Td>
+                <Table.Td>{row.points}</Table.Td>
+                <Table.Td>{row.event_wins ?? 0}</Table.Td>
+                <Table.Td>{row.tournament_wins ?? 0}</Table.Td>
+                <Table.Td>{row.tournament_placements ?? 0}</Table.Td>
+                <Table.Td>{row.prize_packs ?? 0}</Table.Td>
+                <Table.Td>
+                  <Group gap={6}>
+                    {row.role != null && <Badge variant="light">{row.role}</Badge>}
+                    {row.can_manage_points && <Badge color="teal">Points</Badge>}
+                    {row.can_manage_tournaments && <Badge color="indigo">Tournaments</Badge>}
+                  </Group>
+                </Table.Td>
+                <Table.Td>
+                  <Group gap={6}>
+                    {(row.accolades ?? []).map((accolade: string) => (
+                      <Badge key={`${row.user_id}-${accolade}`} color="yellow" variant="light">
+                        {accolade}
+                      </Badge>
+                    ))}
+                  </Group>
+                </Table.Td>
+              </Table.Tr>
+            );
+          })}
         </Table.Tbody>
       </Table>
     );
