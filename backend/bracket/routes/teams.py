@@ -1,5 +1,4 @@
 import csv
-import os
 from uuid import uuid4
 
 import aiofiles
@@ -33,6 +32,7 @@ from bracket.routes.models import (
 )
 from bracket.routes.util import (
     disallow_archived_tournament,
+    read_validated_image_upload,
     team_dependency,
     team_with_players_dependency,
 )
@@ -136,9 +136,11 @@ async def update_team_logo(
     new_logo_path: str | None = None
 
     if file:
-        assert file.filename is not None
-        extension = os.path.splitext(file.filename)[1]
-        assert extension in (".png", ".jpg", ".jpeg")
+        image_bytes, extension = await read_validated_image_upload(
+            file,
+            allowed_extensions={".png", ".jpg", ".jpeg"},
+            file_label="Team logo",
+        )
 
         filename = f"{uuid4()}{extension}"
         new_logo_path = f"static/team-logos/{filename}" if file is not None else None
@@ -146,7 +148,7 @@ async def update_team_logo(
         if new_logo_path:
             await aiofiles.os.makedirs("static/team-logos", exist_ok=True)
             async with aiofiles.open(new_logo_path, "wb") as f:
-                await f.write(await file.read())
+                await f.write(image_bytes)
 
     if old_logo_path is not None and old_logo_path != new_logo_path:
         try:

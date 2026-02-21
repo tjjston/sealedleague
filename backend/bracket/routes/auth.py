@@ -27,6 +27,7 @@ ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 7 * 24 * 60  # 1 week
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl="token", auto_error=False)
 
 
 # def convert_openid(response: dict[str, Any]) -> OpenID:
@@ -185,7 +186,7 @@ async def user_authenticated_or_public_dashboard(
 
 
 async def user_authenticated_or_public_dashboard_by_endpoint_name(
-    token: str = Depends(oauth2_scheme), endpoint_name: str | None = None
+    token: str | None = Depends(oauth2_scheme_optional), endpoint_name: str | None = None
 ) -> UserPublic | None:
     if endpoint_name is not None:
         if await sql_get_tournament_by_endpoint_name(endpoint_name) is None:
@@ -195,6 +196,13 @@ async def user_authenticated_or_public_dashboard_by_endpoint_name(
                 headers={"WWW-Authenticate": "Bearer"},
             )
         return None
+
+    if token is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     return await user_authenticated(token)
 

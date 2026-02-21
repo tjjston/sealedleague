@@ -69,6 +69,8 @@ Sealed League is a customized fork of [evroon/bracket](https://github.com/evroon
 ### Start
 
 ```bash
+cp .env.example .env
+# edit .env with real secrets/origins before starting
 export GIT_COMMIT="$(git rev-parse --short=12 HEAD)"
 docker compose up -d --build
 ```
@@ -77,12 +79,7 @@ App URL:
 
 - `http://localhost:8400`
 
-Default admin credentials from `docker-compose.yml`:
-
-- email: `admin@sealedleague.local`
-- password: `change-me-now`
-
-Change these before using outside local dev.
+Admin credentials now come from `.env` (`ADMIN_EMAIL` and `ADMIN_PASSWORD`).
 
 ### Useful Docker Commands
 

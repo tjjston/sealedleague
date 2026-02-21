@@ -1,4 +1,6 @@
-from fastapi import HTTPException
+import os
+
+from fastapi import HTTPException, UploadFile
 from starlette import status
 
 from bracket.database import database
@@ -15,6 +17,41 @@ from bracket.sql.teams import get_teams_with_members
 from bracket.sql.tournaments import sql_get_tournament
 from bracket.utils.db import fetch_one_parsed
 from bracket.utils.id_types import MatchId, RoundId, StageId, StageItemId, TeamId, TournamentId
+
+MAX_IMAGE_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
+async def read_validated_image_upload(
+    file: UploadFile,
+    *,
+    allowed_extensions: set[str],
+    file_label: str,
+    max_bytes: int = MAX_IMAGE_UPLOAD_BYTES,
+) -> tuple[bytes, str]:
+    filename = (file.filename or "").strip()
+    if filename == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{file_label} filename is required",
+        )
+
+    extension = os.path.splitext(filename)[1].lower()
+    if extension not in allowed_extensions:
+        allowed = ", ".join(sorted(ext.lstrip(".") for ext in allowed_extensions))
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{file_label} must be one of: {allowed}",
+        )
+
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        max_megabytes = max_bytes // (1024 * 1024)
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"{file_label} must be at most {max_megabytes}MB",
+        )
+
+    return content, extension
 
 
 async def round_dependency(tournament_id: TournamentId, round_id: RoundId) -> Round:

@@ -13,18 +13,18 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      ENVIRONMENT: DEVELOPMENT
+      ENVIRONMENT: ${ENVIRONMENT:-PRODUCTION}
       GUNICORN_CMD_ARGS: --workers 2 --log-level warning --timeout 120 --graceful-timeout 30 --keep-alive 5 --max-requests 1000 --max-requests-jitter 100
-      CORS_ORIGINS: http://localhost:8400
-      PG_DSN: postgresql://sealedleague_dev:sealedleague_dev@postgres:5432/sealedleague_dev
-      JWT_SECRET: sealedleague-local-dev-secret-0123456789abcdef
-      ADMIN_EMAIL: admin@sealedleague.local
-      ADMIN_PASSWORD: change-me-now
-      ALLOW_USER_REGISTRATION: true
-      ALLOW_DEMO_USER_REGISTRATION: false
-      SERVE_FRONTEND: true
-      API_PREFIX: '/api'
-      OMDB_API_KEY: ''
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS in .env}
+      PG_DSN: postgresql://${POSTGRES_USER:-sealedleague}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-sealedleague}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?Set ADMIN_EMAIL in .env}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      ALLOW_USER_REGISTRATION: ${ALLOW_USER_REGISTRATION:-false}
+      ALLOW_DEMO_USER_REGISTRATION: ${ALLOW_DEMO_USER_REGISTRATION:-false}
+      SERVE_FRONTEND: ${SERVE_FRONTEND:-true}
+      API_PREFIX: ${API_PREFIX:-/api}
+      OMDB_API_KEY: ${OMDB_API_KEY:-}
     build:
       context: .
       dockerfile: Dockerfile
@@ -42,12 +42,12 @@ services:
   postgres:
     pull_policy: always
     environment:
-      POSTGRES_DB: sealedleague_dev
-      POSTGRES_PASSWORD: sealedleague_dev
-      POSTGRES_USER: sealedleague_dev
+      POSTGRES_DB: ${POSTGRES_DB:-sealedleague}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_USER: ${POSTGRES_USER:-sealedleague}
     image: postgres:16
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sealedleague_dev -d sealedleague_dev"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
       retries: 20

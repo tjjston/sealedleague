@@ -17,7 +17,7 @@ RUN uv sync --no-dev --locked
 EXPOSE 8400
 
 HEALTHCHECK --interval=3s --timeout=5s --retries=10 \
-    CMD ["wget", "-O", "/dev/null", "http://0.0.0.0:8400/ping"]
+    CMD ["sh", "-c", "wget -q -O /dev/null http://0.0.0.0:8400${API_PREFIX:-}/ping"]
 
 CMD [ \
     "uv", \

@@ -35,7 +35,7 @@ class Config(BaseSettings):
     captcha_secret: str | None = None
     base_url: str = "http://localhost:8400"
     cors_origin_regex: str = ""
-    cors_origins: str = "*"
+    cors_origins: str | list[str] = "*"
     jwt_secret: str
     auto_run_migrations: bool = True
     pg_dsn: PostgresDsn = PostgresDsn("postgresql://user:pass@localhost:5432/db")
@@ -45,8 +45,17 @@ class Config(BaseSettings):
     omdb_api_key: str | None = None
     records_recalc_max_age_seconds: int = 60
 
+    def get_cors_origins(self) -> list[str]:
+        origins = (
+            self.cors_origins
+            if isinstance(self.cors_origins, list)
+            else self.cors_origins.split(",")
+        )
+        return [origin.strip() for origin in origins if origin.strip() != ""]
+
     def is_cors_enabled(self) -> bool:
-        return self.cors_origins != "*"
+        origins = self.get_cors_origins()
+        return len(origins) > 0 and "*" not in origins
 
 
 class CIConfig(Config):

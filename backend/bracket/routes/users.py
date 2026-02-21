@@ -1,4 +1,3 @@
-import os
 import json
 import asyncio
 import time
@@ -41,6 +40,7 @@ from bracket.routes.auth import (
     is_admin_user,
     user_authenticated,
 )
+from bracket.routes.util import read_validated_image_upload
 from bracket.routes.models import (
     CardCatalogResponse,
     LeaguePlayerCareerProfileResponse,
@@ -874,16 +874,17 @@ async def upload_user_avatar(
     new_avatar: str | None = None
 
     if file is not None:
-        assert file.filename is not None
-        extension = os.path.splitext(file.filename)[1].lower()
-        if extension not in (".png", ".jpg", ".jpeg", ".webp"):
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Avatar must be png, jpg, jpeg, or webp")
+        image_bytes, extension = await read_validated_image_upload(
+            file,
+            allowed_extensions={".png", ".jpg", ".jpeg", ".webp"},
+            file_label="Avatar",
+        )
 
         filename = f"{uuid4()}{extension}"
         new_avatar = f"static/user-avatars/{filename}"
         await aiofiles.os.makedirs("static/user-avatars", exist_ok=True)
         async with aiofiles.open(new_avatar, "wb") as f:
-            await f.write(await file.read())
+            await f.write(image_bytes)
 
     await update_user_preferences(
         user_id,
