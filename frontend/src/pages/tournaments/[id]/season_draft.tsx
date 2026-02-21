@@ -1,4 +1,4 @@
-import { Button, Card, Group, Progress, Select, Stack, Table, Text, Title } from '@mantine/core';
+import { Button, Card, Group, Progress, Select, Stack, Table, Text, TextInput, Title } from '@mantine/core';
 import { useEffect, useMemo, useState } from 'react';
 import { showNotification } from '@mantine/notifications';
 
@@ -6,8 +6,9 @@ import RequestErrorAlert from '@components/utils/error_alert';
 import { getTournamentIdFromRouter } from '@components/utils/util';
 import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
-import { getLeagueSeasonDraft, getTournaments, getUser } from '@services/adapter';
+import { getLeagueSeasonDraft, getLeagueSeasons, getTournaments, getUser } from '@services/adapter';
 import {
+  createLeagueSeason,
   confirmSeasonDraftResults,
   resetSeasonDraftResults,
   submitSeasonDraftPick,
@@ -82,9 +83,12 @@ export default function SeasonDraftPage({
     : tournamentData.id;
 
   const swrDraftResponse = getLeagueSeasonDraft(activeTournamentId);
+  const swrSeasonsResponse = getLeagueSeasons(activeTournamentId);
+  const seasons = swrSeasonsResponse.data?.data ?? [];
   const draftData = swrDraftResponse.data?.data;
   const draftOrder = draftData?.draft_order ?? [];
   const cardBases = draftData?.card_bases ?? [];
+  const [quickSeasonName, setQuickSeasonName] = useState('');
 
   const firstUnpickedIndex = useMemo(
     () => draftOrder.findIndex((row: any) => row.picked_source_user_id == null),
@@ -112,7 +116,41 @@ export default function SeasonDraftPage({
 
       {!swrDraftResponse.isLoading && draftData != null && draftData.from_season_id == null && (
         <Card withBorder>
-          <Text c="dimmed">Need at least two seasons to run the card pool draft.</Text>
+          <Stack>
+            <Text c="dimmed">Need at least two seasons to run the card pool draft.</Text>
+            {isAdmin && (
+              <Group align="end">
+                <TextInput
+                  label={seasons.length < 1 ? 'Create First Season' : 'Create Next Season'}
+                  placeholder={seasons.length < 1 ? 'Season 1' : 'Season 2'}
+                  value={quickSeasonName}
+                  onChange={(event) => setQuickSeasonName(event.currentTarget.value)}
+                  style={{ minWidth: 260 }}
+                />
+                <Button
+                  disabled={activeTournamentId <= 0 || quickSeasonName.trim() === ''}
+                  onClick={async () => {
+                    if (activeTournamentId <= 0 || quickSeasonName.trim() === '') return;
+                    await createLeagueSeason(activeTournamentId, {
+                      name: quickSeasonName.trim(),
+                      is_active: seasons.length < 1,
+                      tournament_ids: [activeTournamentId],
+                    });
+                    setQuickSeasonName('');
+                    await swrSeasonsResponse.mutate();
+                    await swrDraftResponse.mutate();
+                    showNotification({
+                      color: 'green',
+                      title: 'Season created',
+                      message: '',
+                    });
+                  }}
+                >
+                  Create Season
+                </Button>
+              </Group>
+            )}
+          </Stack>
         </Card>
       )}
 

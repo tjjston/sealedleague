@@ -29,6 +29,7 @@ import {
 import {
   createProjectedScheduleEvent,
   createProjectedScheduleItem,
+  createLeagueSeason,
   deleteProjectedScheduleItem,
   updateProjectedScheduleItem,
 } from '@services/league';
@@ -179,6 +180,7 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
   const [wizardGamesPerOpponent, setWizardGamesPerOpponent] = useState<number>(4);
   const [wizardGamesPerWeek, setWizardGamesPerWeek] = useState<number>(2);
   const [wizardParticipantUserIds, setWizardParticipantUserIds] = useState<string[]>([]);
+  const [quickSeasonName, setQuickSeasonName] = useState('');
   const editCardRef = useRef<HTMLDivElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -492,6 +494,45 @@ export default function ProjectedSchedulePage({ standalone = false }: { standalo
       </Text>
 
       {swrScheduleResponse.error && <RequestErrorAlert error={swrScheduleResponse.error} />}
+      {isAdmin && seasons.length < 1 && (
+        <Card withBorder>
+          <Stack>
+            <Title order={4}>Create Your First Season</Title>
+            <Text c="dimmed" size="sm">
+              No seasons exist yet. Create one here to unlock season filters and schedule generation.
+            </Text>
+            <Group align="end">
+              <TextInput
+                label="Season Name"
+                placeholder="Season 1"
+                value={quickSeasonName}
+                onChange={(event) => setQuickSeasonName(event.currentTarget.value)}
+                style={{ minWidth: 260 }}
+              />
+              <Button
+                disabled={activeTournamentId <= 0 || quickSeasonName.trim() === ''}
+                onClick={async () => {
+                  if (activeTournamentId <= 0 || quickSeasonName.trim() === '') return;
+                  await createLeagueSeason(activeTournamentId, {
+                    name: quickSeasonName.trim(),
+                    is_active: true,
+                    tournament_ids: [activeTournamentId],
+                  });
+                  setQuickSeasonName('');
+                  await swrSeasonsResponse.mutate();
+                  showNotification({
+                    color: 'green',
+                    title: 'Season created',
+                    message: '',
+                  });
+                }}
+              >
+                Create Season
+              </Button>
+            </Group>
+          </Stack>
+        </Card>
+      )}
 
       <Card withBorder>
         <Stack gap="xs">
