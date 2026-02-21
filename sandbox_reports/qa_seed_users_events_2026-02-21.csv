@@ -1,0 +1,24 @@
+row_type,record_id,name,email,club_name,tournament_status,mapped_seasons,match_count,notes
+USER,1,Admin,admin@sealedleague.local,Karabast | Sandbox Obscure Rim League,,,,admin
+USER,2,Sate Pestage,sate.pestage.01@sandbox.local,Karabast | Sandbox Obscure Rim League,,,,player
+USER,3,Kir Kanos,kir.kanos.02@sandbox.local,Karabast | Sandbox Obscure Rim League,,,,player
+USER,4,Jodo Kast,jodo.kast.03@sandbox.local,Karabast | Sandbox Obscure Rim League,,,,player
+USER,5,Tion Medon,tion.medon.04@sandbox.local,Karabast | Sandbox Obscure Rim League,,,,player
+USER,6,BoShek,boshek.05@sandbox.local,Karabast | Sandbox Obscure Rim League,,,,player
+USER,7,Fenn Shysa,fenn.shysa.06@sandbox.local,Karabast | Sandbox Obscure Rim League,,,,player
+USER,8,Borsk Feylya,borsk.feylya.07@sandbox.local,Karabast | Sandbox Obscure Rim League,,,,player
+USER,9,Agen Kolar,agen.kolar.08@sandbox.local,Karabast | Sandbox Obscure Rim League,,,,player
+USER,10,Rukh,rukh.09@sandbox.local,Karabast | Sandbox Obscure Rim League,,,,player
+USER,11,Sly Moore,sly.moore.10@sandbox.local,Sandbox Obscure Rim League,,,,player
+EVENT,1,Sandbox League QA Hub,,Sandbox Obscure Rim League,OPEN,Season 1 - Outer Rim | Season 2 - Mid Rim | Season 3 - Core Worlds,0,
+EVENT,2,Season 1 Week 1 Regular Season,,Sandbox Obscure Rim League,OPEN,Season 1 - Outer Rim,45,
+EVENT,3,Season 1 Week 2 Regular Season,,Sandbox Obscure Rim League,OPEN,Season 1 - Outer Rim,45,
+EVENT,4,Season 1 Week 3 Regular Season,,Sandbox Obscure Rim League,OPEN,Season 1 - Outer Rim,45,
+EVENT,5,Season 1 Finals (Swiss + Double Elim),,Sandbox Obscure Rim League,OPEN,Season 1 - Outer Rim,20,karabast_names_seeded
+EVENT,6,Season 2 Week 1 Regular Season,,Sandbox Obscure Rim League,OPEN,Season 2 - Mid Rim,45,
+EVENT,7,Season 2 Week 2 Regular Season,,Sandbox Obscure Rim League,OPEN,Season 2 - Mid Rim,45,
+EVENT,8,Season 2 Week 3 Regular Season,,Sandbox Obscure Rim League,OPEN,Season 2 - Mid Rim,45,
+EVENT,9,Season 2 Finals (Swiss + Double Elim),,Sandbox Obscure Rim League,OPEN,Season 2 - Mid Rim,20,
+EVENT,10,Season 3 Midseason Cup (RR to Single Elim),,Sandbox Obscure Rim League,OPEN,Season 3 - Core Worlds,52,
+EVENT,11,Season 3 Bye Test (9-Player Single Elim),,Sandbox Obscure Rim League,OPEN,Season 3 - Core Worlds,15,
+EVENT,12,Karabast QA Lobby Test,,Karabast,OPEN,,6,karabast_names_seeded

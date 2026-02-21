@@ -13,6 +13,7 @@ from bracket.logic.planning.rounds import (
 )
 from bracket.logic.ranking.calculation import recalculate_ranking_for_stage_item
 from bracket.logic.ranking.elimination import (
+    auto_advance_byes_in_elimination_stage_item,
     update_inputs_in_complete_elimination_stage_item,
 )
 from bracket.logic.scheduling.builder import (
@@ -88,6 +89,18 @@ async def create_stage_item(
     user: UserPublic = Depends(user_authenticated_for_tournament),
 ) -> SuccessResponse:
     await check_foreign_keys_belong_to_tournament(stage_body, tournament_id)
+    if stage_body.type == StageType.SINGLE_ELIMINATION and not (2 <= stage_body.team_count <= 64):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Single elimination supports team counts between 2 and 64",
+        )
+    if stage_body.type == StageType.DOUBLE_ELIMINATION and not (
+        3 <= stage_body.team_count <= 64
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Double elimination supports team counts between 3 and 64",
+        )
 
     stages = await get_full_tournament_details(tournament_id)
     existing_stage_items = [stage_item for stage in stages for stage_item in stage.stage_items]
@@ -126,7 +139,7 @@ async def update_stage_item(
     )
     await recalculate_ranking_for_stage_item(tournament_id, stage_item)
     if stage_item.type in {StageType.SINGLE_ELIMINATION, StageType.DOUBLE_ELIMINATION}:
-        await update_inputs_in_complete_elimination_stage_item(stage_item)
+        await update_inputs_in_complete_elimination_stage_item(tournament_id, stage_item.id)
     return SuccessResponse()
 
 
@@ -145,6 +158,26 @@ async def start_next_round(
     only_recommended: bool = False,
     _: Tournament = Depends(disallow_archived_tournament),
 ) -> SuccessResponse:
+    if stage_item.type in {StageType.SINGLE_ELIMINATION, StageType.DOUBLE_ELIMINATION}:
+        await update_inputs_in_complete_elimination_stage_item(tournament_id, stage_item_id)
+        stage_item = await get_stage_item(tournament_id, stage_item_id)
+        stage_item = await auto_advance_byes_in_elimination_stage_item(
+            tournament_id,
+            stage_item,
+            await sql_get_tournament(tournament_id),
+        )
+        await recalculate_ranking_for_stage_item(tournament_id, stage_item)
+        return SuccessResponse()
+
+    if stage_item.type is not StageType.SWISS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Starting the next round is only supported for Swiss stage items. "
+                "Elimination stages advance automatically when match scores are reported."
+            ),
+        )
+
     draft_round = get_draft_round(stage_item)
     if draft_round is not None:
         raise HTTPException(

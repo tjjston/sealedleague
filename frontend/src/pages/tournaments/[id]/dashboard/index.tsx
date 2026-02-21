@@ -1,7 +1,19 @@
-import { Alert, Badge, Card, Center, Flex, Grid, Group, Stack, Text, Title } from '@mantine/core';
+import {
+  Alert,
+  Badge,
+  Card,
+  Center,
+  Flex,
+  Grid,
+  Group,
+  MultiSelect,
+  Stack,
+  Text,
+  Title,
+} from '@mantine/core';
 import { AiOutlineHourglass } from '@react-icons/all-files/ai/AiOutlineHourglass';
 import { IconAlertCircle } from '@tabler/icons-react';
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { DashboardFooter } from '@components/dashboard/footer';
@@ -15,6 +27,16 @@ import { responseIsValid, setTitle } from '@components/utils/util';
 import { getCourtsLive, getStagesLive } from '@services/adapter';
 import { getTournamentResponseByEndpointName } from '@services/dashboard';
 import { getMatchLookup, getStageItemLookup, stringToColour } from '@services/lookups';
+
+function formatEventTypeLabel(value: string) {
+  const normalized = String(value ?? '').trim().toUpperCase();
+  if (normalized === 'REGULAR_SEASON_MATCHUP') return 'Regular Season Matchup';
+  return normalized
+    .split('_')
+    .filter((segment) => segment !== '')
+    .map((segment) => `${segment[0]}${segment.slice(1).toLowerCase()}`)
+    .join(' ');
+}
 
 function ScheduleRow({
   data,
@@ -123,12 +145,23 @@ export function Schedule({
   t,
   stageItemsLookup,
   matchesLookup,
+  selectedEventTypes,
 }: {
   t: Translator;
   stageItemsLookup: any;
   matchesLookup: any;
+  selectedEventTypes: string[];
 }) {
-  const matches: any[] = Object.values(matchesLookup);
+  const selectedEventTypeLookup = useMemo(
+    () => new Set(selectedEventTypes.map((eventType) => String(eventType).trim().toUpperCase())),
+    [selectedEventTypes]
+  );
+  const matches: any[] = Object.values(matchesLookup).filter((entry: any) => {
+    if (entry == null || entry.match == null || entry.stageItem == null) return false;
+    if (selectedEventTypeLookup.size < 1) return true;
+    const eventType = String(entry.stageItem.type ?? '').trim().toUpperCase();
+    return eventType !== '' && selectedEventTypeLookup.has(eventType);
+  });
   const sortedMatches = matches
     .filter((m1: any) => m1.match.start_time != null)
     .sort(
@@ -195,20 +228,34 @@ export default function DashboardSchedulePage() {
   const { t } = useTranslation();
   const tournamentDataFull = getTournamentResponseByEndpointName();
   const tournamentValid = !React.isValidElement(tournamentDataFull);
+  const [selectedEventTypes, setSelectedEventTypes] = useState<string[]>([]);
 
   const swrStagesResponse = getStagesLive(tournamentValid ? tournamentDataFull.id : null);
   const swrCourtsResponse = getCourtsLive(tournamentValid ? tournamentDataFull.id : null);
+
+  const stageItemsLookup = responseIsValid(swrStagesResponse)
+    ? getStageItemLookup(swrStagesResponse)
+    : [];
+  const matchesLookup = responseIsValid(swrStagesResponse) ? getMatchLookup(swrStagesResponse) : [];
+  const eventTypeOptions = useMemo(() => {
+    const uniqueTypes = new Set<string>();
+    Object.values(matchesLookup ?? {}).forEach((entry: any) => {
+      const rawType = String(entry?.stageItem?.type ?? '').trim().toUpperCase();
+      if (rawType !== '') uniqueTypes.add(rawType);
+    });
+    return [...uniqueTypes]
+      .sort((left, right) => left.localeCompare(right))
+      .map((eventType) => ({
+        value: eventType,
+        label: formatEventTypeLabel(eventType),
+      }));
+  }, [matchesLookup]);
 
   if (!tournamentValid) {
     return tournamentDataFull;
   }
 
   setTitle(getTournamentHeadTitle(tournamentDataFull));
-
-  const stageItemsLookup = responseIsValid(swrStagesResponse)
-    ? getStageItemLookup(swrStagesResponse)
-    : [];
-  const matchesLookup = responseIsValid(swrStagesResponse) ? getMatchLookup(swrStagesResponse) : [];
 
   if (swrStagesResponse.error || swrCourtsResponse.error) {
     return (
@@ -246,9 +293,26 @@ export default function DashboardSchedulePage() {
     <>
       <DoubleHeader tournamentData={tournamentDataFull} />
       <Center>
-        <Group style={{ maxWidth: '48rem', width: '100%' }} px="1rem">
-          <Schedule t={t} matchesLookup={matchesLookup} stageItemsLookup={stageItemsLookup} />
-        </Group>
+        <Stack style={{ maxWidth: '48rem', width: '100%' }} px="1rem">
+          <Card withBorder>
+            <MultiSelect
+              label="Event Types"
+              placeholder="All event types"
+              data={eventTypeOptions}
+              value={selectedEventTypes}
+              onChange={setSelectedEventTypes}
+              clearable
+              searchable
+              nothingFoundMessage="No event types"
+            />
+          </Card>
+          <Schedule
+            t={t}
+            matchesLookup={matchesLookup}
+            stageItemsLookup={stageItemsLookup}
+            selectedEventTypes={selectedEventTypes}
+          />
+        </Stack>
       </Center>
       <DashboardFooter />
     </>

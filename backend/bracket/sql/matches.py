@@ -45,6 +45,8 @@ async def sql_create_match(match: MatchCreateBody) -> Match:
             stage_item_input2_id,
             stage_item_input1_winner_from_match_id,
             stage_item_input2_winner_from_match_id,
+            stage_item_input1_loser_from_match_id,
+            stage_item_input2_loser_from_match_id,
             duration_minutes,
             custom_duration_minutes,
             margin_minutes,
@@ -62,12 +64,14 @@ async def sql_create_match(match: MatchCreateBody) -> Match:
             :stage_item_input2_id,
             :stage_item_input1_winner_from_match_id,
             :stage_item_input2_winner_from_match_id,
+            :stage_item_input1_loser_from_match_id,
+            :stage_item_input2_loser_from_match_id,
             :duration_minutes,
             :custom_duration_minutes,
             :margin_minutes,
             :custom_margin_minutes,
-            0,
-            0,
+            :stage_item_input1_score,
+            :stage_item_input2_score,
             false,
             false,
             NOW()
@@ -115,6 +119,17 @@ async def sql_update_match(match_id: MatchId, match: MatchBody, tournament: Tour
             "duration_minutes": duration_minutes,
             "margin_minutes": margin_minutes,
         },
+    )
+
+
+async def sql_update_karabast_game_name(match_id: MatchId, karabast_game_name: str | None) -> None:
+    await database.execute(
+        """
+        UPDATE matches
+        SET karabast_game_name = :karabast_game_name
+        WHERE id = :match_id
+        """,
+        values={"match_id": int(match_id), "karabast_game_name": karabast_game_name},
     )
 
 

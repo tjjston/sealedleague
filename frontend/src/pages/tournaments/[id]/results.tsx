@@ -9,18 +9,22 @@ import {
   Group,
   HoverCard,
   Image,
+  Select,
   Table,
   Stack,
+  Tabs,
   Text,
   Title,
   UnstyledButton,
 } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
+import { showNotification } from '@mantine/notifications';
 import { AiOutlineHourglass } from '@react-icons/all-files/ai/AiOutlineHourglass';
 import { IconAlertCircle, IconTrophy } from '@tabler/icons-react';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { RoundsGridCols } from '@components/brackets/brackets';
+import BracketTree, { BracketTreeSection } from '@components/brackets/bracket_tree';
 import MatchModal from '@components/modals/match_modal';
 import { NoContent } from '@components/no_content/empty_table_info';
 import RequestErrorAlert from '@components/utils/error_alert';
@@ -33,12 +37,16 @@ import { MatchWithDetails } from '@openapi';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
 import {
   getCourts,
+  getBaseApiUrl,
   getLeagueCardsGlobal,
   getStages,
+  getTournamentById,
   getTournamentApplications,
   getUser,
+  getUserDirectory,
 } from '@services/adapter';
 import { getMatchLookup, getStageItemLookup, stringToColour } from '@services/lookups';
+import { getKarabastMatchBundle } from '@services/match';
 
 type TeamDeckPreview = {
   leaderName: string;
@@ -46,6 +54,62 @@ type TeamDeckPreview = {
   leaderImageUrl: string | null;
   baseImageUrl: string | null;
 };
+
+type BracketSectionKey = 'WINNERS' | 'LOSERS' | 'FINALS' | 'MAIN';
+
+function getSingleEliminationRoundCount(teamCount: number): number {
+  if (!Number.isFinite(teamCount) || teamCount <= 1) return 0;
+  return Math.ceil(Math.log2(teamCount));
+}
+
+function normalizeRoundName(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function inferDoubleEliminationSection(
+  roundName: string,
+  roundIndex: number,
+  winnersRoundCount: number,
+  losersRoundCount: number
+): BracketSectionKey {
+  const normalized = roundName.toLowerCase();
+  if (normalized.startsWith('wb') || normalized.includes('winners')) return 'WINNERS';
+  if (normalized.startsWith('lb') || normalized.includes('losers')) return 'LOSERS';
+  if (normalized.includes('grand final') || normalized.includes('grandfinal')) return 'FINALS';
+  if (roundIndex < winnersRoundCount) return 'WINNERS';
+  if (roundIndex < winnersRoundCount + losersRoundCount) return 'LOSERS';
+  return 'FINALS';
+}
+
+function getDoubleEliminationRoundLabel(
+  section: BracketSectionKey,
+  sectionIndex: number,
+  winnersRoundCount: number,
+  losersRoundCount: number
+): string {
+  if (section === 'WINNERS') {
+    return sectionIndex === winnersRoundCount ? 'WB Final' : `WB Round ${sectionIndex}`;
+  }
+  if (section === 'LOSERS') {
+    return sectionIndex === losersRoundCount ? 'LB Final' : `LB Round ${sectionIndex}`;
+  }
+  if (section === 'FINALS') {
+    return sectionIndex === 1 ? 'Grand Final' : 'Grand Final Reset';
+  }
+  return `Round ${sectionIndex}`;
+}
+
+function getSingleEliminationRoundLabel(roundIndex: number, totalRounds: number): string {
+  if (totalRounds <= 1) return 'Final';
+  const roundsRemaining = totalRounds - roundIndex;
+  if (roundsRemaining <= 0) return 'Final';
+  if (roundsRemaining === 1) return 'Semifinals';
+  if (roundsRemaining === 2) return 'Quarterfinals';
+  const participants = 2 ** (roundsRemaining + 1);
+  return `Round of ${participants}`;
+}
 
 function ScheduleRow({
   data,
@@ -57,6 +121,11 @@ function ScheduleRow({
   winnerByStageItemId,
   resolveDeckPreviewForTeam,
   baseTrackerHref,
+  karabastEnabled,
+  karabastGameName,
+  karabastLobbyUrl,
+  onCopyKarabastGameName,
+  onCopyKarabastDeckSlot,
 }: {
   data: any;
   openMatchModal: any;
@@ -67,6 +136,11 @@ function ScheduleRow({
   winnerByStageItemId: Record<number, string>;
   resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
   baseTrackerHref: string;
+  karabastEnabled: boolean;
+  karabastGameName: string;
+  karabastLobbyUrl: string | null;
+  onCopyKarabastGameName: () => Promise<void>;
+  onCopyKarabastDeckSlot: (slot: number) => Promise<void>;
 }) {
   const { t } = useTranslation();
   const winColor = '#2a8f37';
@@ -136,7 +210,62 @@ function ScheduleRow({
 
   return (
     <div style={{ width: '48rem' }}>
-      <Group justify="flex-end" mt="md" mb={4}>
+      <Group justify="space-between" mt="md" mb={4}>
+        {karabastEnabled ? (
+          <Group gap={8}>
+            <Text size="sm" c="dimmed">
+              Lobby: {karabastLobbyUrl ?? karabastGameName}
+            </Text>
+            {karabastLobbyUrl != null ? (
+              <Button
+                size="xs"
+                variant="light"
+                component="a"
+                href={karabastLobbyUrl}
+                target="_blank"
+                rel="noreferrer"
+                onClick={(event) => event.stopPropagation()}
+              >
+                Open Lobby
+              </Button>
+            ) : null}
+            <Button
+              size="xs"
+              variant="light"
+              onClick={async (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                await onCopyKarabastGameName();
+              }}
+            >
+              {karabastLobbyUrl != null ? 'Copy Lobby URL' : 'Copy Lobby Name'}
+            </Button>
+            <Button
+              size="xs"
+              variant="light"
+              onClick={async (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                await onCopyKarabastDeckSlot(1);
+              }}
+            >
+              Copy {team1Label} Deck
+            </Button>
+            <Button
+              size="xs"
+              variant="light"
+              onClick={async (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                await onCopyKarabastDeckSlot(2);
+              }}
+            >
+              Copy {team2Label} Deck
+            </Button>
+          </Group>
+        ) : (
+          <div />
+        )}
         <Button component={PreloadLink} href={baseTrackerHref} size="xs" variant="light">
           Open Base Tracker
         </Button>
@@ -282,6 +411,11 @@ function Schedule({
   winnerByStageItemId,
   resolveDeckPreviewForTeam,
   buildBaseTrackerHref,
+  karabastEnabled,
+  getKarabastGameName,
+  getKarabastLobbyUrl,
+  copyKarabastGameName,
+  copyKarabastDeckForSlot,
 }: {
   t: Translator;
   stageItemsLookup: any;
@@ -292,6 +426,11 @@ function Schedule({
   winnerByStageItemId: Record<number, string>;
   resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
   buildBaseTrackerHref: (match: any) => string;
+  karabastEnabled: boolean;
+  getKarabastGameName: (match: any) => string;
+  getKarabastLobbyUrl: (match: any) => string | null;
+  copyKarabastGameName: (match: any) => Promise<void>;
+  copyKarabastDeckForSlot: (match: any, slot: number) => Promise<void>;
 }) {
   const matches: any[] = Object.values(matchesLookup ?? {}).filter(
     (value: any) => value != null && value.match != null && value.stageItem != null
@@ -338,6 +477,11 @@ function Schedule({
         winnerByStageItemId={winnerByStageItemId}
         resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
         baseTrackerHref={buildBaseTrackerHref(data.match)}
+        karabastEnabled={karabastEnabled}
+        karabastGameName={getKarabastGameName(data.match)}
+        karabastLobbyUrl={getKarabastLobbyUrl(data.match)}
+        onCopyKarabastGameName={async () => copyKarabastGameName(data.match)}
+        onCopyKarabastDeckSlot={async (slot) => copyKarabastDeckForSlot(data.match, slot)}
       />
     );
   }
@@ -377,7 +521,9 @@ function Schedule({
 export default function ResultsPage() {
   const [modalOpened, modalSetOpened] = useState(false);
   const [match, setMatch] = useState<MatchWithDetails | null>(null);
+  const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
   const [selectedBracketStageItemId, setSelectedBracketStageItemId] = useState<number | null>(null);
+  const useStageDropdown = useMediaQuery('(max-width: 62em)');
 
   const { t } = useTranslation();
   const { tournamentData } = getTournamentIdFromRouter();
@@ -387,24 +533,55 @@ export default function ResultsPage() {
   const includeTeamPlayers = currentUser == null ? false : !isAdmin;
   const swrStagesResponse = getStages(tournamentData.id, true, includeTeamPlayers);
   const swrCourtsResponse = getCourts(tournamentData.id);
+  const swrTournamentResponse = getTournamentById(tournamentData.id);
   const swrApplicationsResponse = getTournamentApplications(tournamentData.id, 'all');
+  const swrUserDirectoryResponse = getUserDirectory();
   const swrCardsResponse = getLeagueCardsGlobal({ limit: 5000, offset: 0 });
+  const karabastEnabled =
+    String(swrTournamentResponse.data?.data?.club_name ?? '')
+      .trim()
+      .toLowerCase() === 'karabast';
 
   const stageItemsLookup = responseIsValid(swrStagesResponse)
     ? getStageItemLookup(swrStagesResponse)
     : [];
   const matchesLookup = responseIsValid(swrStagesResponse) ? getMatchLookup(swrStagesResponse) : [];
   const stages = swrStagesResponse.data?.data ?? [];
-  const eliminationStageItems = useMemo(
+
+  useEffect(() => {
+    if (stages.length < 1) {
+      setSelectedStageId(null);
+      return;
+    }
+    const hasSelectedStage = stages.some((stage: any) => String(stage.id) === selectedStageId);
+    if (!hasSelectedStage) {
+      setSelectedStageId(String(stages[0].id));
+    }
+  }, [stages, selectedStageId]);
+
+  const selectedStage =
+    stages.find((stage: any) => String(stage.id) === selectedStageId) ?? stages[0] ?? null;
+  const eliminationStageItemsInSelectedStage = useMemo(
     () =>
-      stages
-        .flatMap((stage: any) => stage.stage_items ?? [])
-        .filter(
-          (stageItem: any) =>
-            stageItem.type === 'SINGLE_ELIMINATION' || stageItem.type === 'DOUBLE_ELIMINATION'
-        ),
-    [stages]
+      (selectedStage?.stage_items ?? []).filter(
+        (stageItem: any) =>
+          stageItem.type === 'SINGLE_ELIMINATION' || stageItem.type === 'DOUBLE_ELIMINATION'
+      ),
+    [selectedStage]
   );
+
+  useEffect(() => {
+    if (eliminationStageItemsInSelectedStage.length < 1) {
+      setSelectedBracketStageItemId(null);
+      return;
+    }
+    const hasSelectedBracketStageItem = eliminationStageItemsInSelectedStage.some(
+      (stageItem: any) => stageItem.id === selectedBracketStageItemId
+    );
+    if (!hasSelectedBracketStageItem) {
+      setSelectedBracketStageItemId(eliminationStageItemsInSelectedStage[0].id);
+    }
+  }, [eliminationStageItemsInSelectedStage, selectedBracketStageItemId]);
   const finishedStageItemWinners = useMemo(() => {
     const summaries: Array<{ stage_item_id: number; stage_item_name: string; winner: string }> = [];
     stages.forEach((stage: any) => {
@@ -549,10 +726,390 @@ export default function ResultsPage() {
       ),
     [finishedStageItemWinners]
   );
+  const avatarUrlByUserName = useMemo(() => {
+    const rows = swrUserDirectoryResponse.data?.data ?? [];
+    return rows.reduce((result: Record<string, string>, row: any) => {
+      const key = String(row?.user_name ?? '').trim().toLowerCase();
+      const rawAvatarUrl = String(row?.avatar_url ?? '').trim();
+      if (key === '' || rawAvatarUrl === '' || result[key] != null) return result;
+      result[key] = rawAvatarUrl.startsWith('http')
+        ? rawAvatarUrl
+        : `${getBaseApiUrl()}/${rawAvatarUrl}`;
+      return result;
+    }, {});
+  }, [swrUserDirectoryResponse.data?.data]);
+  const championBannerAvatarUrl = useMemo(() => {
+    for (const winnerSummary of finishedStageItemWinners) {
+      const winnerNameKey = String(winnerSummary?.winner ?? '').trim().toLowerCase();
+      if (winnerNameKey === '') continue;
+      const avatarUrl = avatarUrlByUserName[winnerNameKey];
+      if (avatarUrl != null && avatarUrl !== '') {
+        return avatarUrl;
+      }
+    }
+    return null;
+  }, [avatarUrlByUserName, finishedStageItemWinners]);
   const activeBracketStageItem =
-    eliminationStageItems.find((stageItem: any) => stageItem.id === selectedBracketStageItemId) ??
-    eliminationStageItems[0] ??
+    eliminationStageItemsInSelectedStage.find(
+      (stageItem: any) => stageItem.id === selectedBracketStageItemId
+    ) ??
+    eliminationStageItemsInSelectedStage[0] ??
     null;
+  const stageOptions = stages.map((stage: any) => ({
+    value: String(stage.id),
+    label: String(stage.name ?? `Stage ${stage.id}`),
+  }));
+  const bracketStageItemOptions = eliminationStageItemsInSelectedStage.map((stageItem: any) => ({
+    value: String(stageItem.id),
+    label: String(stageItem.name ?? `Stage Item ${stageItem.id}`),
+  }));
+  const bracketSections = useMemo<BracketTreeSection[]>(() => {
+    if (activeBracketStageItem == null) return [];
+    const nowTimestamp = Date.now();
+
+    const inputLookup = (activeBracketStageItem.inputs ?? []).reduce(
+      (result: Record<number, any>, input: any) => {
+        const inputId = Number(input?.id ?? 0);
+        if (Number.isFinite(inputId) && inputId > 0) result[inputId] = input;
+        return result;
+      },
+      {}
+    );
+    const sortedRounds = [...(activeBracketStageItem.rounds ?? [])]
+      .filter((round: any) => !round?.is_draft)
+      .sort((left: any, right: any) => Number(left?.id ?? 0) - Number(right?.id ?? 0));
+    if (sortedRounds.length < 1) return [];
+
+    const winnersRoundCount =
+      activeBracketStageItem.type === 'DOUBLE_ELIMINATION'
+        ? getSingleEliminationRoundCount(Number(activeBracketStageItem?.team_count ?? 0))
+        : 0;
+    const losersRoundCount =
+      activeBracketStageItem.type === 'DOUBLE_ELIMINATION'
+        ? Math.max(0, 2 * winnersRoundCount - 2)
+        : 0;
+
+    const roundMetaById = new Map<
+      number,
+      {
+        section: BracketSectionKey;
+        sectionIndex: number;
+        label: string;
+      }
+    >();
+    const sectionCounters: Record<BracketSectionKey, number> = {
+      WINNERS: 0,
+      LOSERS: 0,
+      FINALS: 0,
+      MAIN: 0,
+    };
+
+    sortedRounds.forEach((round: any, roundIndex: number) => {
+      const roundId = Number(round?.id ?? 0);
+      if (!Number.isFinite(roundId) || roundId <= 0) return;
+      const rawRoundName = normalizeRoundName(round?.name);
+      const section: BracketSectionKey =
+        activeBracketStageItem.type === 'DOUBLE_ELIMINATION'
+          ? inferDoubleEliminationSection(
+              rawRoundName,
+              roundIndex,
+              winnersRoundCount,
+              losersRoundCount
+            )
+          : 'MAIN';
+      sectionCounters[section] += 1;
+
+      const genericRoundName =
+        rawRoundName === '' ||
+        (/^round\s+\d+$/i.test(rawRoundName) && activeBracketStageItem.type === 'DOUBLE_ELIMINATION');
+      const label =
+        activeBracketStageItem.type === 'DOUBLE_ELIMINATION'
+          ? getDoubleEliminationRoundLabel(
+              section,
+              sectionCounters[section],
+              winnersRoundCount,
+              losersRoundCount
+            )
+          : activeBracketStageItem.type === 'SINGLE_ELIMINATION'
+            ? rawRoundName !== '' && !genericRoundName
+              ? rawRoundName
+              : getSingleEliminationRoundLabel(sectionCounters.MAIN, sortedRounds.length)
+            : rawRoundName !== '' && !genericRoundName
+              ? rawRoundName
+              : sectionCounters.MAIN === sortedRounds.length
+                ? 'Final'
+                : `Round ${sectionCounters.MAIN}`;
+
+      roundMetaById.set(roundId, {
+        section,
+        sectionIndex: sectionCounters[section],
+        label,
+      });
+    });
+
+    const matchesWithRoundMeta = sortedRounds.flatMap((round: any) =>
+      [...(round?.matches ?? [])]
+        .filter((match: any) => match != null)
+        .map((match: any) => ({
+          ...match,
+          __round_id: Number(round?.id ?? 0),
+        }))
+    );
+
+    const matchesById = matchesWithRoundMeta.reduce((result: Record<number, any>, match: any) => {
+      const matchId = Number(match?.id ?? 0);
+      if (Number.isFinite(matchId) && matchId > 0) {
+        result[matchId] = match;
+      }
+      return result;
+    }, {});
+    const sourceMatchIdsByMatchId = matchesWithRoundMeta.reduce(
+      (result: Record<number, number[]>, match: any) => {
+        const matchId = Number(match?.id ?? 0);
+        if (!Number.isFinite(matchId) || matchId <= 0) return result;
+        result[matchId] = Array.from(
+          new Set(
+            [
+              Number(match?.stage_item_input1_winner_from_match_id ?? 0),
+              Number(match?.stage_item_input2_winner_from_match_id ?? 0),
+              Number(match?.stage_item_input1_loser_from_match_id ?? 0),
+              Number(match?.stage_item_input2_loser_from_match_id ?? 0),
+            ].filter((sourceId) => Number.isFinite(sourceId) && sourceId > 0 && matchesById[sourceId] != null)
+          )
+        );
+        return result;
+      },
+      {}
+    );
+
+    const matchSectionById = matchesWithRoundMeta.reduce((result: Record<number, BracketSectionKey>, match: any) => {
+      const matchId = Number(match?.id ?? 0);
+      const roundId = Number(match?.__round_id ?? 0);
+      const roundMeta = roundMetaById.get(roundId);
+      if (Number.isFinite(matchId) && matchId > 0 && roundMeta != null) {
+        result[matchId] = roundMeta.section;
+      }
+      return result;
+    }, {});
+
+    const sectionColumns: Record<BracketSectionKey, any[]> = {
+      WINNERS: [],
+      LOSERS: [],
+      FINALS: [],
+      MAIN: [],
+    };
+    const yOrderByMatchId: Record<number, number> = {};
+    const getSeedFallback = (match: any): number => {
+      const slot1 = Number(match?.stage_item_input1?.slot ?? inputLookup[Number(match?.stage_item_input1_id ?? 0)]?.slot ?? 9999);
+      const slot2 = Number(match?.stage_item_input2?.slot ?? inputLookup[Number(match?.stage_item_input2_id ?? 0)]?.slot ?? 9999);
+      return Math.min(slot1, slot2);
+    };
+
+    sortedRounds.forEach((round: any, roundIndex: number) => {
+      const roundId = Number(round?.id ?? 0);
+      const roundMeta = roundMetaById.get(roundId);
+      const roundName =
+        roundMeta?.label ?? (normalizeRoundName(round?.name) || `Round ${roundIndex + 1}`);
+      const roundMatches = [...(round?.matches ?? [])].filter((match: any) => match != null);
+      const sortedRoundMatches = roundMatches.sort((left: any, right: any) => {
+        const leftSources = sourceMatchIdsByMatchId[Number(left?.id ?? 0)] ?? [];
+        const rightSources = sourceMatchIdsByMatchId[Number(right?.id ?? 0)] ?? [];
+
+        const leftHasSourceOrder = leftSources.some((sourceId) => yOrderByMatchId[sourceId] != null);
+        const rightHasSourceOrder = rightSources.some((sourceId) => yOrderByMatchId[sourceId] != null);
+        if (leftHasSourceOrder !== rightHasSourceOrder) {
+          return leftHasSourceOrder ? 1 : -1;
+        }
+        if (leftHasSourceOrder && rightHasSourceOrder) {
+          const leftAvgOrder =
+            leftSources
+              .map((sourceId) => yOrderByMatchId[sourceId])
+              .filter((value) => value != null)
+              .reduce((sum, value) => sum + value, 0) / leftSources.length;
+          const rightAvgOrder =
+            rightSources
+              .map((sourceId) => yOrderByMatchId[sourceId])
+              .filter((value) => value != null)
+              .reduce((sum, value) => sum + value, 0) / rightSources.length;
+          if (leftAvgOrder !== rightAvgOrder) {
+            return leftAvgOrder - rightAvgOrder;
+          }
+        }
+
+        const seedDelta = getSeedFallback(left) - getSeedFallback(right);
+        if (seedDelta !== 0) return seedDelta;
+        return Number(left?.id ?? 0) - Number(right?.id ?? 0);
+      });
+
+      const matchRows = sortedRoundMatches.map((match: any, matchIndex: number) => {
+        const matchId = Number(match?.id ?? 0);
+        yOrderByMatchId[matchId] = matchIndex;
+        const team1 = match?.stage_item_input1;
+        const team2 = match?.stage_item_input2;
+        const fallbackTeam1 = formatMatchInput1(t, stageItemsLookup, matchesLookup, match);
+        const fallbackTeam2 = formatMatchInput2(t, stageItemsLookup, matchesLookup, match);
+        const isTopBye =
+          match?.stage_item_input1_id == null &&
+          match?.stage_item_input1_winner_from_match_id == null &&
+          match?.stage_item_input1_loser_from_match_id == null;
+        const isBottomBye =
+          match?.stage_item_input2_id == null &&
+          match?.stage_item_input2_winner_from_match_id == null &&
+          match?.stage_item_input2_loser_from_match_id == null;
+        const team1Name =
+          isTopBye ? 'BYE' : String(team1?.team?.name ?? fallbackTeam1 ?? 'TBD').trim() || 'TBD';
+        const team2Name =
+          isBottomBye ? 'BYE' : String(team2?.team?.name ?? fallbackTeam2 ?? 'TBD').trim() || 'TBD';
+        const team1InputId = Number(match?.stage_item_input1_id ?? 0);
+        const team2InputId = Number(match?.stage_item_input2_id ?? 0);
+        const topSeed = String(team1?.slot ?? inputLookup[team1InputId]?.slot ?? '-');
+        const bottomSeed = String(team2?.slot ?? inputLookup[team2InputId]?.slot ?? '-');
+        const loserSourceIds = [
+          Number(match?.stage_item_input1_loser_from_match_id ?? 0),
+          Number(match?.stage_item_input2_loser_from_match_id ?? 0),
+        ].filter((sourceId) => Number.isFinite(sourceId) && sourceId > 0);
+        const receivedDropFromWinners = loserSourceIds.some(
+          (sourceId) => matchSectionById[sourceId] === 'WINNERS'
+        );
+        const matchNote =
+          activeBracketStageItem.type === 'DOUBLE_ELIMINATION' &&
+          roundMeta?.section === 'FINALS' &&
+          /reset/i.test(roundName)
+            ? 'Reset'
+            : receivedDropFromWinners
+              ? 'WB Drop'
+              : undefined;
+        const topScore = Number(match?.stage_item_input1_score ?? 0);
+        const bottomScore = Number(match?.stage_item_input2_score ?? 0);
+        const hasScoreWinner = topScore !== bottomScore;
+        const hasByeResolution = (isTopBye && !isBottomBye) || (!isTopBye && isBottomBye);
+        const startTimeRaw = String(match?.start_time ?? '').trim();
+        const startTimeMs = startTimeRaw === '' ? Number.NaN : Date.parse(startTimeRaw);
+        const hasStarted = Number.isFinite(startTimeMs) && startTimeMs <= nowTimestamp;
+        const matchStatus: 'PENDING' | 'IN_PROGRESS' | 'COMPLETE' =
+          hasScoreWinner || hasByeResolution
+            ? 'COMPLETE'
+            : hasStarted
+              ? 'IN_PROGRESS'
+              : 'PENDING';
+
+        return {
+          id: matchId,
+          sourceMatchIds: sourceMatchIdsByMatchId[matchId] ?? [],
+          topSeed,
+          topName: team1Name,
+          topScore,
+          bottomSeed,
+          bottomName: team2Name,
+          bottomScore,
+          note: matchNote,
+          status: matchStatus,
+        };
+      });
+
+      const column = {
+        id: `round-${round.id}`,
+        name: roundName,
+        matches: matchRows,
+      };
+      const sectionKey = roundMeta?.section ?? 'MAIN';
+      sectionColumns[sectionKey].push(column);
+    });
+
+    if (activeBracketStageItem.type === 'DOUBLE_ELIMINATION') {
+      return [
+        {
+          id: 'winners',
+          name: 'Winners Bracket',
+          description: 'Undefeated players remain here until their first loss.',
+          columns: sectionColumns.WINNERS,
+        },
+        {
+          id: 'losers',
+          name: 'Losers Bracket',
+          description: 'Players with one loss continue here. A second loss eliminates them.',
+          columns: sectionColumns.LOSERS,
+        },
+        {
+          id: 'finals',
+          name: 'Grand Finals',
+          description: 'LB champion faces WB champion. A reset match appears if needed.',
+          columns: sectionColumns.FINALS,
+        },
+      ].filter((section) => section.columns.length > 0);
+    }
+    return [
+      {
+        id: 'main',
+        name: 'Bracket',
+        description: 'Single-elimination progression.',
+        columns: sectionColumns.MAIN,
+      },
+    ].filter((section) => section.columns.length > 0);
+  }, [activeBracketStageItem, matchesLookup, stageItemsLookup, t]);
+  const bracketHasColumns = useMemo(
+    () => bracketSections.some((section) => section.columns.length > 0),
+    [bracketSections]
+  );
+  const eliminationRecords = useMemo(() => {
+    if (activeBracketStageItem == null) return [];
+
+    const eliminationLossThreshold = activeBracketStageItem.type === 'DOUBLE_ELIMINATION' ? 2 : 1;
+    const rowsByInputId = new Map<
+      number,
+      { inputId: number; seed: number; name: string; wins: number; losses: number }
+    >();
+
+    (activeBracketStageItem.inputs ?? []).forEach((input: any) => {
+      const inputId = Number(input?.id ?? 0);
+      if (!Number.isFinite(inputId) || inputId <= 0) return;
+      rowsByInputId.set(inputId, {
+        inputId,
+        seed: Number(input?.slot ?? 0),
+        name: String(input?.team?.name ?? 'TBD').trim() || 'TBD',
+        wins: 0,
+        losses: 0,
+      });
+    });
+
+    const rounds = [...(activeBracketStageItem.rounds ?? [])]
+      .filter((round: any) => !round?.is_draft)
+      .sort((left: any, right: any) => Number(left?.id ?? 0) - Number(right?.id ?? 0));
+    rounds.forEach((round: any) => {
+      (round?.matches ?? []).forEach((match: any) => {
+        const score1 = Number(match?.stage_item_input1_score ?? 0);
+        const score2 = Number(match?.stage_item_input2_score ?? 0);
+        if (score1 === score2) return;
+
+        const winnerInputId =
+          score1 > score2
+            ? Number(match?.stage_item_input1_id ?? 0)
+            : Number(match?.stage_item_input2_id ?? 0);
+        const loserInputId =
+          score1 > score2
+            ? Number(match?.stage_item_input2_id ?? 0)
+            : Number(match?.stage_item_input1_id ?? 0);
+        const winner = rowsByInputId.get(winnerInputId);
+        if (winner != null) winner.wins += 1;
+        const loser = rowsByInputId.get(loserInputId);
+        if (loser != null) loser.losses += 1;
+      });
+    });
+
+    return [...rowsByInputId.values()]
+      .map((row) => ({
+        ...row,
+        record: `${row.wins}-${row.losses}`,
+        eliminated: row.losses >= eliminationLossThreshold,
+      }))
+      .sort((left, right) => {
+        if (left.eliminated !== right.eliminated) return left.eliminated ? 1 : -1;
+        if (left.losses !== right.losses) return left.losses - right.losses;
+        if (left.wins !== right.wins) return right.wins - left.wins;
+        if (left.seed !== right.seed) return left.seed - right.seed;
+        return left.name.localeCompare(right.name);
+      });
+  }, [activeBracketStageItem]);
 
   if (swrStagesResponse.error || swrCourtsResponse.error) {
     return (
@@ -612,6 +1169,82 @@ export default function ResultsPage() {
     return `/league/base-health?tournament_id=${tournamentId}&match_id=${matchId}`;
   };
 
+  const getKarabastGameName = (matchToTrack: any) => {
+    const customName = String((matchToTrack as any)?.karabast_game_name ?? '').trim();
+    if (customName !== '') return customName;
+    const matchId = Number(matchToTrack?.id ?? 0);
+    if (!Number.isFinite(matchId) || matchId <= 0) return `SL-${tournamentData.id}-M0`;
+    return `SL-${tournamentData.id}-M${matchId}`;
+  };
+
+  const getKarabastLobbyUrl = (matchToTrack: any) => {
+    const customValue = String((matchToTrack as any)?.karabast_game_name ?? '').trim();
+    if (customValue === '') return null;
+    try {
+      const parsed = new URL(customValue);
+      if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+      if (parsed.hostname.toLowerCase() !== 'karabast.net') return null;
+      return parsed.toString();
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const copyText = async (value: string, title: string) => {
+    if (typeof window === 'undefined' || !navigator?.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(value);
+      showNotification({
+        color: 'green',
+        title,
+        message: '',
+      });
+    } catch (_error) {
+      showNotification({
+        color: 'red',
+        title: 'Could not copy to clipboard',
+        message: '',
+      });
+    }
+  };
+
+  const copyKarabastGameName = async (matchToTrack: any) => {
+    const lobbyUrl = getKarabastLobbyUrl(matchToTrack);
+    await copyText(
+      lobbyUrl ?? getKarabastGameName(matchToTrack),
+      lobbyUrl != null ? 'Karabast lobby URL copied' : 'Karabast lobby name copied'
+    );
+  };
+
+  const copyKarabastDeckForSlot = async (matchToTrack: any, slot: number) => {
+    const matchId = Number(matchToTrack?.id ?? 0);
+    if (!Number.isFinite(matchId) || matchId <= 0) return;
+    const response = await getKarabastMatchBundle(tournamentData.id, matchId);
+    const payload = response?.data?.data;
+    if (payload == null) return;
+    const players = Array.isArray((payload as any)?.players) ? (payload as any).players : [];
+    const selectedPlayer =
+      players.find((player: any) => Number(player?.slot ?? 0) === Number(slot)) ?? null;
+    const deckExport = selectedPlayer?.deck_export ?? null;
+    if (deckExport == null) {
+      const teamName = String(selectedPlayer?.team_name ?? '').trim();
+      showNotification({
+        color: 'red',
+        title: 'No SWUDB deck export found',
+        message:
+          teamName !== ''
+            ? `No submitted deck found for ${teamName}.`
+            : 'Save and submit decks for both players, then try again.',
+      });
+      return;
+    }
+    const teamName = String(selectedPlayer?.team_name ?? '').trim();
+    await copyText(
+      JSON.stringify(deckExport, null, 2),
+      teamName !== '' ? `${teamName} SWUDB deck copied` : 'SWUDB deck JSON copied'
+    );
+  };
+
   return (
     <TournamentLayout tournament_id={tournamentData.id}>
       <MatchModal
@@ -624,6 +1257,7 @@ export default function ResultsPage() {
         round={null}
         allowAdvancedSettings={isAdmin}
         allowDelete={isAdmin}
+        karabastEnabled={karabastEnabled}
       />
       <Group justify="space-between" align="center">
         <Title>{t('results_title')}</Title>
@@ -637,14 +1271,21 @@ export default function ResultsPage() {
           mt="sm"
           style={{
             background:
-              'linear-gradient(135deg, rgba(255,245,194,0.35) 0%, rgba(255,255,255,0.85) 55%, rgba(245,247,255,0.95) 100%)',
+              championBannerAvatarUrl != null
+                ? `linear-gradient(135deg, rgba(12, 16, 28, 0.86) 0%, rgba(12, 16, 28, 0.64) 60%, rgba(12, 16, 28, 0.74) 100%), url(${championBannerAvatarUrl})`
+                : 'linear-gradient(135deg, rgba(255,245,194,0.35) 0%, rgba(255,255,255,0.85) 55%, rgba(245,247,255,0.95) 100%)',
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
           }}
         >
           <Stack>
             <Group justify="space-between">
               <Group gap="xs">
-                <IconTrophy size={20} />
-                <Title order={4}>Event Champions</Title>
+                <IconTrophy size={20} color={championBannerAvatarUrl != null ? 'white' : undefined} />
+                <Title order={4} c={championBannerAvatarUrl != null ? 'white' : undefined}>
+                  Event Champions
+                </Title>
               </Group>
             </Group>
             <Group>
@@ -730,48 +1371,100 @@ export default function ResultsPage() {
           </Stack>
         </Card>
       ) : null}
-      {activeBracketStageItem != null ? (
+      {stages.length > 0 ? (
         <SectionErrorBoundary title="Could not render elimination bracket.">
           <Card withBorder mt="sm">
             <Stack>
-              <Group justify="space-between">
-                <Title order={4}>Elimination Bracket</Title>
-                <Group>
-                  {eliminationStageItems.map((stageItem: any) => (
-                    <Button
-                      key={stageItem.id}
-                      size="xs"
-                      variant={stageItem.id === activeBracketStageItem.id ? 'filled' : 'outline'}
-                      onClick={() => setSelectedBracketStageItemId(stageItem.id)}
-                    >
-                      {stageItem.name}
-                      {winnerByStageItemId[stageItem.id] != null
-                        ? ` | Winner: ${winnerByStageItemId[stageItem.id]}`
-                        : ''}
-                    </Button>
-                  ))}
-                </Group>
+              <Group justify="space-between" align="end">
+                <Stack gap={2}>
+                  <Title order={4}>Elimination Bracket</Title>
+                  <Text size="sm" c="dimmed">
+                    {selectedStage != null ? selectedStage.name : 'Select a stage'}
+                  </Text>
+                </Stack>
+                {activeBracketStageItem != null &&
+                winnerByStageItemId[activeBracketStageItem.id] != null ? (
+                  <Badge size="lg" color="yellow" variant="light">
+                    Winner: {winnerByStageItemId[activeBracketStageItem.id]}
+                  </Badge>
+                ) : null}
               </Group>
-              {winnerByStageItemId[activeBracketStageItem.id] != null ? (
-                <Badge size="lg" color="yellow" variant="light">
-                  Winner: {winnerByStageItemId[activeBracketStageItem.id]}
-                </Badge>
+
+              {stages.length > 1 ? (
+                useStageDropdown ? (
+                  <Select
+                    label="Stage"
+                    data={stageOptions}
+                    value={selectedStageId}
+                    onChange={(value) => setSelectedStageId(value)}
+                    allowDeselect={false}
+                  />
+                ) : (
+                  <Tabs
+                    value={selectedStageId}
+                    onChange={(value) => setSelectedStageId(value)}
+                    variant="outline"
+                  >
+                    <Tabs.List>
+                      {stages.map((stage: any) => (
+                        <Tabs.Tab key={stage.id} value={String(stage.id)}>
+                          {stage.name}
+                        </Tabs.Tab>
+                      ))}
+                    </Tabs.List>
+                  </Tabs>
+                )
               ) : null}
-              <RoundsGridCols
-                tournamentData={tournamentData}
-                swrStagesResponse={swrStagesResponse as any}
-                readOnly
-                stageItem={activeBracketStageItem}
-                displaySettings={{
-                  matchVisibility: 'all',
-                  setMatchVisibility: () => {},
-                  teamNamesDisplay: 'team-names',
-                  setTeamNamesDisplay: () => {},
-                  showManualSchedulingOptions: 'false',
-                  setShowManualSchedulingOptions: () => {},
-                }}
-                swrUpcomingMatchesResponse={null}
-              />
+
+              {eliminationStageItemsInSelectedStage.length > 1 ? (
+                <Select
+                  label="Bracket Stage Item"
+                  data={bracketStageItemOptions}
+                  value={selectedBracketStageItemId != null ? String(selectedBracketStageItemId) : null}
+                  onChange={(value) =>
+                    setSelectedBracketStageItemId(value != null ? Number(value) : null)
+                  }
+                  allowDeselect={false}
+                />
+              ) : null}
+
+              {activeBracketStageItem == null ? (
+                <Alert icon={<IconAlertCircle size={16} />} color="gray" radius="md">
+                  No elimination bracket in this stage yet.
+                </Alert>
+              ) : !bracketHasColumns ? (
+                <Alert icon={<IconAlertCircle size={16} />} color="gray" radius="md">
+                  No rounds available for this bracket yet.
+                </Alert>
+              ) : (
+                <BracketTree sections={bracketSections} />
+              )}
+              {eliminationRecords.length > 0 ? (
+                <Table mt="sm" highlightOnHover>
+                  <Table.Thead>
+                    <Table.Tr>
+                      <Table.Th>Seed</Table.Th>
+                      <Table.Th>Player</Table.Th>
+                      <Table.Th>Record</Table.Th>
+                      <Table.Th>Status</Table.Th>
+                    </Table.Tr>
+                  </Table.Thead>
+                  <Table.Tbody>
+                    {eliminationRecords.map((row) => (
+                      <Table.Tr key={row.inputId}>
+                        <Table.Td>{row.seed > 0 ? row.seed : '-'}</Table.Td>
+                        <Table.Td>{row.name}</Table.Td>
+                        <Table.Td>{row.record}</Table.Td>
+                        <Table.Td>
+                          <Badge color={row.eliminated ? 'red' : 'green'} variant="light">
+                            {row.eliminated ? 'Eliminated' : 'Active'}
+                          </Badge>
+                        </Table.Td>
+                      </Table.Tr>
+                    ))}
+                  </Table.Tbody>
+                </Table>
+              ) : null}
             </Stack>
           </Card>
         </SectionErrorBoundary>
@@ -788,6 +1481,11 @@ export default function ResultsPage() {
             winnerByStageItemId={winnerByStageItemId}
             resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
             buildBaseTrackerHref={buildBaseTrackerHref}
+            karabastEnabled={karabastEnabled}
+            getKarabastGameName={getKarabastGameName}
+            getKarabastLobbyUrl={getKarabastLobbyUrl}
+            copyKarabastGameName={copyKarabastGameName}
+            copyKarabastDeckForSlot={copyKarabastDeckForSlot}
           />
         </SectionErrorBoundary>
       </Center>

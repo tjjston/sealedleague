@@ -39,9 +39,8 @@ import {
   removeTournamentLogo,
 } from '@services/adapter';
 import {
-  archiveTournament,
   deleteTournament,
-  unarchiveTournament,
+  updateTournamentStatus,
   updateTournament,
 } from '@services/tournament';
 import dayjs from 'dayjs';
@@ -58,11 +57,9 @@ export function TournamentLogo({ tournament }: { tournament: Tournament | null }
 }
 
 function ArchiveTournamentButton({
-  t,
   tournament,
   swrTournamentResponse,
 }: {
-  t: any;
   tournament: Tournament;
   swrTournamentResponse: SWRResponse<TournamentResponse>;
 }) {
@@ -74,23 +71,21 @@ function ArchiveTournamentButton({
       size="lg"
       leftSection={<MdArchive size={36} />}
       onClick={async () => {
-        await archiveTournament(tournament.id).catch((response: any) =>
+        await updateTournamentStatus(tournament.id, 'CLOSED').catch((response: any) =>
           handleRequestError(response)
         );
         await swrTournamentResponse.mutate();
       }}
     >
-      {t('archive_tournament_button')}
+      Close Tournament
     </Button>
   );
 }
 
 function UnarchiveTournamentButton({
-  t,
   tournament,
   swrTournamentResponse,
 }: {
-  t: any;
   tournament: Tournament;
   swrTournamentResponse: SWRResponse<TournamentResponse>;
 }) {
@@ -102,13 +97,13 @@ function UnarchiveTournamentButton({
       size="lg"
       leftSection={<MdUnarchive size={36} />}
       onClick={async () => {
-        await unarchiveTournament(tournament.id).catch((response: any) =>
+        await updateTournamentStatus(tournament.id, 'OPEN').catch((response: any) =>
           handleRequestError(response)
         );
         await swrTournamentResponse.mutate();
       }}
     >
-      {t('unarchive_tournament_button')}
+      Reopen Tournament
     </Button>
   );
 }
@@ -326,16 +321,14 @@ function GeneralTournamentForm({
           {t('delete_tournament_button')}
         </Button>
 
-        {tournament.status === 'OPEN' ? (
-          <ArchiveTournamentButton
+        {tournament.status === 'CLOSED' ? (
+          <UnarchiveTournamentButton
             tournament={tournament}
-            t={t}
             swrTournamentResponse={swrTournamentResponse}
           />
         ) : (
-          <UnarchiveTournamentButton
+          <ArchiveTournamentButton
             tournament={tournament}
-            t={t}
             swrTournamentResponse={swrTournamentResponse}
           />
         )}

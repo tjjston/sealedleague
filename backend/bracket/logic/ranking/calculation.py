@@ -46,7 +46,12 @@ def set_statistics_for_stage_item_input(
         )
 
     match stage_item.type:
-        case StageType.ROUND_ROBIN | StageType.SINGLE_ELIMINATION | StageType.DOUBLE_ELIMINATION:
+        case (
+            StageType.ROUND_ROBIN
+            | StageType.REGULAR_SEASON_MATCHUP
+            | StageType.SINGLE_ELIMINATION
+            | StageType.DOUBLE_ELIMINATION
+        ):
             stats[stage_item_input_id].points += swiss_score_diff
 
         case StageType.SWISS:

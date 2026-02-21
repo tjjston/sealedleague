@@ -9,6 +9,7 @@ from urllib.request import urlopen
 
 SWU_DB_SET_ENDPOINT = "https://api.swu-db.com/cards/{set_code}"
 DEFAULT_SWU_SET_CODES: tuple[str, ...] = ("sor", "shd", "twi", "jtl", "lof", "ibh", "sec", "law")
+NON_BOOSTER_RARITIES = {"special"}
 _SWU_CACHE: dict[str, tuple[float, list[dict]]] = {}
 _SWU_CACHE_LOCK = Lock()
 
@@ -246,6 +247,11 @@ def _pick_many(cards: list[dict], count: int) -> list[dict]:
     return [random.choice(cards) for _ in range(count)]
 
 
+def _is_booster_pack_eligible(card: dict) -> bool:
+    rarity = str(card.get("rarity", "")).strip().lower()
+    return rarity not in NON_BOOSTER_RARITIES
+
+
 def simulate_sealed_draft(
     cards: Sequence[dict],
     *,
@@ -255,21 +261,43 @@ def simulate_sealed_draft(
     filtered_cards = filter_cards_for_deckbuilding(cards, set_codes=set_codes)
     all_filtered_cards = filter_cards_for_deckbuilding(cards)
 
-    scoped_leaders = [card for card in filtered_cards if card["type"].lower() == "leader"]
-    scoped_bases = [card for card in filtered_cards if card["type"].lower() == "base"]
-    scoped_non_leader_base = [
-        card for card in filtered_cards if card["type"].lower() not in {"leader", "base"}
+    scoped_booster_cards = [card for card in filtered_cards if _is_booster_pack_eligible(card)]
+    fallback_booster_cards = [
+        card for card in all_filtered_cards if _is_booster_pack_eligible(card)
     ]
 
-    fallback_leaders = [card for card in all_filtered_cards if card["type"].lower() == "leader"]
-    fallback_bases = [card for card in all_filtered_cards if card["type"].lower() == "base"]
+    scoped_leaders = [card for card in scoped_booster_cards if card["type"].lower() == "leader"]
+    scoped_bases = [card for card in scoped_booster_cards if card["type"].lower() == "base"]
+    scoped_non_leader_base = [
+        card for card in scoped_booster_cards if card["type"].lower() not in {"leader", "base"}
+    ]
+
+    fallback_leaders = [card for card in fallback_booster_cards if card["type"].lower() == "leader"]
+    fallback_bases = [card for card in fallback_booster_cards if card["type"].lower() == "base"]
     fallback_non_leader_base = [
+        card for card in fallback_booster_cards if card["type"].lower() not in {"leader", "base"}
+    ]
+
+    # Last-resort fallback to non-booster pools keeps simulation available for sparse data sets.
+    all_scoped_leaders = [card for card in filtered_cards if card["type"].lower() == "leader"]
+    all_scoped_bases = [card for card in filtered_cards if card["type"].lower() == "base"]
+    all_scoped_non_leader_base = [
+        card for card in filtered_cards if card["type"].lower() not in {"leader", "base"}
+    ]
+    all_fallback_leaders = [card for card in all_filtered_cards if card["type"].lower() == "leader"]
+    all_fallback_bases = [card for card in all_filtered_cards if card["type"].lower() == "base"]
+    all_fallback_non_leader_base = [
         card for card in all_filtered_cards if card["type"].lower() not in {"leader", "base"}
     ]
 
-    leaders = scoped_leaders if scoped_leaders else fallback_leaders
-    bases = scoped_bases if scoped_bases else fallback_bases
-    non_leader_base = scoped_non_leader_base if scoped_non_leader_base else fallback_non_leader_base
+    leaders = scoped_leaders or fallback_leaders or all_scoped_leaders or all_fallback_leaders
+    bases = scoped_bases or fallback_bases or all_scoped_bases or all_fallback_bases
+    non_leader_base = (
+        scoped_non_leader_base
+        or fallback_non_leader_base
+        or all_scoped_non_leader_base
+        or all_fallback_non_leader_base
+    )
     commons = [card for card in non_leader_base if card["rarity"].lower() == "common"]
     uncommons = [card for card in non_leader_base if card["rarity"].lower() == "uncommon"]
     rare_or_legendary = [

@@ -184,7 +184,10 @@ export default function HomePage() {
   }, [allTournaments, seasonFilterLoaded]);
 
   const eventLifecycleStatus = (tournament: any) => {
-    if (String(tournament?.status ?? '').toUpperCase() === 'ARCHIVED') return 'CLOSED';
+    const status = String(tournament?.status ?? '').toUpperCase();
+    if (status === 'OPEN' || status === 'PLANNED' || status === 'IN_PROGRESS' || status === 'CLOSED') {
+      return status;
+    }
     if (new Date(tournament?.start_time ?? '').getTime() > Date.now()) return 'PLANNED';
     return 'IN_PROGRESS';
   };

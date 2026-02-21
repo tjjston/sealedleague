@@ -33,7 +33,9 @@ tournaments = Table(
         "status",
         Enum(
             "OPEN",
-            "ARCHIVED",
+            "PLANNED",
+            "IN_PROGRESS",
+            "CLOSED",
             name="tournament_status",
         ),
         nullable=False,
@@ -91,6 +93,7 @@ season_memberships = Table(
     ),
     Column("can_manage_points", Boolean, nullable=False, server_default="f"),
     Column("can_manage_tournaments", Boolean, nullable=False, server_default="f"),
+    Column("hide_from_standings", Boolean, nullable=False, server_default="f"),
     UniqueConstraint("season_id", "user_id"),
 )
 
@@ -175,6 +178,11 @@ league_projected_schedule_items = Table(
     Column("title", String, nullable=False),
     Column("details", Text, nullable=True),
     Column("status", String, nullable=True),
+    Column("event_template", String, nullable=False, server_default="STANDARD"),
+    Column("regular_season_week_index", Integer, nullable=True),
+    Column("regular_season_games_per_opponent", Integer, nullable=True),
+    Column("regular_season_games_per_week", Integer, nullable=True),
+    Column("participant_user_ids", JSON, nullable=True),
     Column("sort_order", Integer, nullable=False, server_default="0", index=True),
     Column(
         "linked_tournament_id",
@@ -214,6 +222,7 @@ stage_items = Table(
             "DOUBLE_ELIMINATION",
             "SWISS",
             "ROUND_ROBIN",
+            "REGULAR_SEASON_MATCHUP",
             name="stage_type",
         ),
         nullable=False,
@@ -265,6 +274,7 @@ matches = Table(
     Column("margin_minutes", Integer, nullable=True),
     Column("custom_duration_minutes", Integer, nullable=True),
     Column("custom_margin_minutes", Integer, nullable=True),
+    Column("karabast_game_name", String, nullable=True),
     Column("round_id", BigInteger, ForeignKey("rounds.id"), nullable=False, index=True),
     Column("stage_item_input1_id", BigInteger, ForeignKey("stage_item_inputs.id"), nullable=True, index=True),
     Column("stage_item_input2_id", BigInteger, ForeignKey("stage_item_inputs.id"), nullable=True, index=True),
@@ -278,6 +288,18 @@ matches = Table(
     ),
     Column(
         "stage_item_input2_winner_from_match_id",
+        BigInteger,
+        ForeignKey("matches.id"),
+        nullable=True,
+    ),
+    Column(
+        "stage_item_input1_loser_from_match_id",
+        BigInteger,
+        ForeignKey("matches.id"),
+        nullable=True,
+    ),
+    Column(
+        "stage_item_input2_loser_from_match_id",
         BigInteger,
         ForeignKey("matches.id"),
         nullable=True,

@@ -414,11 +414,15 @@ export function getLeagueMetaAnalysis(
   return useSWR(`tournaments/${tournament_id}/league/meta_analysis${suffix}`, fetcher);
 }
 
-export function getLeagueAdminUsers(tournament_id: number | null): SWRResponse<any> {
+export function getLeagueAdminUsers(
+  tournament_id: number | null,
+  season_id?: number | null
+): SWRResponse<any> {
   if (tournament_id == null || tournament_id <= 0) {
     return useSWR(null, fetcher);
   }
-  return useSWR(`tournaments/${tournament_id}/league/admin/users`, fetcher);
+  const suffix = season_id == null ? '' : `?season_id=${season_id}`;
+  return useSWR(`tournaments/${tournament_id}/league/admin/users${suffix}`, fetcher);
 }
 
 export function getLeagueAdminSeasons(tournament_id: number | null): SWRResponse<any> {

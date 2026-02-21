@@ -31,12 +31,12 @@ export async function deleteTournament(tournament_id: number) {
   return createAxios().delete(`tournaments/${tournament_id}`);
 }
 
-export async function archiveTournament(tournament_id: number) {
-  return createAxios().post(`tournaments/${tournament_id}/change-status`, { status: 'ARCHIVED' });
-}
+export type TournamentStatus = 'OPEN' | 'PLANNED' | 'IN_PROGRESS' | 'CLOSED';
 
-export async function unarchiveTournament(tournament_id: number) {
-  return createAxios().post(`tournaments/${tournament_id}/change-status`, { status: 'OPEN' });
+export async function updateTournamentStatus(tournament_id: number, status: TournamentStatus) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/change-status`, { status })
+    .catch((response: any) => handleRequestError(response));
 }
 
 export async function updateTournament(

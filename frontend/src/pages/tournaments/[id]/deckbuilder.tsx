@@ -262,19 +262,55 @@ export default function DeckbuilderPage({
       : null;
   const swrSeasonsResponse = getLeagueSeasons(hasTournament ? activeTournamentId : null);
   const seasons = swrSeasonsResponse.data?.data ?? [];
+  const seasonOptions = useMemo(() => {
+    const byId = new Map<number, any>();
+    for (const season of seasons) {
+      const seasonId = Number(season?.season_id ?? 0);
+      if (!Number.isInteger(seasonId) || seasonId <= 0) continue;
+      const existing = byId.get(seasonId);
+      if (existing == null) {
+        byId.set(seasonId, season);
+        continue;
+      }
+      const existingIsActive = Boolean(existing?.is_active);
+      const candidateIsActive = Boolean(season?.is_active);
+      if (!existingIsActive && candidateIsActive) {
+        byId.set(seasonId, season);
+        continue;
+      }
+      if (existingIsActive === candidateIsActive) {
+        byId.set(seasonId, season);
+      }
+    }
+
+    return [...byId.values()].sort(
+      (left: any, right: any) => Number(left?.season_id ?? 0) - Number(right?.season_id ?? 0)
+    );
+  }, [seasons]);
+  const seasonNameCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    seasonOptions.forEach((season: any) => {
+      const key = String(season?.name ?? '').trim().toLowerCase();
+      if (key === '') return;
+      counts[key] = (counts[key] ?? 0) + 1;
+    });
+    return counts;
+  }, [seasonOptions]);
 
   useEffect(() => {
     setSelectedSeasonId(ALL_SEASONS_VALUE);
-    setSelectedTargetUserId(isAdmin ? ALL_DECK_OWNERS_VALUE : null);
+    setSelectedTargetUserId(null);
   }, [activeTournamentId, isAdmin]);
 
   useEffect(() => {
-    if (!hasTournament || seasons.length < 1) return;
+    if (!hasTournament || seasonOptions.length < 1) return;
     if (selectedSeasonId == null || selectedSeasonId === ALL_SEASONS_VALUE) return;
-    const selectedExists = seasons.some((season: any) => String(season.season_id) === selectedSeasonId);
+    const selectedExists = seasonOptions.some(
+      (season: any) => String(season.season_id) === selectedSeasonId
+    );
     if (selectedExists) return;
     setSelectedSeasonId(ALL_SEASONS_VALUE);
-  }, [hasTournament, seasons, selectedSeasonId]);
+  }, [hasTournament, seasonOptions, selectedSeasonId]);
 
   const selectedSeasonNumber =
     selectedSeasonId != null &&
@@ -285,6 +321,7 @@ export default function DeckbuilderPage({
 
   useEffect(() => {
     if (!isAdmin || !hasTournament || adminUsers.length < 1) return;
+    if (selectedTargetUserId === ALL_DECK_OWNERS_VALUE) return;
     const searchParams = new URLSearchParams(window.location.search);
     const queryTarget = searchParams.get('user_id');
     const queryTeamName = searchParams.get('team_name')?.trim().toLowerCase();
@@ -305,7 +342,14 @@ export default function DeckbuilderPage({
       setSelectedTargetUserId(String(fallback.user_id));
       return;
     }
-    setSelectedTargetUserId(ALL_DECK_OWNERS_VALUE);
+    const firstPlayer = adminUsers.find(
+      (row: any) => String(row.account_type ?? '').toUpperCase() !== 'ADMIN'
+    );
+    if (firstPlayer != null) {
+      setSelectedTargetUserId(String(firstPlayer.user_id));
+      return;
+    }
+    setSelectedTargetUserId(String(adminUsers[0].user_id));
   }, [
     adminUsers,
     hasTournament,
@@ -1092,7 +1136,7 @@ export default function DeckbuilderPage({
                   ]}
                 />
               )}
-              {seasons.length > 0 && (
+              {seasonOptions.length > 0 && (
                 <Select
                   label="Season"
                   value={selectedSeasonId}
@@ -1101,9 +1145,13 @@ export default function DeckbuilderPage({
                   clearable
                   data={[
                     { value: ALL_SEASONS_VALUE, label: 'All seasons (deck carryover)' },
-                    ...seasons.map((season: any) => ({
+                    ...seasonOptions.map((season: any) => ({
                       value: String(season.season_id),
-                      label: `${season.name}${season.is_active ? ' (Active)' : ''}`,
+                      label: `${season.name}${season.is_active ? ' (Active)' : ''}${
+                        (seasonNameCounts[String(season.name ?? '').trim().toLowerCase()] ?? 0) > 1
+                          ? ` [#${season.season_id}]`
+                          : ''
+                      }`,
                     })),
                   ]}
                 />

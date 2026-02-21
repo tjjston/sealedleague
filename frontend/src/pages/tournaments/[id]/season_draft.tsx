@@ -62,7 +62,7 @@ export default function SeasonDraftPage({
   standalone?: boolean;
 }) {
   const { tournamentData } = getTournamentIdFromRouter();
-  const swrTournamentsResponse = getTournaments('OPEN');
+  const swrTournamentsResponse = getTournaments('ALL');
   const tournaments = swrTournamentsResponse.data?.data ?? [];
   const [selectedTournamentId, setSelectedTournamentId] = useState<string | null>(null);
   const [selectedSourceByTarget, setSelectedSourceByTarget] = useState<Record<string, string | null>>({});

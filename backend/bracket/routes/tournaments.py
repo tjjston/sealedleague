@@ -83,7 +83,7 @@ async def get_tournament(
 @router.get("/tournaments", response_model=TournamentsResponse)
 async def get_tournaments(
     user: UserPublic | None = Depends(user_authenticated_or_public_dashboard_by_endpoint_name),
-    filter_: Literal["ALL", "OPEN", "ARCHIVED"] = "OPEN",
+    filter_: Literal["ALL", "OPEN", "PLANNED", "IN_PROGRESS", "CLOSED"] = "OPEN",
     endpoint_name: str | None = None,
 ) -> TournamentsResponse:
     match user, endpoint_name:
@@ -144,7 +144,7 @@ async def change_status(
     _: UserPublic = Depends(user_authenticated_for_tournament),
 ) -> SuccessResponse:
     """
-    Make a tournament archived or non-archived.
+    Change tournament status.
     """
 
     tournament = await sql_get_tournament(tournament_id)

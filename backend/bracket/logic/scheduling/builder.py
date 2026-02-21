@@ -1,7 +1,12 @@
 from fastapi import HTTPException
 
 from bracket.logic.ranking.calculation import recalculate_ranking_for_stage_item
+from bracket.logic.ranking.elimination import (
+    auto_advance_byes_in_elimination_stage_item,
+    update_inputs_in_complete_elimination_stage_item,
+)
 from bracket.logic.scheduling.elimination import (
+    build_double_elimination_stage_item,
     build_single_elimination_stage_item,
     get_number_of_rounds_to_create_single_elimination,
 )
@@ -19,35 +24,49 @@ from bracket.models.db.stage_item_inputs import (
 )
 from bracket.models.db.team import FullTeamWithPlayers
 from bracket.models.db.util import StageWithStageItems
-from bracket.sql.rounds import get_next_round_name, sql_create_round
+from bracket.sql.rounds import sql_create_round
 from bracket.sql.stage_items import get_stage_item
+from bracket.sql.tournaments import sql_get_tournament
 from bracket.utils.id_types import StageId, StageItemId, TournamentId
 from tests.integration_tests.mocks import MOCK_NOW
 
 
 async def create_rounds_for_new_stage_item(
-    tournament_id: TournamentId, stage_item: StageItem
+    _tournament_id: TournamentId, stage_item: StageItem
 ) -> None:
-    rounds_count: int
+    round_names: list[str]
     match stage_item.type:
         case StageType.ROUND_ROBIN:
             rounds_count = get_number_of_rounds_to_create_round_robin(stage_item.team_count)
+            round_names = [f"Round {index}" for index in range(1, rounds_count + 1)]
+        case StageType.REGULAR_SEASON_MATCHUP:
+            rounds_count = get_number_of_rounds_to_create_round_robin(stage_item.team_count)
+            round_names = [f"Round {index}" for index in range(1, rounds_count + 1)]
         case StageType.SINGLE_ELIMINATION:
             rounds_count = get_number_of_rounds_to_create_single_elimination(stage_item.team_count)
+            round_names = [f"Round {index}" for index in range(1, rounds_count + 1)]
         case StageType.DOUBLE_ELIMINATION:
-            rounds_count = get_number_of_rounds_to_create_single_elimination(stage_item.team_count)
+            winners_round_count = get_number_of_rounds_to_create_single_elimination(
+                stage_item.team_count
+            )
+            losers_round_count = 2 * winners_round_count - 2
+            round_names = (
+                [f"WB Round {index}" for index in range(1, winners_round_count + 1)]
+                + [f"LB Round {index}" for index in range(1, losers_round_count + 1)]
+                + ["Grand Final", "Grand Final Reset"]
+            )
         case StageType.SWISS:
             return None
         case other:
             raise NotImplementedError(f"No round creation implementation for {other}")
 
-    for _ in range(rounds_count):
+    for round_name in round_names:
         await sql_create_round(
             RoundInsertable(
                 created=MOCK_NOW,
                 is_draft=False,
                 stage_item_id=stage_item.id,
-                name=await get_next_round_name(tournament_id, stage_item.id),
+                name=round_name,
             ),
         )
 
@@ -59,10 +78,12 @@ async def build_matches_for_stage_item(stage_item: StageItem, tournament_id: Tou
     match stage_item.type:
         case StageType.ROUND_ROBIN:
             await build_round_robin_stage_item(tournament_id, stage_item_with_rounds)
+        case StageType.REGULAR_SEASON_MATCHUP:
+            await build_round_robin_stage_item(tournament_id, stage_item_with_rounds)
         case StageType.SINGLE_ELIMINATION:
             await build_single_elimination_stage_item(tournament_id, stage_item_with_rounds)
         case StageType.DOUBLE_ELIMINATION:
-            await build_single_elimination_stage_item(tournament_id, stage_item_with_rounds)
+            await build_double_elimination_stage_item(tournament_id, stage_item_with_rounds)
         case StageType.SWISS:
             return None
 
@@ -70,6 +91,17 @@ async def build_matches_for_stage_item(stage_item: StageItem, tournament_id: Tou
             raise HTTPException(
                 400, f"Cannot automatically create matches for stage type {stage_item.type}"
             )
+
+    stage_item_with_rounds = await get_stage_item(tournament_id, stage_item.id)
+    if stage_item.type in {StageType.SINGLE_ELIMINATION, StageType.DOUBLE_ELIMINATION}:
+        await update_inputs_in_complete_elimination_stage_item(
+            tournament_id, stage_item_with_rounds.id
+        )
+        stage_item_with_rounds = await auto_advance_byes_in_elimination_stage_item(
+            tournament_id,
+            stage_item_with_rounds,
+            await sql_get_tournament(tournament_id),
+        )
 
     await recalculate_ranking_for_stage_item(tournament_id, stage_item_with_rounds)
 
@@ -83,7 +115,7 @@ def determine_available_inputs(
 
     Inputs are either from:
     - Teams directly
-    - Previous ROUND_ROBIN or SWISS stage items (tentative options)
+    - Previous ROUND_ROBIN, REGULAR_SEASON_MATCHUP, or SWISS stage items (tentative options)
     """
     all_team_options = {
         team.id: StageItemInputOptionFinal(team_id=team.id, already_taken=False) for team in teams
@@ -98,7 +130,11 @@ def determine_available_inputs(
         )
         for stage in stages
         for stage_item in stage.stage_items
-        if stage_item.type in {StageType.ROUND_ROBIN, StageType.SWISS}
+        if stage_item.type in {
+            StageType.ROUND_ROBIN,
+            StageType.REGULAR_SEASON_MATCHUP,
+            StageType.SWISS,
+        }
         for winner_position in range(1, stage_item.team_count + 1)
     }
 

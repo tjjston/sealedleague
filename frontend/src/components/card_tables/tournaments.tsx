@@ -39,7 +39,9 @@ function Stat({ title, value }: { title: string; value: any }) {
 function TournamentCard({ tournament }: { tournament: Tournament }) {
   const { t } = useTranslation();
   const lifecycleStatus = useMemo(() => {
-    if (tournament.status === 'ARCHIVED') return 'CLOSED';
+    if (tournament.status === 'OPEN' || tournament.status === 'PLANNED' || tournament.status === 'IN_PROGRESS' || tournament.status === 'CLOSED') {
+      return tournament.status;
+    }
     if (new Date(tournament.start_time).getTime() > Date.now()) return 'PLANNED';
     return 'IN_PROGRESS';
   }, [tournament.start_time, tournament.status]);
@@ -92,9 +94,9 @@ function TournamentCard({ tournament }: { tournament: Tournament }) {
                 color="yellow"
                 variant="outline"
                 size="lg"
-                style={{ visibility: tournament.status === 'ARCHIVED' ? 'visible' : 'hidden' }}
+                style={{ visibility: tournament.status === 'CLOSED' ? 'visible' : 'hidden' }}
               >
-                {t('archived_label')}
+                Closed
               </Badge>
               <Button
                 component={PreloadLink}

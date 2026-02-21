@@ -37,7 +37,7 @@ async def sql_get_tournament_by_endpoint_name(endpoint_name: str) -> Tournament 
 async def sql_get_tournaments(
     club_ids: tuple[int, ...] | None = None,
     endpoint_name: str | None = None,
-    filter_: Literal["ALL", "OPEN", "ARCHIVED"] = "ALL",
+    filter_: Literal["ALL", "OPEN", "PLANNED", "IN_PROGRESS", "CLOSED"] = "ALL",
 ) -> list[Tournament]:
     query = """
         SELECT t.*, c.name AS club_name
@@ -55,10 +55,9 @@ async def sql_get_tournaments(
         query += "AND t.dashboard_endpoint = :endpoint_name"
         params = {**params, "endpoint_name": endpoint_name}
 
-    if filter_ == "OPEN":
-        query += "AND t.status = 'OPEN'"
-    elif filter_ == "ARCHIVED":
-        query += "AND t.status = 'ARCHIVED'"
+    if filter_ != "ALL":
+        query += "AND t.status = :status_filter"
+        params["status_filter"] = filter_
 
     result = await database.fetch_all(query=query, values=params)
     return [Tournament.model_validate(x) for x in result]
@@ -100,14 +99,17 @@ async def sql_update_tournament_status(
     query = """
         UPDATE tournaments
         SET
-            status = :state,
-            dashboard_public = :dashboard_public
+            status = CAST(:state AS tournament_status),
+            dashboard_public = CASE
+                WHEN CAST(:state AS tournament_status) = 'CLOSED'::tournament_status
+                    THEN false
+                ELSE dashboard_public
+            END
         WHERE tournaments.id = :tournament_id
         """
 
-    # Make dashboard non-public when archiving.
-    # When tournament is archived, setting dashboard_public to False shouldn't have an effect.
-    params = {"tournament_id": tournament_id, "state": body.status.value, "dashboard_public": False}
+    # Make dashboard non-public when closing the tournament.
+    params = {"tournament_id": tournament_id, "state": body.status.value}
     await database.execute(query=query, values=params)
 
 

@@ -2,10 +2,12 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   HoverCard,
   FileInput,
   Group,
   Image,
+  Select,
   Stack,
   Table,
   Text,
@@ -15,10 +17,13 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import { showNotification } from '@mantine/notifications';
 
+import RequestErrorAlert from '@components/utils/error_alert';
+import PreloadLink from '@components/utils/link';
 import { getTournamentIdFromRouter } from '@components/utils/util';
 import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
 import {
+  getUser,
   getLeagueAdminSeasons,
   getLeagueAdminUsers,
   getLeagueSeasonHistory,
@@ -31,6 +36,7 @@ import {
   exportSeasonStandingsCsv,
   importSeasonStandingsCsv,
   updateLeagueSeason,
+  updateSeasonPrivileges,
 } from '@services/league';
 export default function SeasonStandingsPage({
   standalone = false,
@@ -38,7 +44,7 @@ export default function SeasonStandingsPage({
   standalone?: boolean;
 }) {
   const { tournamentData } = getTournamentIdFromRouter();
-  const swrTournamentsResponse = getTournaments('OPEN');
+  const swrTournamentsResponse = getTournaments('ALL');
   const tournaments = swrTournamentsResponse.data?.data ?? [];
   const [selectedTournamentId, setSelectedTournamentId] = useState<string | null>(null);
 
@@ -55,31 +61,106 @@ export default function SeasonStandingsPage({
     : tournamentData.id;
 
   const swrStandingsResponse = getLeagueSeasonHistory(activeTournamentId);
+  const swrCurrentUserResponse = getUser();
   const swrUserDirectoryResponse = getUserDirectory();
-  const swrAdminUsersResponse = getLeagueAdminUsers(activeTournamentId);
-  const swrAdminSeasonsResponse = getLeagueAdminSeasons(activeTournamentId);
-  const isAdmin = swrAdminUsersResponse.data != null || swrAdminSeasonsResponse.data != null;
+  const isAdmin = String(swrCurrentUserResponse.data?.data?.account_type ?? 'REGULAR') === 'ADMIN';
+  const swrAdminSeasonsResponse = getLeagueAdminSeasons(isAdmin ? activeTournamentId : null);
   const seasons = swrStandingsResponse.data?.data?.seasons;
+  const seasonHistoryRows = useMemo(() => {
+    const byId = new Map<number, any>();
+    for (const season of seasons ?? []) {
+      const seasonId = Number(season?.season_id ?? 0);
+      if (!Number.isInteger(seasonId) || seasonId <= 0) continue;
+      const existing = byId.get(seasonId);
+      if (existing == null) {
+        byId.set(seasonId, season);
+        continue;
+      }
+      const existingIsActive = Boolean(existing?.is_active);
+      const candidateIsActive = Boolean(season?.is_active);
+      if (!existingIsActive && candidateIsActive) {
+        byId.set(seasonId, season);
+        continue;
+      }
+      if (existingIsActive === candidateIsActive) {
+        byId.set(seasonId, season);
+      }
+    }
+    return [...byId.values()].sort(
+      (left: any, right: any) => Number(left?.season_id ?? 0) - Number(right?.season_id ?? 0)
+    );
+  }, [seasons]);
   const adminSeasons = swrAdminSeasonsResponse.data?.data;
   const cumulativeRows = swrStandingsResponse.data?.data?.cumulative ?? [];
   const [importFile, setImportFile] = useState<File | null>(null);
   const [seasonName, setSeasonName] = useState('');
   const [seasonNameDrafts, setSeasonNameDrafts] = useState<Record<number, string>>({});
   const [seasonExpanded, setSeasonExpanded] = useState<Record<number, boolean>>({});
+  const [seasonVisibilitySeasonId, setSeasonVisibilitySeasonId] = useState<number | null>(null);
 
-  const seasonRows = useMemo(
-    () =>
-      (adminSeasons != null && adminSeasons.length > 0
+  const seasonRows = useMemo(() => {
+    const sourceRows =
+      adminSeasons != null && adminSeasons.length > 0
         ? adminSeasons.map((season: any) => ({
             season_id: Number(season.season_id),
             season_name: String(season.name ?? ''),
+            is_active: Boolean(season.is_active),
           }))
-        : (seasons ?? []).map((season: any) => ({
+        : seasonHistoryRows.map((season: any) => ({
             season_id: Number(season.season_id),
             season_name: String(season.season_name ?? ''),
-          }))) as Array<{ season_id: number; season_name: string }>,
-    [adminSeasons, seasons]
+            is_active: Boolean(season.is_active),
+          }));
+
+    const byId = new Map<number, { season_id: number; season_name: string; is_active: boolean }>();
+    for (const row of sourceRows) {
+      if (!Number.isInteger(row.season_id) || row.season_id <= 0) continue;
+      const existing = byId.get(row.season_id);
+      if (existing == null) {
+        byId.set(row.season_id, row);
+        continue;
+      }
+      if (!existing.is_active && row.is_active) {
+        byId.set(row.season_id, row);
+        continue;
+      }
+      if (existing.is_active === row.is_active) {
+        byId.set(row.season_id, row);
+      }
+    }
+
+    return [...byId.values()]
+      .sort((left, right) => left.season_id - right.season_id)
+      .map((row) => ({ season_id: row.season_id, season_name: row.season_name }));
+  }, [adminSeasons, seasonHistoryRows]);
+  const swrAdminUsersResponse = getLeagueAdminUsers(
+    isAdmin ? activeTournamentId : null,
+    isAdmin ? seasonVisibilitySeasonId : null
   );
+  const adminUsers = swrAdminUsersResponse.data?.data ?? [];
+
+  useEffect(() => {
+    if (seasonRows.length < 1) {
+      setSeasonVisibilitySeasonId(null);
+      return;
+    }
+    const activeSeasonId =
+      Number(
+        seasonHistoryRows.find((season: any) => Boolean(season?.is_active))?.season_id ?? 0
+      ) || null;
+    setSeasonVisibilitySeasonId((previous) => {
+      if (
+        previous != null &&
+        seasonRows.some((row) => Number(row.season_id) === Number(previous))
+      ) {
+        return previous;
+      }
+      if (activeSeasonId != null && seasonRows.some((row) => Number(row.season_id) === activeSeasonId)) {
+        return activeSeasonId;
+      }
+      return seasonRows[0].season_id;
+    });
+  }, [seasonRows, seasonHistoryRows]);
 
   useEffect(() => {
     setSeasonNameDrafts((previous) => {
@@ -127,6 +208,21 @@ export default function SeasonStandingsPage({
         <Table.Tbody>
           {rows.map((row: any, index: number) => {
             const showcase = showcaseByUserName[String(row.user_name ?? '').trim().toLowerCase()] ?? null;
+            const profileHref =
+              Number.isFinite(Number(row.user_id)) && Number(row.user_id) > 0
+                ? `/league/players/${row.user_id}`
+                : null;
+            const playerNameText = (
+              <Text fw={600} td="underline" style={{ textDecorationStyle: 'dotted' }}>
+                {row.user_name}
+              </Text>
+            );
+            const playerNameNode =
+              profileHref != null ? (
+                <PreloadLink href={profileHref}>{playerNameText}</PreloadLink>
+              ) : (
+                playerNameText
+              );
             return (
               <Table.Tr key={`${row.user_id}-${index}`}>
                 <Table.Td>{index + 1}</Table.Td>
@@ -134,11 +230,7 @@ export default function SeasonStandingsPage({
                   <Stack gap={0}>
                     {showcase != null ? (
                       <HoverCard width={240} shadow="md" position="right">
-                        <HoverCard.Target>
-                          <Text fw={600} td="underline" style={{ textDecorationStyle: 'dotted' }}>
-                            {row.user_name}
-                          </Text>
-                        </HoverCard.Target>
+                        <HoverCard.Target>{playerNameNode}</HoverCard.Target>
                         <HoverCard.Dropdown>
                           <Stack gap={6}>
                             <Text fw={700} size="sm">
@@ -152,7 +244,13 @@ export default function SeasonStandingsPage({
                         </HoverCard.Dropdown>
                       </HoverCard>
                     ) : (
-                      <Text fw={600}>{row.user_name}</Text>
+                      profileHref != null ? (
+                        <PreloadLink href={profileHref}>
+                          <Text fw={600}>{row.user_name}</Text>
+                        </PreloadLink>
+                      ) : (
+                        <Text fw={600}>{row.user_name}</Text>
+                      )
                     )}
                     <Text size="xs" c="dimmed">
                       {row.user_email}
@@ -191,6 +289,8 @@ export default function SeasonStandingsPage({
     <Stack>
       <Title>Season Standings</Title>
       <Text c="dimmed">Cumulative points and league accolades for this active season.</Text>
+      {swrStandingsResponse.error && <RequestErrorAlert error={swrStandingsResponse.error} />}
+      {swrAdminSeasonsResponse.error && <RequestErrorAlert error={swrAdminSeasonsResponse.error} />}
       {isAdmin && (
         <Card withBorder>
           <Stack>
@@ -331,6 +431,81 @@ export default function SeasonStandingsPage({
           </Stack>
         </Card>
       )}
+      {isAdmin && (
+        <Card withBorder>
+          <Stack>
+            <Group justify="space-between" align="end">
+              <Title order={4}>Season Player Visibility</Title>
+              <Select
+                label="Season"
+                value={seasonVisibilitySeasonId != null ? String(seasonVisibilitySeasonId) : null}
+                onChange={(value) =>
+                  setSeasonVisibilitySeasonId(value != null ? Number(value) : null)
+                }
+                data={seasonRows.map((row) => ({
+                  value: String(row.season_id),
+                  label: row.season_name,
+                }))}
+                allowDeselect={false}
+                style={{ minWidth: 260 }}
+              />
+            </Group>
+            <Text c="dimmed" size="sm">
+              Hide/unhide individual players for the selected season standings.
+            </Text>
+            {swrAdminUsersResponse.error && <RequestErrorAlert error={swrAdminUsersResponse.error} />}
+            <Table stickyHeader>
+              <Table.Thead>
+                <Table.Tr>
+                  <Table.Th>Player</Table.Th>
+                  <Table.Th>Email</Table.Th>
+                  <Table.Th>Hide From Standings</Table.Th>
+                </Table.Tr>
+              </Table.Thead>
+              <Table.Tbody>
+                {adminUsers.map((user: any) => (
+                  <Table.Tr key={String(user.user_id)}>
+                    <Table.Td>{String(user.user_name ?? '')}</Table.Td>
+                    <Table.Td>{String(user.user_email ?? '')}</Table.Td>
+                    <Table.Td>
+                      <Checkbox
+                        checked={Boolean(user.hide_from_standings)}
+                        disabled={seasonVisibilitySeasonId == null}
+                        onChange={async (event) => {
+                          if (seasonVisibilitySeasonId == null || activeTournamentId <= 0) return;
+                          await updateSeasonPrivileges(
+                            activeTournamentId,
+                            Number(user.user_id),
+                            {
+                              role:
+                                String(user.role ?? 'PLAYER').toUpperCase() === 'ADMIN'
+                                  ? 'ADMIN'
+                                  : 'PLAYER',
+                              can_manage_points: Boolean(user.can_manage_points),
+                              can_manage_tournaments: Boolean(user.can_manage_tournaments),
+                              hide_from_standings: event.currentTarget.checked,
+                            },
+                            seasonVisibilitySeasonId
+                          );
+                          await swrAdminUsersResponse.mutate();
+                          await swrStandingsResponse.mutate();
+                          showNotification({
+                            color: 'green',
+                            title: event.currentTarget.checked
+                              ? 'Player hidden from season standings'
+                              : 'Player shown in season standings',
+                            message: '',
+                          });
+                        }}
+                      />
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              </Table.Tbody>
+            </Table>
+          </Stack>
+        </Card>
+      )}
       {standalone && isAdmin && (
         <Card withBorder>
           <Group align="end">
@@ -384,7 +559,7 @@ export default function SeasonStandingsPage({
         </Title>
         <StandingsTable rows={cumulativeRows} />
       </Card>
-      {(seasons ?? []).map((season: any) => (
+      {seasonHistoryRows.map((season: any) => (
         <Card withBorder key={season.season_id}>
           <Group justify="space-between" mb="sm">
             <Title order={4}>{season.season_name}</Title>

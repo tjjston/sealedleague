@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException
 from starlette import status
 
@@ -13,7 +15,10 @@ from bracket.logic.planning.matches import (
 from bracket.logic.ranking.calculation import (
     recalculate_ranking_for_stage_item,
 )
-from bracket.logic.ranking.elimination import update_inputs_in_subsequent_elimination_rounds
+from bracket.logic.ranking.elimination import (
+    auto_advance_byes_in_elimination_stage_item,
+    update_inputs_in_subsequent_elimination_rounds,
+)
 from bracket.logic.scheduling.upcoming_matches import (
     get_draft_round_in_stage_item,
     get_upcoming_matches_for_swiss,
@@ -21,10 +26,14 @@ from bracket.logic.scheduling.upcoming_matches import (
 from bracket.models.db.match import (
     Match,
     MatchBody,
+    MatchKarabastBundle,
+    MatchKarabastDeckExport,
+    MatchKarabastGameNameBody,
     MatchCreateBody,
     MatchCreateBodyFrontend,
     MatchFilter,
     MatchRescheduleBody,
+    MatchWithDetails,
 )
 from bracket.models.db.stage_item import StageType
 from bracket.models.db.tournament import Tournament
@@ -34,10 +43,26 @@ from bracket.routes.auth import (
     user_authenticated_for_tournament,
     user_authenticated_for_tournament_member,
 )
-from bracket.routes.models import SingleMatchResponse, SuccessResponse, UpcomingMatchesResponse
+from bracket.routes.models import (
+    MatchKarabastBundleResponse,
+    SingleMatchResponse,
+    SuccessResponse,
+    UpcomingMatchesResponse,
+)
 from bracket.routes.util import disallow_archived_tournament, match_dependency
 from bracket.sql.courts import get_all_courts_in_tournament
-from bracket.sql.matches import sql_create_match, sql_delete_match, sql_update_match
+from bracket.sql.league import (
+    get_deck_by_id,
+    get_decks_for_tournament_club_users,
+    get_decks_for_tournament_scope,
+    get_tournament_applications,
+)
+from bracket.sql.matches import (
+    sql_create_match,
+    sql_delete_match,
+    sql_update_karabast_game_name,
+    sql_update_match,
+)
 from bracket.sql.players import recalculate_tournament_records
 from bracket.sql.rounds import get_round_by_id
 from bracket.sql.stage_items import get_stage_item
@@ -45,6 +70,7 @@ from bracket.sql.stages import get_full_tournament_details
 from bracket.sql.tournaments import sql_get_tournament
 from bracket.sql.validation import check_foreign_keys_belong_to_tournament
 from bracket.utils.id_types import MatchId, StageItemId, TournamentId
+from bracket.utils.swudb import build_swudb_deck_export
 from bracket.utils.types import assert_some
 
 router = APIRouter(prefix=config.api_prefix)
@@ -94,6 +120,117 @@ async def user_is_participant_in_match(
         },
     )
     return row is not None
+
+
+def normalize_person_name(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def normalize_karabast_game_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized if normalized != "" else None
+
+
+def is_karabast_tournament(tournament: Tournament) -> bool:
+    return normalize_person_name(tournament.club_name) == "karabast"
+
+
+def default_karabast_game_name(tournament_id: TournamentId, match_id: MatchId) -> str:
+    return f"SL-{int(tournament_id)}-M{int(match_id)}"
+
+
+async def get_match_with_details_for_tournament(
+    tournament_id: TournamentId, match_id: MatchId
+) -> MatchWithDetails:
+    stages = await get_full_tournament_details(tournament_id, no_draft_rounds=False)
+    for stage in stages:
+        for stage_item in stage.stage_items:
+            for round_ in stage_item.rounds:
+                for match in round_.matches:
+                    if int(match.id) == int(match_id):
+                        return match
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Could not find match with id {match_id}",
+    )
+
+
+async def ensure_regular_season_match_has_submitted_decks(
+    tournament_id: TournamentId, match: Match
+) -> None:
+    applications = await get_tournament_applications(tournament_id)
+    applications_by_name = {
+        normalize_person_name(application.user_name): application for application in applications
+    }
+
+    missing_names: list[str] = []
+    for stage_input in [match.stage_item_input1, match.stage_item_input2]:
+        team_name = str(getattr(getattr(stage_input, "team", None), "name", "")).strip()
+        if team_name == "":
+            continue
+        application = applications_by_name.get(normalize_person_name(team_name))
+        if application is None or application.deck_id is None:
+            missing_names.append(team_name)
+
+    if len(missing_names) < 1:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "All players in a regular season matchup must submit a deck before entering scores. "
+            f"Missing submission: {', '.join(sorted(set(missing_names)))}"
+        ),
+    )
+
+
+async def maybe_auto_complete_double_elimination_reset(
+    tournament_id: TournamentId,
+    stage_item: Any,
+    updated_match_id: MatchId,
+    tournament: Tournament,
+) -> None:
+    ordered_rounds = sorted(stage_item.rounds, key=lambda round_: int(round_.id))
+    if len(ordered_rounds) < 2:
+        return
+
+    grand_final_round = ordered_rounds[-2]
+    reset_round = ordered_rounds[-1]
+    if len(grand_final_round.matches) != 1 or len(reset_round.matches) != 1:
+        return
+
+    grand_final_match = grand_final_round.matches[0]
+    reset_match = reset_round.matches[0]
+    if int(grand_final_match.id) != int(updated_match_id):
+        return
+    if grand_final_match.stage_item_input1_score == grand_final_match.stage_item_input2_score:
+        return
+
+    winners_bracket_champion_won = (
+        grand_final_match.stage_item_input1_score > grand_final_match.stage_item_input2_score
+    )
+    if not winners_bracket_champion_won:
+        return
+
+    if reset_match.stage_item_input1_score != 0 or reset_match.stage_item_input2_score != 0:
+        return
+
+    await sql_update_match(
+        reset_match.id,
+        MatchBody(
+            round_id=reset_match.round_id,
+            stage_item_input1_score=1,
+            stage_item_input2_score=0,
+            court_id=reset_match.court_id,
+            custom_duration_minutes=reset_match.custom_duration_minutes,
+            custom_margin_minutes=reset_match.custom_margin_minutes,
+        ),
+        tournament,
+    )
+    refreshed_stage_item = await get_stage_item(tournament_id, stage_item.id)
+    await recalculate_ranking_for_stage_item(tournament_id, refreshed_stage_item)
 
 
 @router.get(
@@ -206,6 +343,140 @@ async def reschedule_match(
     return SuccessResponse()
 
 
+@router.put(
+    "/tournaments/{tournament_id}/matches/{match_id}/karabast_game_name",
+    response_model=SuccessResponse,
+)
+async def put_karabast_game_name(
+    tournament_id: TournamentId,
+    match_id: MatchId,
+    body: MatchKarabastGameNameBody,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+    tournament: Tournament = Depends(disallow_archived_tournament),
+) -> SuccessResponse:
+    if not is_karabast_tournament(tournament):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Karabast game name is only available for Karabast tournaments",
+        )
+
+    match = await get_match_with_details_for_tournament(tournament_id, match_id)
+    if not is_admin_user(user_public):
+        if not await user_is_participant_in_match(tournament_id, user_public, match):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="You can only edit Karabast lobby name for matches you are playing in",
+            )
+
+    await sql_update_karabast_game_name(
+        match_id,
+        normalize_karabast_game_name(body.karabast_game_name),
+    )
+    return SuccessResponse()
+
+
+@router.get(
+    "/tournaments/{tournament_id}/matches/{match_id}/karabast_bundle",
+    response_model=MatchKarabastBundleResponse,
+)
+async def get_karabast_bundle(
+    tournament_id: TournamentId,
+    match_id: MatchId,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+    tournament: Tournament = Depends(disallow_archived_tournament),
+) -> MatchKarabastBundleResponse:
+    if not is_karabast_tournament(tournament):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Karabast deck export is only available for Karabast tournaments",
+        )
+
+    match = await get_match_with_details_for_tournament(tournament_id, match_id)
+    if not is_admin_user(user_public):
+        if not await user_is_participant_in_match(tournament_id, user_public, match):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="You can only export Karabast data for matches you are playing in",
+            )
+
+    applications = await get_tournament_applications(tournament_id)
+    application_by_name = {
+        normalize_person_name(application.user_name): application for application in applications
+    }
+    scoped_fallback_decks = await get_decks_for_tournament_scope(tournament_id)
+    club_user_fallback_decks = await get_decks_for_tournament_club_users(tournament_id)
+    fallback_decks: list[Any] = []
+    seen_deck_ids: set[int] = set()
+    for fallback_deck in [*scoped_fallback_decks, *club_user_fallback_decks]:
+        fallback_deck_id = int(getattr(fallback_deck, "id", 0))
+        if fallback_deck_id in seen_deck_ids:
+            continue
+        seen_deck_ids.add(fallback_deck_id)
+        fallback_decks.append(fallback_deck)
+    fallback_deck_by_user_name: dict[str, Any] = {}
+    for fallback_deck in fallback_decks:
+        key = normalize_person_name(getattr(fallback_deck, "user_name", None))
+        if key == "" or key in fallback_deck_by_user_name:
+            continue
+        fallback_deck_by_user_name[key] = fallback_deck
+
+    players: list[MatchKarabastDeckExport] = []
+    stage_inputs = [match.stage_item_input1, match.stage_item_input2]
+    for slot, stage_input in enumerate(stage_inputs, start=1):
+        team_name = str(getattr(getattr(stage_input, "team", None), "name", "")).strip() or None
+        team_name_key = normalize_person_name(team_name)
+        application = (
+            application_by_name.get(team_name_key) if team_name is not None else None
+        )
+        selected_user_id = application.user_id if application is not None else None
+        selected_user_name = application.user_name if application is not None else None
+        selected_deck_id = int(application.deck_id) if application is not None and application.deck_id is not None else None
+        deck_export: dict | None = None
+        deck_name: str | None = None
+        selected_deck: Any | None = None
+
+        if selected_deck_id is not None:
+            selected_deck = await get_deck_by_id(selected_deck_id)
+        if selected_deck is None and team_name_key != "":
+            fallback_deck = fallback_deck_by_user_name.get(team_name_key)
+            if fallback_deck is not None:
+                selected_deck = fallback_deck
+                selected_deck_id = int(getattr(fallback_deck, "id", 0)) or None
+                selected_user_id = getattr(fallback_deck, "user_id", selected_user_id)
+                selected_user_name = getattr(fallback_deck, "user_name", selected_user_name)
+
+        if selected_deck is not None:
+            deck_name = str(getattr(selected_deck, "name", "")).strip() or None
+            deck_export = build_swudb_deck_export(
+                name=str(getattr(selected_deck, "name", "Deck")),
+                leader=str(getattr(selected_deck, "leader", "")),
+                base=str(getattr(selected_deck, "base", "")),
+                mainboard=getattr(selected_deck, "mainboard", {}) or {},
+                sideboard=getattr(selected_deck, "sideboard", {}) or {},
+                author=selected_user_name,
+            )
+
+        players.append(
+            MatchKarabastDeckExport(
+                slot=slot,
+                team_name=team_name,
+                user_id=selected_user_id,
+                user_name=selected_user_name,
+                deck_id=selected_deck_id,
+                deck_name=deck_name,
+                deck_export=deck_export,
+            )
+        )
+
+    game_name = (
+        normalize_karabast_game_name(match.karabast_game_name)
+        or default_karabast_game_name(tournament_id, match.id)
+    )
+    return MatchKarabastBundleResponse(
+        data=MatchKarabastBundle(match_id=match.id, game_name=game_name, players=players)
+    )
+
+
 @router.put("/tournaments/{tournament_id}/matches/{match_id}", response_model=SuccessResponse)
 async def update_match_by_id(
     tournament_id: TournamentId,
@@ -232,12 +503,13 @@ async def update_match_by_id(
 
     await check_foreign_keys_belong_to_tournament(match_body, tournament_id)
     tournament = await sql_get_tournament(tournament_id)
-
-    await sql_update_match(match_id, match_body, tournament)
-
     round_ = await get_round_by_id(tournament_id, match.round_id)
     stage_item = await get_stage_item(tournament_id, round_.stage_item_id)
-    await recalculate_ranking_for_stage_item(tournament_id, stage_item)
+
+    if stage_item.type == StageType.REGULAR_SEASON_MATCHUP:
+        await ensure_regular_season_match_has_submitted_decks(tournament_id, match)
+
+    await sql_update_match(match_id, match_body, tournament)
 
     if (
         match_body.custom_duration_minutes != match.custom_duration_minutes
@@ -248,7 +520,22 @@ async def update_match_by_id(
         await reorder_matches_for_court(tournament, scheduled_matches, assert_some(match.court_id))
 
     if stage_item.type in {StageType.SINGLE_ELIMINATION, StageType.DOUBLE_ELIMINATION}:
-        await update_inputs_in_subsequent_elimination_rounds(round_.id, stage_item, {match_id})
+        refreshed_stage_item = await get_stage_item(tournament_id, round_.stage_item_id)
+        await update_inputs_in_subsequent_elimination_rounds(
+            round_.id, refreshed_stage_item, {match_id}
+        )
+        refreshed_stage_item = await get_stage_item(tournament_id, round_.stage_item_id)
+        refreshed_stage_item = await auto_advance_byes_in_elimination_stage_item(
+            tournament_id, refreshed_stage_item, tournament
+        )
+        if stage_item.type == StageType.DOUBLE_ELIMINATION:
+            await maybe_auto_complete_double_elimination_reset(
+                tournament_id, refreshed_stage_item, match_id, tournament
+            )
+        refreshed_stage_item = await get_stage_item(tournament_id, round_.stage_item_id)
+        await recalculate_ranking_for_stage_item(tournament_id, refreshed_stage_item)
+    else:
+        await recalculate_ranking_for_stage_item(tournament_id, stage_item)
 
     await recalculate_tournament_records(tournament_id)
     return SuccessResponse()

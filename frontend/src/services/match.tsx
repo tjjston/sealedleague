@@ -21,6 +21,33 @@ export async function updateMatch(tournament_id: number, match_id: number, match
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function updateKarabastGameName(
+  tournament_id: number,
+  match_id: number,
+  karabast_game_name: string | null
+) {
+  return createAxios()
+    .put(`tournaments/${tournament_id}/matches/${match_id}/karabast_game_name`, {
+      karabast_game_name,
+    })
+    .catch((response: any) => handleRequestError(response))
+    .then((response: any) => {
+      if (response != null && response.status === 200) {
+        showNotification({
+          color: 'green',
+          title: 'Karabast lobby details updated',
+          message: '',
+        });
+      }
+    });
+}
+
+export async function getKarabastMatchBundle(tournament_id: number, match_id: number) {
+  return createAxios()
+    .get(`tournaments/${tournament_id}/matches/${match_id}/karabast_bundle`)
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function rescheduleMatch(
   tournament_id: number,
   match_id: number,

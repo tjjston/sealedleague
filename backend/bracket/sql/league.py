@@ -55,68 +55,200 @@ from bracket.utils.types import assert_some
 
 
 async def get_or_create_active_season(tournament_id: TournamentId) -> Season:
-    existing_query = """
-        SELECT *
-        FROM seasons
-        WHERE is_active = TRUE
-          AND (
+    scope_filter = """
+        (
             tournament_id = :tournament_id
             OR id IN (
                 SELECT season_id
                 FROM season_tournaments
                 WHERE tournament_id = :tournament_id
             )
-          )
-        ORDER BY created DESC
-        LIMIT 1
+        )
     """
-    existing = await database.fetch_one(existing_query, values={"tournament_id": tournament_id})
-    if existing is not None:
-        return Season.model_validate(dict(existing._mapping))
-
-    count_query = """
-        SELECT COUNT(*) AS count
+    existing_query = f"""
+        SELECT *
         FROM seasons
-        WHERE tournament_id = :tournament_id
-           OR id IN (
-                SELECT season_id
-                FROM season_tournaments
-                WHERE tournament_id = :tournament_id
-           )
+        WHERE is_active = TRUE
+          AND {scope_filter}
+        ORDER BY created DESC, id DESC
     """
-    count_result = await database.fetch_one(count_query, values={"tournament_id": tournament_id})
-    season_number = int(assert_some(count_result)._mapping["count"]) + 1
+    async with database.transaction():
+        # Prevent concurrent requests from creating duplicate active seasons for the same tournament.
+        await database.execute(
+            "SELECT pg_advisory_xact_lock(:lock_scope, :lock_key)",
+            values={"lock_scope": 71001, "lock_key": int(tournament_id)},
+        )
 
-    insert_query = """
-        INSERT INTO seasons (tournament_id, name, created, is_active)
-        VALUES (:tournament_id, :name, :created, TRUE)
-        RETURNING *
-    """
-    created = datetime_utc.now()
-    inserted = await database.fetch_one(
-        insert_query,
-        values={
-            "tournament_id": tournament_id,
-            "name": f"Season {season_number}",
-            "created": created,
-        },
-    )
-    season = Season.model_validate(dict(assert_some(inserted)._mapping))
-    await set_season_tournaments(season.id, [tournament_id])
-    return season
+        existing_rows = await database.fetch_all(existing_query, values={"tournament_id": tournament_id})
+        if len(existing_rows) > 0:
+            canonical_row = existing_rows[0]
+            duplicate_ids = [int(row._mapping["id"]) for row in existing_rows[1:]]
+            if len(duplicate_ids) > 0:
+                await database.execute(
+                    "UPDATE seasons SET is_active = FALSE WHERE id = ANY(:season_ids)",
+                    values={"season_ids": duplicate_ids},
+                )
+            return Season.model_validate(dict(canonical_row._mapping))
+
+        rows = await database.fetch_all(
+            f"""
+            SELECT name
+            FROM seasons
+            WHERE {scope_filter}
+            """,
+            values={"tournament_id": tournament_id},
+        )
+        max_season_number = 0
+        for row in rows:
+            season_name = str(row._mapping["name"] or "")
+            season_number_match = re.search(r"\bseason\s+(\d+)\b", season_name, re.IGNORECASE)
+            if season_number_match is None:
+                continue
+            max_season_number = max(max_season_number, int(season_number_match.group(1)))
+        season_number = max_season_number + 1 if max_season_number > 0 else (len(rows) + 1)
+
+        created = datetime_utc.now()
+        inserted = await database.fetch_one(
+            """
+            INSERT INTO seasons (tournament_id, name, created, is_active)
+            VALUES (:tournament_id, :name, :created, TRUE)
+            RETURNING *
+            """,
+            values={
+                "tournament_id": tournament_id,
+                "name": f"Season {season_number}",
+                "created": created,
+            },
+        )
+        season = Season.model_validate(dict(assert_some(inserted)._mapping))
+        await set_season_tournaments(season.id, [tournament_id])
+        return season
 
 
 async def get_seasons_for_tournament(tournament_id: TournamentId) -> list[Season]:
-    query = """
-        SELECT DISTINCT s.*
-        FROM seasons s
-        LEFT JOIN season_tournaments st ON st.season_id = s.id
-        WHERE s.tournament_id = :tournament_id
-           OR st.tournament_id = :tournament_id
-        ORDER BY created ASC
-    """
-    rows = await database.fetch_all(query=query, values={"tournament_id": tournament_id})
-    return [Season.model_validate(dict(row._mapping)) for row in rows]
+    linked_rows = await database.fetch_all(
+        """
+        SELECT DISTINCT lps.season_id
+        FROM league_projected_schedule_items lps
+        WHERE lps.linked_tournament_id = :tournament_id
+          AND lps.season_id IS NOT NULL
+        ORDER BY lps.season_id ASC
+        """,
+        values={"tournament_id": int(tournament_id)},
+    )
+    linked_season_ids = [int(row._mapping["season_id"]) for row in linked_rows if row is not None]
+
+    scoped_rows = await database.fetch_all(
+        """
+        WITH scoped_club AS (
+            SELECT t.club_id
+            FROM tournaments t
+            WHERE t.id = :tournament_id
+            LIMIT 1
+        ),
+        club_users AS (
+            SELECT DISTINCT uxc.user_id
+            FROM users_x_clubs uxc
+            JOIN scoped_club sc ON sc.club_id = uxc.club_id
+        ),
+        club_tournaments AS (
+            SELECT DISTINCT t.id
+            FROM tournaments t
+            JOIN scoped_club sc ON sc.club_id = t.club_id
+        ),
+        derived_seasons AS (
+            SELECT d.season_id
+            FROM decks d
+            WHERE d.season_id IS NOT NULL
+              AND (
+                  d.tournament_id IN (SELECT id FROM club_tournaments)
+                  OR d.user_id IN (SELECT user_id FROM club_users)
+              )
+            UNION
+            SELECT cpe.season_id
+            FROM card_pool_entries cpe
+            WHERE cpe.season_id IS NOT NULL
+              AND cpe.user_id IN (SELECT user_id FROM club_users)
+            UNION
+            SELECT ta.season_id
+            FROM tournament_applications ta
+            WHERE ta.season_id IS NOT NULL
+              AND (
+                  ta.tournament_id IN (SELECT id FROM club_tournaments)
+                  OR ta.user_id IN (SELECT user_id FROM club_users)
+              )
+            UNION
+            SELECT sm.season_id
+            FROM season_memberships sm
+            WHERE sm.season_id IS NOT NULL
+              AND sm.user_id IN (SELECT user_id FROM club_users)
+            UNION
+            SELECT spl.season_id
+            FROM season_points_ledger spl
+            WHERE spl.season_id IS NOT NULL
+              AND spl.user_id IN (SELECT user_id FROM club_users)
+        )
+        SELECT DISTINCT ds.season_id
+        FROM derived_seasons ds
+        ORDER BY ds.season_id ASC
+        """,
+        values={"tournament_id": int(tournament_id)},
+    )
+    scoped_season_ids = [
+        int(row._mapping["season_id"])
+        for row in scoped_rows
+        if row is not None and row._mapping["season_id"] is not None
+    ]
+    season_id_candidates = sorted({*linked_season_ids, *scoped_season_ids})
+
+    if len(season_id_candidates) > 0:
+        season_ids_csv = ",".join(str(int(value)) for value in season_id_candidates)
+        # Include explicit mappings plus derived club-scoped season usage from decks/card pools/apps.
+        rows = await database.fetch_all(
+            f"""
+            SELECT DISTINCT s.*
+            FROM seasons s
+            LEFT JOIN season_tournaments st ON st.season_id = s.id
+            WHERE s.id IN ({season_ids_csv})
+               OR st.tournament_id = :tournament_id
+               OR s.tournament_id = :tournament_id
+            ORDER BY s.created ASC
+            """,
+            values={
+                "tournament_id": int(tournament_id),
+            },
+        )
+    else:
+        rows = await database.fetch_all(
+            """
+            SELECT DISTINCT s.*
+            FROM seasons s
+            LEFT JOIN season_tournaments st ON st.season_id = s.id
+            WHERE s.tournament_id = :tournament_id
+               OR st.tournament_id = :tournament_id
+            ORDER BY s.created ASC
+            """,
+            values={"tournament_id": int(tournament_id)},
+        )
+    seen_ids: set[int] = set()
+    unique_by_name: dict[str, Season] = {}
+    for row in rows:
+        season = Season.model_validate(dict(row._mapping))
+        season_id = int(season.id)
+        if season_id in seen_ids:
+            continue
+        seen_ids.add(season_id)
+        season_name_key = re.sub(r"\s+", " ", str(season.name)).strip().lower()
+        lookup_key = season_name_key if season_name_key != "" else f"id:{season_id}"
+        existing = unique_by_name.get(lookup_key)
+        if existing is None:
+            unique_by_name[lookup_key] = season
+            continue
+        if (not bool(existing.is_active) and bool(season.is_active)) or (
+            bool(existing.is_active) == bool(season.is_active) and int(season.id) > int(existing.id)
+        ):
+            unique_by_name[lookup_key] = season
+    return sorted(unique_by_name.values(), key=lambda item: item.created)
 
 
 async def get_or_create_season_by_name(tournament_id: TournamentId, season_name: str) -> Season:
@@ -269,6 +401,26 @@ async def get_league_standings(
         if season_id is not None
         else f"spl.season_id IN ({season_ids_subquery()})"
     )
+    season_membership_user_filter = (
+        "sm2.season_id = :season_id"
+        if season_id is not None
+        else f"sm2.season_id IN ({season_ids_subquery()})"
+    )
+    season_card_pool_user_filter = (
+        "cpe.season_id = :season_id"
+        if season_id is not None
+        else f"cpe.season_id IN ({season_ids_subquery()})"
+    )
+    season_deck_user_filter = (
+        "d.season_id = :season_id"
+        if season_id is not None
+        else f"d.season_id IN ({season_ids_subquery()})"
+    )
+    standings_visibility_filter = (
+        "WHERE COALESCE(sm.hide_from_standings, FALSE) = FALSE"
+        if season_id is not None
+        else ""
+    )
     live_cte = """
         ,
         live_match_points AS (
@@ -304,10 +456,13 @@ async def get_league_standings(
             WHERE u.id IN (
                 SELECT uxc.user_id
                 FROM users_x_clubs uxc
-                WHERE uxc.club_id = (
-                    SELECT club_id
-                    FROM tournaments
-                    WHERE id = :tournament_id
+                WHERE uxc.club_id IN (
+                    SELECT DISTINCT t.club_id
+                    FROM tournaments t
+                    WHERE t.id IN (
+                        SELECT id
+                        FROM scoped_tournaments
+                    )
                 )
                 UNION
                 SELECT ta.user_id
@@ -320,6 +475,22 @@ async def get_league_standings(
                 SELECT spl.user_id
                 FROM season_points_ledger spl
                 WHERE {season_points_user_filter}
+                UNION
+                SELECT sm2.user_id
+                FROM season_memberships sm2
+                WHERE {season_membership_user_filter}
+                UNION
+                SELECT d.user_id
+                FROM decks d
+                WHERE d.tournament_id IN (
+                    SELECT id
+                    FROM scoped_tournaments
+                )
+                   OR {season_deck_user_filter}
+                UNION
+                SELECT cpe.user_id
+                FROM card_pool_entries cpe
+                WHERE {season_card_pool_user_filter}
             )
         )
         {live_cte}
@@ -383,6 +554,7 @@ async def get_league_standings(
             ON spl.user_id = tu.id
             {season_filter}
         {live_join}
+        {standings_visibility_filter}
         GROUP BY
             tu.id,
             tu.name,
@@ -397,14 +569,20 @@ async def get_league_standings(
         membership_filter=membership_filter,
         season_filter=season_filter,
         season_points_user_filter=season_points_user_filter,
+        season_membership_user_filter=season_membership_user_filter,
+        season_card_pool_user_filter=season_card_pool_user_filter,
+        season_deck_user_filter=season_deck_user_filter,
+        standings_visibility_filter=standings_visibility_filter,
         live_cte=live_cte,
         live_join=live_join,
         live_group_by=live_group_by,
         live_points_expression=live_points_expression,
     )
-    values: dict[str, int] = {"tournament_id": tournament_id}
-    if season_id is not None:
-        values["season_id"] = season_id
+    values: dict[str, int] = {}
+    if season_id is None:
+        values["tournament_id"] = int(tournament_id)
+    else:
+        values["season_id"] = int(season_id)
     result = await database.fetch_all(
         query=query,
         values=values,
@@ -421,13 +599,62 @@ async def get_league_standings(
 
 
 async def get_league_admin_users(tournament_id: TournamentId, season_id: int) -> list[LeagueAdminUserView]:
-    query = """
-        WITH tournament_users AS (
-            SELECT DISTINCT u.id, u.name, u.email, u.account_type
+    query = f"""
+        WITH relevant_user_ids AS (
+            SELECT DISTINCT uxc.user_id AS user_id
             FROM tournaments t
             JOIN users_x_clubs uxc ON uxc.club_id = t.club_id
-            JOIN users u ON u.id = uxc.user_id
             WHERE t.id = :tournament_id
+
+            UNION
+
+            SELECT DISTINCT ta.user_id
+            FROM tournament_applications ta
+            WHERE ta.tournament_id IN (
+                SELECT tournament_id
+                FROM season_tournaments
+                WHERE season_id IN ({season_ids_subquery()})
+                UNION
+                SELECT tournament_id
+                FROM seasons
+                WHERE id IN ({season_ids_subquery()})
+                UNION
+                SELECT :tournament_id
+            )
+
+            UNION
+
+            SELECT DISTINCT d.user_id
+            FROM decks d
+            WHERE d.tournament_id IN (
+                    SELECT tournament_id
+                    FROM season_tournaments
+                    WHERE season_id IN ({season_ids_subquery()})
+                    UNION
+                    SELECT tournament_id
+                    FROM seasons
+                    WHERE id IN ({season_ids_subquery()})
+                    UNION
+                    SELECT :tournament_id
+                )
+               OR d.season_id IN ({season_ids_subquery()})
+
+            UNION
+
+            SELECT DISTINCT sm.user_id
+            FROM season_memberships sm
+            WHERE sm.season_id IN ({season_ids_subquery()})
+
+            UNION
+
+            SELECT DISTINCT cpe.user_id
+            FROM card_pool_entries cpe
+            WHERE cpe.season_id IN ({season_ids_subquery()})
+        ),
+        tournament_users AS (
+            SELECT u.id, u.name, u.email, u.account_type
+            FROM users u
+            JOIN relevant_user_ids rui ON rui.user_id = u.id
         )
         SELECT
             tu.id AS user_id,
@@ -436,7 +663,8 @@ async def get_league_admin_users(tournament_id: TournamentId, season_id: int) ->
             tu.account_type,
             sm.role,
             COALESCE(sm.can_manage_points, FALSE) AS can_manage_points,
-            COALESCE(sm.can_manage_tournaments, FALSE) AS can_manage_tournaments
+            COALESCE(sm.can_manage_tournaments, FALSE) AS can_manage_tournaments,
+            COALESCE(sm.hide_from_standings, FALSE) AS hide_from_standings
         FROM tournament_users tu
         LEFT JOIN season_memberships sm
             ON sm.user_id = tu.id
@@ -462,6 +690,7 @@ async def upsert_season_membership(
             role,
             can_manage_points,
             can_manage_tournaments,
+            hide_from_standings,
             created
         )
         VALUES (
@@ -470,13 +699,15 @@ async def upsert_season_membership(
             :role,
             :can_manage_points,
             :can_manage_tournaments,
+            :hide_from_standings,
             :created
         )
         ON CONFLICT (season_id, user_id)
         DO UPDATE SET
             role = EXCLUDED.role,
             can_manage_points = EXCLUDED.can_manage_points,
-            can_manage_tournaments = EXCLUDED.can_manage_tournaments
+            can_manage_tournaments = EXCLUDED.can_manage_tournaments,
+            hide_from_standings = EXCLUDED.hide_from_standings
     """
     await database.execute(
         query=query,
@@ -486,6 +717,7 @@ async def upsert_season_membership(
             "role": body.role.value,
             "can_manage_points": body.can_manage_points,
             "can_manage_tournaments": body.can_manage_tournaments,
+            "hide_from_standings": body.hide_from_standings,
             "created": datetime_utc.now(),
         },
     )
@@ -558,6 +790,79 @@ async def get_card_pool_entries(
             values={"season_id": season_id, "user_id": user_id},
         )
 
+    return [LeagueCardPoolEntryView.model_validate(dict(row._mapping)) for row in rows]
+
+
+async def get_card_pool_entries_for_tournament_scope(
+    tournament_id: TournamentId,
+    user_id: UserId | None,
+) -> list[LeagueCardPoolEntryView]:
+    values: dict[str, int] = {"tournament_id": int(tournament_id)}
+    if user_id is None:
+        user_filter = """
+            cpe.user_id IN (
+                SELECT uxc.user_id
+                FROM users_x_clubs uxc
+                WHERE uxc.club_id = (
+                    SELECT t0.club_id
+                    FROM tournaments t0
+                    WHERE t0.id = :tournament_id
+                )
+            )
+        """
+    else:
+        values["user_id"] = int(user_id)
+        user_filter = """
+            cpe.user_id = :user_id
+            AND cpe.user_id IN (
+                SELECT uxc.user_id
+                FROM users_x_clubs uxc
+                WHERE uxc.club_id = (
+                    SELECT t0.club_id
+                    FROM tournaments t0
+                    WHERE t0.id = :tournament_id
+                )
+            )
+        """
+
+    latest_season_row = await database.fetch_one(
+        f"""
+        SELECT s.id AS season_id
+        FROM seasons s
+        WHERE s.id IN (
+            SELECT DISTINCT cpe.season_id
+            FROM card_pool_entries cpe
+            WHERE {user_filter}
+        )
+        ORDER BY s.created DESC, s.id DESC
+        LIMIT 1
+        """,
+        values=values,
+    )
+    if latest_season_row is None:
+        return []
+    season_id = int(latest_season_row._mapping["season_id"])
+    if user_id is not None:
+        return await get_card_pool_entries(season_id, user_id)
+
+    rows = await database.fetch_all(
+        """
+        SELECT cpe.user_id, cpe.card_id, cpe.quantity
+        FROM card_pool_entries cpe
+        WHERE cpe.season_id = :season_id
+          AND cpe.user_id IN (
+              SELECT uxc.user_id
+              FROM users_x_clubs uxc
+              WHERE uxc.club_id = (
+                  SELECT t0.club_id
+                  FROM tournaments t0
+                  WHERE t0.id = :tournament_id
+              )
+          )
+        ORDER BY cpe.user_id ASC, cpe.card_id ASC
+        """,
+        values={"season_id": season_id, "tournament_id": int(tournament_id)},
+    )
     return [LeagueCardPoolEntryView.model_validate(dict(row._mapping)) for row in rows]
 
 
@@ -1160,6 +1465,36 @@ async def get_decks_for_tournament_scope(
     return [LeagueDeckView.model_validate(dict(row._mapping)) for row in rows]
 
 
+async def get_decks_for_tournament_club_users(
+    tournament_id: TournamentId,
+    user_id: UserId | None = None,
+    *,
+    only_admin_users: bool = False,
+) -> list[LeagueDeckView]:
+    values: dict[str, int] = {"tournament_id": int(tournament_id)}
+    scope_filter = """
+        d.user_id IN (
+            SELECT uxc.user_id
+            FROM users_x_clubs uxc
+            WHERE uxc.club_id = (
+                SELECT t0.club_id
+                FROM tournaments t0
+                WHERE t0.id = :tournament_id
+            )
+        )
+    """
+    condition = ""
+    if user_id is not None:
+        condition = "AND d.user_id = :user_id"
+        values["user_id"] = user_id
+    if only_admin_users:
+        condition += " AND u.account_type = 'ADMIN'"
+
+    query = _build_get_decks_query(scope_filter=scope_filter, condition=condition)
+    rows = await database.fetch_all(query=query, values=values)
+    return [LeagueDeckView.model_validate(dict(row._mapping)) for row in rows]
+
+
 def _build_get_decks_query(*, scope_filter: str, condition: str) -> str:
     return f"""
         WITH deck_stats AS (
@@ -1517,6 +1852,14 @@ async def get_league_meta_analysis(
     HEROIC_ASPECT_VALUES = {"heroic", "heroism"}
     VILLAINY_ASPECT_VALUES = {"villainy"}
 
+    def combo_aspect_label(aspect_value: str) -> str:
+        normalized = str(aspect_value).strip().lower()
+        if normalized in HEROIC_ASPECT_VALUES:
+            return "Heroism"
+        if normalized in VILLAINY_ASPECT_VALUES or normalized == "villany":
+            return "Villainy"
+        return normalized.title()
+
     deck_trait_presence_by_deck: dict[int, set[str]] = {}
     deck_keyword_presence_by_deck: dict[int, set[str]] = {}
 
@@ -1552,14 +1895,8 @@ async def get_league_meta_analysis(
         hero_villain_wins[alignment_label] += deck_wins
         hero_villain_matches[alignment_label] += deck_matches
 
-        color_aspects = sorted(
-            {
-                aspect.title()
-                for aspect in deck_aspects
-                if aspect not in HEROIC_ASPECT_VALUES and aspect not in VILLAINY_ASPECT_VALUES
-            }
-        )
-        combo_label = " + ".join(color_aspects) if len(color_aspects) > 0 else "Colorless / Neutral"
+        combo_aspects = sorted({combo_aspect_label(aspect) for aspect in deck_aspects})
+        combo_label = " + ".join(combo_aspects) if len(combo_aspects) > 0 else "Colorless / Neutral"
         aspect_combo_totals[combo_label] += 1
         aspect_combo_wins[combo_label] += deck_wins
         aspect_combo_matches[combo_label] += deck_matches
@@ -3132,6 +3469,44 @@ async def delete_league_communication(tournament_id: TournamentId, communication
     )
 
 
+def _normalize_participant_user_ids(raw_value: object) -> list[UserId] | None:
+    if raw_value is None:
+        return None
+
+    parsed_value = raw_value
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        if text == "":
+            return None
+        try:
+            parsed_value = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+
+    if not isinstance(parsed_value, list):
+        return None
+
+    normalized_ids: list[UserId] = []
+    seen_ids: set[int] = set()
+    for raw_id in parsed_value:
+        try:
+            user_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if user_id <= 0 or user_id in seen_ids:
+            continue
+        seen_ids.add(user_id)
+        normalized_ids.append(UserId(user_id))
+    return normalized_ids
+
+
+def _serialize_participant_user_ids(raw_value: object) -> str | None:
+    normalized_ids = _normalize_participant_user_ids(raw_value)
+    if normalized_ids is None:
+        return None
+    return json.dumps([int(user_id) for user_id in normalized_ids])
+
+
 async def _get_projected_schedule_item_by_id(
     tournament_id: TournamentId, schedule_item_id: int
 ) -> LeagueProjectedScheduleItemView | None:
@@ -3145,10 +3520,16 @@ async def _get_projected_schedule_item_by_id(
             lps.title,
             lps.details,
             lps.status,
+            lps.event_template,
+            lps.regular_season_week_index,
+            lps.regular_season_games_per_opponent,
+            lps.regular_season_games_per_week,
+            lps.participant_user_ids,
             lps.season_id,
             lps.sort_order,
             lps.linked_tournament_id,
             lt.name AS linked_tournament_name,
+            lt.status AS linked_tournament_status,
             lps.created_by_user_id,
             u.name AS created_by_user_name,
             lps.created,
@@ -3161,7 +3542,13 @@ async def _get_projected_schedule_item_by_id(
         """,
         values={"tournament_id": int(tournament_id), "schedule_item_id": int(schedule_item_id)},
     )
-    return LeagueProjectedScheduleItemView.model_validate(dict(row._mapping)) if row is not None else None
+    if row is None:
+        return None
+    payload = dict(row._mapping)
+    payload["participant_user_ids"] = _normalize_participant_user_ids(
+        payload.get("participant_user_ids")
+    )
+    return LeagueProjectedScheduleItemView.model_validate(payload)
 
 
 async def get_projected_schedule_item_by_id(
@@ -3183,10 +3570,16 @@ async def list_projected_schedule_items(
             lps.title,
             lps.details,
             lps.status,
+            lps.event_template,
+            lps.regular_season_week_index,
+            lps.regular_season_games_per_opponent,
+            lps.regular_season_games_per_week,
+            lps.participant_user_ids,
             lps.season_id,
             lps.sort_order,
             lps.linked_tournament_id,
             lt.name AS linked_tournament_name,
+            lt.status AS linked_tournament_status,
             lps.created_by_user_id,
             u.name AS created_by_user_name,
             lps.created,
@@ -3199,7 +3592,161 @@ async def list_projected_schedule_items(
         """,
         values={"tournament_id": int(tournament_id)},
     )
-    return [LeagueProjectedScheduleItemView.model_validate(dict(row._mapping)) for row in rows]
+    schedule_items = []
+    for row in rows:
+        payload = dict(row._mapping)
+        payload["participant_user_ids"] = _normalize_participant_user_ids(
+            payload.get("participant_user_ids")
+        )
+        schedule_items.append(LeagueProjectedScheduleItemView.model_validate(payload))
+    linked_tournament_ids = {
+        int(item.linked_tournament_id)
+        for item in schedule_items
+        if item.linked_tournament_id is not None and int(item.linked_tournament_id) > 0
+    }
+
+    mapped_tournaments = await database.fetch_all(
+        f"""
+        SELECT DISTINCT
+            t.id,
+            t.name,
+            t.start_time,
+            t.status,
+            t.created,
+            scope.season_id
+        FROM tournaments t
+        JOIN (
+            SELECT st.tournament_id, st.season_id
+            FROM season_tournaments st
+            WHERE st.season_id IN ({season_ids_subquery()})
+            UNION
+            SELECT s.tournament_id, s.id AS season_id
+            FROM seasons s
+            WHERE s.id IN ({season_ids_subquery()})
+        ) scope ON scope.tournament_id = t.id
+        WHERE t.id <> :tournament_id
+        ORDER BY t.start_time ASC, t.id ASC
+        """,
+        values={"tournament_id": int(tournament_id)},
+    )
+
+    for row in mapped_tournaments:
+        mapped_tournament_id = int(row._mapping["id"])
+        if mapped_tournament_id in linked_tournament_ids:
+            continue
+        mapped_created = row._mapping["created"]
+        schedule_items.append(
+            LeagueProjectedScheduleItemView(
+                id=-mapped_tournament_id,
+                tournament_id=tournament_id,
+                round_label="Event",
+                starts_at=row._mapping["start_time"],
+                title=str(row._mapping["name"]),
+                details=None,
+                status=str(row._mapping["status"]),
+                event_template="STANDARD",
+                regular_season_week_index=None,
+                regular_season_games_per_opponent=None,
+                regular_season_games_per_week=None,
+                participant_user_ids=None,
+                season_id=(
+                    int(row._mapping["season_id"]) if row._mapping["season_id"] is not None else None
+                ),
+                sort_order=0,
+                linked_tournament_id=TournamentId(mapped_tournament_id),
+                linked_tournament_name=str(row._mapping["name"]),
+                linked_tournament_status=str(row._mapping["status"]),
+                created_by_user_id=None,
+                created_by_user_name=None,
+                created=mapped_created,
+                updated=mapped_created,
+            )
+        )
+
+    def sort_key(item: LeagueProjectedScheduleItemView) -> tuple[int, bool, float, int]:
+        return (
+            int(item.sort_order),
+            item.starts_at is None,
+            item.starts_at.timestamp() if item.starts_at is not None else 0.0,
+            int(item.id),
+        )
+
+    schedule_items.sort(key=sort_key)
+    return schedule_items
+
+
+async def sync_projected_schedule_tournament_statuses(tournament_id: TournamentId) -> None:
+    scoped_tournaments = await database.fetch_all(
+        f"""
+        SELECT DISTINCT
+            t.id,
+            t.start_time,
+            t.status
+        FROM tournaments t
+        WHERE t.id <> :tournament_id
+          AND t.id IN (
+            SELECT lps.linked_tournament_id
+            FROM league_projected_schedule_items lps
+            WHERE lps.tournament_id = :tournament_id
+              AND lps.linked_tournament_id IS NOT NULL
+            UNION
+            SELECT st.tournament_id
+            FROM season_tournaments st
+            WHERE st.season_id IN ({season_ids_subquery()})
+            UNION
+            SELECT s.tournament_id
+            FROM seasons s
+            WHERE s.id IN ({season_ids_subquery()})
+          )
+        ORDER BY t.start_time ASC, t.id ASC
+        """,
+        values={"tournament_id": int(tournament_id)},
+    )
+    if len(scoped_tournaments) < 1:
+        return
+
+    now = datetime_utc.now()
+    ordered = [
+        {
+            "id": int(row._mapping["id"]),
+            "start_time": row._mapping["start_time"],
+            "status": str(row._mapping["status"]).upper(),
+        }
+        for row in scoped_tournaments
+    ]
+
+    past_or_now = [row for row in ordered if row["start_time"] <= now]
+    future = [row for row in ordered if row["start_time"] > now]
+    current_event_id = int(past_or_now[-1]["id"]) if len(past_or_now) > 0 else None
+    next_event_id = int(future[0]["id"]) if len(future) > 0 else None
+
+    for row in ordered:
+        event_id = int(row["id"])
+        if current_event_id is not None and event_id == current_event_id:
+            desired_status = "IN_PROGRESS"
+        elif next_event_id is not None and event_id == next_event_id:
+            desired_status = "OPEN"
+        elif row["start_time"] > now:
+            desired_status = "PLANNED"
+        else:
+            desired_status = "CLOSED"
+
+        if row["status"] == desired_status:
+            continue
+        await database.execute(
+            """
+            UPDATE tournaments
+            SET
+                status = CAST(:state AS tournament_status),
+                dashboard_public = CASE
+                    WHEN CAST(:state AS tournament_status) = 'CLOSED'::tournament_status
+                    THEN FALSE
+                    ELSE dashboard_public
+                END
+            WHERE id = :tournament_id
+            """,
+            values={"tournament_id": event_id, "state": desired_status},
+        )
 
 
 async def create_projected_schedule_item(
@@ -3207,6 +3754,7 @@ async def create_projected_schedule_item(
     body: LeagueProjectedScheduleItemUpsertBody,
     created_by_user_id: UserId,
 ) -> LeagueProjectedScheduleItemView:
+    serialized_participant_user_ids = _serialize_participant_user_ids(body.participant_user_ids)
     row = await database.fetch_one(
         """
         INSERT INTO league_projected_schedule_items (
@@ -3216,6 +3764,11 @@ async def create_projected_schedule_item(
             title,
             details,
             status,
+            event_template,
+            regular_season_week_index,
+            regular_season_games_per_opponent,
+            regular_season_games_per_week,
+            participant_user_ids,
             season_id,
             sort_order,
             linked_tournament_id,
@@ -3230,6 +3783,11 @@ async def create_projected_schedule_item(
             :title,
             :details,
             :status,
+            :event_template,
+            :regular_season_week_index,
+            :regular_season_games_per_opponent,
+            :regular_season_games_per_week,
+            :participant_user_ids,
             :season_id,
             :sort_order,
             :linked_tournament_id,
@@ -3250,6 +3808,11 @@ async def create_projected_schedule_item(
             "title": body.title.strip(),
             "details": body.details.strip() if body.details is not None else None,
             "status": body.status.strip() if body.status is not None else None,
+            "event_template": body.event_template,
+            "regular_season_week_index": body.regular_season_week_index,
+            "regular_season_games_per_opponent": body.regular_season_games_per_opponent,
+            "regular_season_games_per_week": body.regular_season_games_per_week,
+            "participant_user_ids": serialized_participant_user_ids,
             "season_id": body.season_id,
             "sort_order": int(body.sort_order),
             "linked_tournament_id": None,
@@ -3280,6 +3843,11 @@ async def update_projected_schedule_item(
         "title",
         "details",
         "status",
+        "event_template",
+        "regular_season_week_index",
+        "regular_season_games_per_opponent",
+        "regular_season_games_per_week",
+        "participant_user_ids",
         "season_id",
         "sort_order",
         "linked_tournament_id",
@@ -3291,6 +3859,8 @@ async def update_projected_schedule_item(
             value = value.strip()
         if field in {"round_label", "details", "status"} and value == "":
             value = None
+        if field == "participant_user_ids":
+            value = _serialize_participant_user_ids(value)
         values[field] = value
         set_clauses.append(f"{field} = :{field}")
 

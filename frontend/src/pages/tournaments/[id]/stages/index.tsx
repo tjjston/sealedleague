@@ -1,4 +1,5 @@
-import { Group, Stack } from '@mantine/core';
+import { Group, Select, Stack } from '@mantine/core';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import Builder from '@components/builder/builder';
@@ -16,22 +17,58 @@ import {
   getRankingsPerStageItem,
   getStages,
   getTournamentById,
+  getUser,
 } from '@services/adapter';
+import { TournamentStatus, updateTournamentStatus } from '@services/tournament';
 
 export default function StagesPage() {
   const { t } = useTranslation();
+  const [isChangingStatus, setIsChangingStatus] = useState(false);
   const { tournamentData } = getTournamentIdFromRouter();
   const swrStagesResponse = getStages(tournamentData.id);
   const swrRankingsResponse = getRankings(tournamentData.id);
   const swrTournamentResponse = getTournamentById(tournamentData.id);
+  const swrCurrentUserResponse = getUser();
   const swrAvailableInputsResponse = getAvailableStageItemInputs(tournamentData.id);
   const swrRankingsPerStageItemResponse = getRankingsPerStageItem(tournamentData.id);
   const tournamentDataFull =
     swrTournamentResponse.data != null ? swrTournamentResponse.data.data : null;
+  const isAdmin = String(swrCurrentUserResponse.data?.data?.account_type ?? 'REGULAR') === 'ADMIN';
   const rankings = swrRankingsResponse.data != null ? swrRankingsResponse.data.data : [];
 
   const stages: StageWithStageItems[] =
     swrStagesResponse.data != null ? swrStagesResponse.data.data : [];
+  const updateTournamentStatusValue = async (nextStatus: TournamentStatus | null) => {
+    if (tournamentDataFull == null || !isAdmin || nextStatus == null) return;
+    if (nextStatus === tournamentDataFull.status) return;
+
+    setIsChangingStatus(true);
+    try {
+      await updateTournamentStatus(tournamentData.id, nextStatus);
+      await swrTournamentResponse.mutate();
+      await swrStagesResponse.mutate();
+    } finally {
+      setIsChangingStatus(false);
+    }
+  };
+  const statusActionButton =
+    isAdmin && tournamentDataFull != null ? (
+      <Select
+        label="Tournament status"
+        mt="1rem"
+        maw="20rem"
+        allowDeselect={false}
+        data={[
+          { value: 'OPEN', label: 'Open' },
+          { value: 'PLANNED', label: 'Planned' },
+          { value: 'IN_PROGRESS', label: 'In Progress' },
+          { value: 'CLOSED', label: 'Closed' },
+        ]}
+        value={String(tournamentDataFull.status)}
+        disabled={isChangingStatus}
+        onChange={(value) => void updateTournamentStatusValue((value as TournamentStatus) ?? null)}
+      />
+    ) : null;
 
   let content;
   if (
@@ -52,6 +89,7 @@ export default function StagesPage() {
           tournament={tournamentDataFull}
           swrStagesResponse={swrStagesResponse}
         />
+        {statusActionButton}
       </Stack>
     );
   } else {
@@ -69,6 +107,7 @@ export default function StagesPage() {
             swrRankingsPerStageItemResponse={swrRankingsPerStageItemResponse}
           />
         </Group>
+        {statusActionButton}
         <Group mt="1rem" align="top">
           <Builder
             tournament={tournamentDataFull}

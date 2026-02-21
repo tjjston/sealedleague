@@ -286,6 +286,10 @@ export type Match = {
    */
   stage_item_input1_winner_from_match_id: number | null;
   /**
+   * Stage Item Input1 Loser From Match Id
+   */
+  stage_item_input1_loser_from_match_id: number | null;
+  /**
    * Stage Item Input2
    */
   stage_item_input2: StageItemInputTentative | StageItemInputFinal | StageItemInputEmpty | null;
@@ -305,6 +309,10 @@ export type Match = {
    * Stage Item Input2 Winner From Match Id
    */
   stage_item_input2_winner_from_match_id: number | null;
+  /**
+   * Stage Item Input2 Loser From Match Id
+   */
+  stage_item_input2_loser_from_match_id: number | null;
   /**
    * Start Time
    */
@@ -362,6 +370,10 @@ export type MatchCreateBodyFrontend = {
    */
   stage_item_input1_winner_from_match_id: number | null;
   /**
+   * Stage Item Input1 Loser From Match Id
+   */
+  stage_item_input1_loser_from_match_id: number | null;
+  /**
    * Stage Item Input2 Id
    */
   stage_item_input2_id: number | null;
@@ -369,6 +381,10 @@ export type MatchCreateBodyFrontend = {
    * Stage Item Input2 Winner From Match Id
    */
   stage_item_input2_winner_from_match_id: number | null;
+  /**
+   * Stage Item Input2 Loser From Match Id
+   */
+  stage_item_input2_loser_from_match_id: number | null;
 };
 
 /**
@@ -457,6 +473,10 @@ export type MatchWithDetails = {
    */
   stage_item_input1_winner_from_match_id: number | null;
   /**
+   * Stage Item Input1 Loser From Match Id
+   */
+  stage_item_input1_loser_from_match_id: number | null;
+  /**
    * Stage Item Input2
    */
   stage_item_input2: StageItemInputTentative | StageItemInputFinal | StageItemInputEmpty | null;
@@ -476,6 +496,10 @@ export type MatchWithDetails = {
    * Stage Item Input2 Winner From Match Id
    */
   stage_item_input2_winner_from_match_id: number | null;
+  /**
+   * Stage Item Input2 Loser From Match Id
+   */
+  stage_item_input2_loser_from_match_id: number | null;
   /**
    * Start Time
    */
@@ -544,6 +568,10 @@ export type MatchWithDetailsDefinitive = {
    */
   stage_item_input1_winner_from_match_id: number | null;
   /**
+   * Stage Item Input1 Loser From Match Id
+   */
+  stage_item_input1_loser_from_match_id: number | null;
+  /**
    * Stage Item Input2
    */
   stage_item_input2: StageItemInputTentative | StageItemInputFinal | StageItemInputEmpty;
@@ -563,6 +591,10 @@ export type MatchWithDetailsDefinitive = {
    * Stage Item Input2 Winner From Match Id
    */
   stage_item_input2_winner_from_match_id: number | null;
+  /**
+   * Stage Item Input2 Loser From Match Id
+   */
+  stage_item_input2_loser_from_match_id: number | null;
   /**
    * Start Time
    */
@@ -1220,7 +1252,12 @@ export type StageRankingResponse = {
 /**
  * StageType
  */
-export type StageType = 'ROUND_ROBIN' | 'SINGLE_ELIMINATION' | 'DOUBLE_ELIMINATION' | 'SWISS';
+export type StageType =
+  | 'ROUND_ROBIN'
+  | 'REGULAR_SEASON_MATCHUP'
+  | 'SINGLE_ELIMINATION'
+  | 'DOUBLE_ELIMINATION'
+  | 'SWISS';
 
 /**
  * StageUpdateBody
@@ -1544,7 +1581,7 @@ export type TournamentResponse = {
 /**
  * TournamentStatus
  */
-export type TournamentStatus = 'OPEN' | 'ARCHIVED';
+export type TournamentStatus = 'OPEN' | 'PLANNED' | 'IN_PROGRESS' | 'CLOSED';
 
 /**
  * TournamentUpdateBody
@@ -1879,7 +1916,7 @@ export type GetTournamentsTournamentsGetData = {
     /**
      * Filter
      */
-    filter_?: 'ALL' | 'OPEN' | 'ARCHIVED';
+    filter_?: 'ALL' | 'OPEN' | 'PLANNED' | 'IN_PROGRESS' | 'CLOSED';
     /**
      * Endpoint Name
      */

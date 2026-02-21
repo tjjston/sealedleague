@@ -40,6 +40,13 @@ function normalizeAspectKey(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, '_');
 }
 
+function canonicalAspectKey(value: string) {
+  const normalized = normalizeAspectKey(value);
+  if (normalized === 'heroic' || normalized === 'heroism') return 'heroism';
+  if (normalized === 'villany' || normalized === 'villainy') return 'villainy';
+  return normalized;
+}
+
 function getAspectKeysFromComboLabel(label: string): string[] {
   const normalized = label.trim();
   if (normalized === '' || normalized.toLowerCase() === 'colorless / neutral') {
@@ -47,7 +54,7 @@ function getAspectKeysFromComboLabel(label: string): string[] {
   }
   return normalized
     .split('+')
-    .map((part) => normalizeAspectKey(part))
+    .map((part) => canonicalAspectKey(part))
     .filter((part) => part !== '');
 }
 
@@ -97,6 +104,14 @@ function AspectLabel({
   );
 }
 
+function getAspectComboIconSources(primaryKey: string, secondaryKey: string): string[] {
+  const keys = [secondaryKey, primaryKey].filter((key) => key !== 'none');
+  const iconSources = keys
+    .map((key) => ASPECT_ICON_BY_KEY[key])
+    .filter((iconSrc): iconSrc is string => iconSrc != null);
+  return [...new Set(iconSources)];
+}
+
 function AspectHeatmapCard({
   rows,
 }: {
@@ -119,7 +134,7 @@ function AspectHeatmapCard({
       </Card>
     );
   }
-  const axisOrder = ['aggression', 'command', 'cunning', 'vigilance', 'none'];
+  const axisOrder = ['aggression', 'command', 'cunning', 'vigilance', 'heroism', 'villainy', 'none'];
   const primaryAxes = axisOrder.filter((key) => rows.some((row) => row.primary === key));
   const secondaryAxes = axisOrder.filter((key) => rows.some((row) => row.secondary === key));
   if (primaryAxes.length < 1 || secondaryAxes.length < 1) {
@@ -175,6 +190,7 @@ function AspectHeatmapCard({
                 const share = Number(byKey[key] ?? 0);
                 const intensity = Math.max(0, Math.min(1, share / maxShare));
                 const dominantColor = ASPECT_COLOR_BY_KEY[primaryKey] ?? '#64748b';
+                const comboIconSources = getAspectComboIconSources(primaryKey, secondaryKey);
                 return (
                   <Table.Td
                     key={`heatmap-cell-${secondaryKey}-${primaryKey}`}
@@ -182,9 +198,30 @@ function AspectHeatmapCard({
                       backgroundColor: share <= 0 ? undefined : hexToRgba(dominantColor, 0.12 + intensity * 0.68),
                     }}
                   >
-                    <Text size="xs" fw={600}>
-                      {share.toFixed(1)}%
-                    </Text>
+                    <Stack gap={2}>
+                      {comboIconSources.length > 0 ? (
+                        <Group gap={3} wrap="nowrap">
+                          {comboIconSources.map((iconSrc) => (
+                            <Image
+                              key={`${secondaryKey}-${primaryKey}-${iconSrc}`}
+                              src={iconSrc}
+                              alt={`${secondaryKey}+${primaryKey}`}
+                              w={12}
+                              h={12}
+                              fit="contain"
+                              style={{ opacity: share > 0 ? 1 : 0.45 }}
+                            />
+                          ))}
+                        </Group>
+                      ) : (
+                        <Text size="xs" c="dimmed">
+                          None
+                        </Text>
+                      )}
+                      <Text size="xs" fw={600}>
+                        {share.toFixed(1)}%
+                      </Text>
+                    </Stack>
                   </Table.Td>
                 );
               })}
@@ -520,9 +557,7 @@ export default function LeagueMetaAnalysisPage() {
         const winRate = Number(row?.avg_win_rate ?? 0);
         const metaSharePct = totalDecks > 0 ? (decks / totalDecks) * 100 : 0;
         const overperformanceIndex = winRate - metaSharePct;
-        const comboKeys = getAspectKeysFromComboLabel(label).filter(
-          (key) => key !== 'heroic' && key !== 'heroism' && key !== 'villainy'
-        );
+        const comboKeys = getAspectKeysFromComboLabel(label);
         const primary = comboKeys[0] ?? 'none';
         const secondary = comboKeys[1] ?? 'none';
         return {

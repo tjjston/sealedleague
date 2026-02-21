@@ -97,6 +97,8 @@ export function RoundsGridCols({
     return <NoRoundsAlert readOnly={readOnly} />;
   }
 
+  const supportsDynamicRounds = stageItem.type === 'SWISS';
+
   let result: React.JSX.Element[] | React.JSX.Element = safeRounds
     .sort((r1: any, r2: any) => (r1.name > r2.name ? 1 : -1))
     .filter(
@@ -121,7 +123,7 @@ export function RoundsGridCols({
         <Container mt="1rem">
           <Stack align="center">
             <NoContent title={t('no_round_description')} />
-            {safeRounds.length < 1 && (
+            {safeRounds.length < 1 && supportsDynamicRounds && (
               <AddRoundButton
                 t={t}
                 tournamentData={tournamentData}
@@ -145,14 +147,14 @@ export function RoundsGridCols({
     }
   }
 
-  const hideAddRoundButton = tournamentData == null || readOnly;
+  const hideAddRoundButton = tournamentData == null || readOnly || !supportsDynamicRounds;
 
   return (
     <React.Fragment key={stageItem.id}>
       <div style={{ width: '100%' }}>
         <Grid grow>
           <Grid.Col span={6} mb="2rem">
-            {!readOnly ? (
+            {!readOnly && supportsDynamicRounds ? (
               <Group>
                 <Center>
                   <Switch

@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from bracket.logic.scheduling.handle_stage_activation import StageItemInputUpdate
 from bracket.models.db.club import Club
 from bracket.models.db.court import Court
-from bracket.models.db.match import Match, SuggestedMatch
+from bracket.models.db.match import Match, MatchKarabastBundle, SuggestedMatch
 from bracket.models.db.player import Player
 from bracket.models.db.ranking import Ranking
 from bracket.models.league import (
@@ -238,4 +238,8 @@ class LeagueProjectedScheduleEventCreateResponse(
 
 
 class LeagueMetaAnalysisResponse(DataResponse[LeagueMetaAnalysisView]):
+    pass
+
+
+class MatchKarabastBundleResponse(DataResponse[MatchKarabastBundle]):
     pass

@@ -15,6 +15,7 @@ import {
   TextInput,
   Title,
 } from '@mantine/core';
+import { useMediaQuery } from '@mantine/hooks';
 import { IconMinus, IconPlayerPlay, IconPlayerStop, IconPlus, IconRefresh } from '@tabler/icons-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router';
@@ -126,6 +127,7 @@ function getPlayerPalette(player: PlayerState) {
 }
 
 export default function BaseHealthPage() {
+  const isMobile = useMediaQuery('(max-width: 48em)');
   const location = useLocation();
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const parsedTournamentId = Number(queryParams.get('tournament_id') ?? 0);
@@ -390,27 +392,32 @@ export default function BaseHealthPage() {
     [players, seriesScoreByPlayer, seriesWinsNeeded]
   );
 
+  const isCompactDuelLayout = isMobile && players.length === 2;
+
   const playerGridCols = useMemo(() => {
+    if (isCompactDuelLayout) return { base: 2 };
     if (playerCount <= 2) return { base: 1, sm: 2 };
     if (playerCount <= 4) return { base: 1, sm: 2, lg: 2 };
     return { base: 1, sm: 2, lg: 4 };
-  }, [playerCount]);
+  }, [playerCount, isCompactDuelLayout]);
 
   const playerCardMinHeight =
-    playerCount <= 2 ? '42vh' : playerCount <= 4 ? '33vh' : '24vh';
+    isCompactDuelLayout ? '48vh' : playerCount <= 2 ? '42vh' : playerCount <= 4 ? '33vh' : '24vh';
   const hpFontSize =
-    playerCount <= 2
+    isCompactDuelLayout
+      ? 'clamp(2.3rem, 8.8vw, 4rem)'
+      : playerCount <= 2
       ? 'clamp(3.6rem, 12vw, 8.2rem)'
       : playerCount <= 4
         ? 'clamp(2.6rem, 7vw, 5rem)'
         : 'clamp(2rem, 5.2vw, 3.4rem)';
   const deltaButtonSize: 'md' | 'lg' | 'xl' =
-    playerCount <= 2 ? 'xl' : playerCount <= 4 ? 'lg' : 'md';
+    isCompactDuelLayout ? 'md' : playerCount <= 2 ? 'xl' : playerCount <= 4 ? 'lg' : 'md';
   const deltaButtonFontSize = playerCount <= 2 ? '1.6rem' : playerCount <= 4 ? '1.25rem' : '1.05rem';
-  const deltaActionSizePx = playerCount <= 2 ? 62 : playerCount <= 4 ? 52 : 44;
-  const deltaIconSizePx = playerCount <= 2 ? 30 : playerCount <= 4 ? 24 : 18;
-  const cornerCardWidthPx = playerCount <= 2 ? 98 : playerCount <= 4 ? 82 : 64;
-  const cornerCardHeightPx = playerCount <= 2 ? 138 : playerCount <= 4 ? 116 : 90;
+  const deltaActionSizePx = isCompactDuelLayout ? 34 : playerCount <= 2 ? 62 : playerCount <= 4 ? 52 : 44;
+  const deltaIconSizePx = isCompactDuelLayout ? 16 : playerCount <= 2 ? 30 : playerCount <= 4 ? 24 : 18;
+  const cornerCardWidthPx = isCompactDuelLayout ? 56 : playerCount <= 2 ? 98 : playerCount <= 4 ? 82 : 64;
+  const cornerCardHeightPx = isCompactDuelLayout ? 78 : playerCount <= 2 ? 138 : playerCount <= 4 ? 116 : 90;
 
   const updatePlayerHealth = (playerId: number, change: number) => {
     setPlayers((currentPlayers) =>
@@ -471,7 +478,10 @@ export default function BaseHealthPage() {
 
   return (
     <Layout>
-      <Stack gap="sm" style={{ minHeight: 'calc(100vh - 9rem)' }}>
+      <Stack
+        gap={isCompactDuelLayout ? 'xs' : 'sm'}
+        style={{ minHeight: isMobile ? 'calc(100dvh - 8rem)' : 'calc(100vh - 9rem)' }}
+      >
         {hasAutoSetupParams &&
         appliedAutoSetupKeyRef.current !== autoSetupKey &&
         swrStagesResponse.error == null &&
@@ -483,38 +493,91 @@ export default function BaseHealthPage() {
           <Alert color={autoSetupMessage.color}>{autoSetupMessage.text}</Alert>
         ) : null}
 
-        <Group justify="space-between" align="flex-end">
+        <Group justify="space-between" align={isCompactDuelLayout ? 'center' : 'flex-end'}>
           <div>
-            <Title>Base Health Tracker</Title>
-            <Text c="dimmed" size="sm">
-              Track base HP for up to 8 players and toggle Force status. When launched from
-              Results, players load with submitted leader/base and base HP.
-            </Text>
+            <Title order={isCompactDuelLayout ? 3 : 1}>Base Health Tracker</Title>
+            {!isCompactDuelLayout && (
+              <Text c="dimmed" size="sm">
+                Track base HP for up to 8 players and toggle Force status. When launched from
+                Results, players load with submitted leader/base and base HP.
+              </Text>
+            )}
           </div>
-          <Group>
-            <NumberInput
-              label="Players"
-              min={MIN_PLAYERS}
-              max={MAX_PLAYERS}
-              value={playerCount}
-              onChange={(value) =>
-                setPlayerCount(clampNumber(Number(value) || MIN_PLAYERS, MIN_PLAYERS, MAX_PLAYERS))
-              }
-              w={92}
-              allowDecimal={false}
-            />
-            <NumberInput
-              label="Default HP"
-              min={1}
-              max={99}
-              value={baseHealth}
-              onChange={(value) => setBaseHealth(clampNumber(Number(value) || 1, 1, 99))}
-              w={110}
-              allowDecimal={false}
-            />
-            <Button leftSection={<IconRefresh size={16} />} variant="light" onClick={resetAllPlayers}>
-              Reset All
+          <Group gap={isCompactDuelLayout ? 6 : 'md'} wrap={isCompactDuelLayout ? 'nowrap' : 'wrap'}>
+            {isCompactDuelLayout ? null : (
+              <>
+                <NumberInput
+                  label="Players"
+                  min={MIN_PLAYERS}
+                  max={MAX_PLAYERS}
+                  value={playerCount}
+                  onChange={(value) =>
+                    setPlayerCount(clampNumber(Number(value) || MIN_PLAYERS, MIN_PLAYERS, MAX_PLAYERS))
+                  }
+                  w={92}
+                  allowDecimal={false}
+                />
+                <NumberInput
+                  label="Default HP"
+                  min={1}
+                  max={99}
+                  value={baseHealth}
+                  onChange={(value) => setBaseHealth(clampNumber(Number(value) || 1, 1, 99))}
+                  w={110}
+                  allowDecimal={false}
+                />
+              </>
+            )}
+            <Button
+              leftSection={<IconRefresh size={isCompactDuelLayout ? 14 : 16} />}
+              size={isCompactDuelLayout ? 'xs' : 'sm'}
+              variant="light"
+              onClick={resetAllPlayers}
+            >
+              Reset
             </Button>
+            {isCompactDuelLayout ? null : (
+              <>
+                <Switch
+                  label="Series"
+                  checked={seriesEnabled}
+                  onChange={(event) => {
+                    setSeriesEnabled(event.currentTarget.checked);
+                    if (!event.currentTarget.checked) {
+                      resetSeries();
+                    }
+                  }}
+                  disabled={players.length !== 2}
+                />
+                <NumberInput
+                  label="Best Of"
+                  min={1}
+                  max={MAX_SERIES_LENGTH}
+                  step={2}
+                  allowDecimal={false}
+                  value={seriesLength}
+                  onChange={(value) =>
+                    setSeriesLength(normalizeSeriesLength(Number(value) || 1))
+                  }
+                  disabled={!seriesEnabled || players.length !== 2}
+                  w={92}
+                />
+              </>
+            )}
+          </Group>
+        </Group>
+        {isCompactDuelLayout ? (
+          <Group justify="space-between" align="center">
+            <NumberInput
+              label="Round"
+              min={1}
+              max={300}
+              allowDecimal={false}
+              value={roundMinutes}
+              onChange={(value) => setRoundMinutes(clampNumber(Number(value) || 1, 1, 300))}
+              w={86}
+              size="xs"
+            />
             <Switch
               label="Series"
               checked={seriesEnabled}
@@ -526,23 +589,10 @@ export default function BaseHealthPage() {
               }}
               disabled={players.length !== 2}
             />
-            <NumberInput
-              label="Best Of"
-              min={1}
-              max={MAX_SERIES_LENGTH}
-              step={2}
-              allowDecimal={false}
-              value={seriesLength}
-              onChange={(value) =>
-                setSeriesLength(normalizeSeriesLength(Number(value) || 1))
-              }
-              disabled={!seriesEnabled || players.length !== 2}
-              w={92}
-            />
           </Group>
-        </Group>
+        ) : null}
 
-        {seriesEnabled && players.length === 2 ? (
+        {seriesEnabled && players.length === 2 && !isCompactDuelLayout ? (
           <Card withBorder shadow="sm">
             <Stack gap="sm">
               <Group justify="space-between" align="center">
@@ -599,7 +649,7 @@ export default function BaseHealthPage() {
           </Card>
         ) : null}
 
-        <SimpleGrid cols={playerGridCols} spacing="md" style={{ flex: 1 }}>
+        <SimpleGrid cols={playerGridCols} spacing={isCompactDuelLayout ? 'xs' : 'md'} style={{ flex: 1 }}>
           {players.map((player) => {
             const hpPercent = clampNumber((player.health / Math.max(player.maxHealth, 1)) * 100, 0, 100);
             const healthColor = hpPercent <= 33 ? 'red' : hpPercent <= 66 ? 'yellow' : 'green';
@@ -673,31 +723,42 @@ export default function BaseHealthPage() {
                 ) : null}
 
                 <Stack
-                  gap="sm"
+                  gap={isCompactDuelLayout ? 'xs' : 'sm'}
                   style={{
                     height: '100%',
                     paddingTop: hasCornerArt ? cornerCardHeightPx + 16 : 0,
                   }}
                 >
-                  <Group justify="space-between" align="flex-start">
-                    <TextInput
-                      value={player.name}
-                      onChange={(event) => updatePlayerName(player.id, event.currentTarget.value)}
-                      aria-label={`Player ${player.id} name`}
-                      maxLength={24}
-                      style={{ flex: 1 }}
-                    />
-                    <Badge color={player.forceActive ? 'yellow' : 'gray'} variant="light">
-                      {player.forceActive ? 'Force ON' : 'Force OFF'}
-                    </Badge>
-                  </Group>
+                  {isCompactDuelLayout ? (
+                    <Group justify="space-between" align="center">
+                      <Text fw={700} lineClamp={1} size="sm">
+                        {player.name}
+                      </Text>
+                      <Badge color={player.forceActive ? 'yellow' : 'gray'} variant="light" size="sm">
+                        {player.forceActive ? 'Force ON' : 'Force OFF'}
+                      </Badge>
+                    </Group>
+                  ) : (
+                    <Group justify="space-between" align="flex-start">
+                      <TextInput
+                        value={player.name}
+                        onChange={(event) => updatePlayerName(player.id, event.currentTarget.value)}
+                        aria-label={`Player ${player.id} name`}
+                        maxLength={24}
+                        style={{ flex: 1 }}
+                      />
+                      <Badge color={player.forceActive ? 'yellow' : 'gray'} variant="light">
+                        {player.forceActive ? 'Force ON' : 'Force OFF'}
+                      </Badge>
+                    </Group>
+                  )}
 
                   <Group grow align="flex-start">
                     <Stack gap={2} style={{ minWidth: 0 }}>
                       <Text size="xs" c="dimmed">
                         Leader
                       </Text>
-                      <Text size="sm" fw={600} lineClamp={2}>
+                      <Text size={isCompactDuelLayout ? 'xs' : 'sm'} fw={600} lineClamp={isCompactDuelLayout ? 1 : 2}>
                         {player.leaderName ?? '-'}
                       </Text>
                     </Stack>
@@ -705,114 +766,181 @@ export default function BaseHealthPage() {
                       <Text size="xs" c="dimmed">
                         Base
                       </Text>
-                      <Text size="sm" fw={600} lineClamp={2}>
+                      <Text size={isCompactDuelLayout ? 'xs' : 'sm'} fw={600} lineClamp={isCompactDuelLayout ? 1 : 2}>
                         {player.baseName ?? '-'}
                       </Text>
                     </Stack>
                   </Group>
 
-                  <Group gap={4}>
-                    {(player.baseAspects.length > 0 ? player.baseAspects : ['Neutral']).map(
-                      (aspect, aspectIndex) => {
-                        const aspectKey = normalizeAspectKey(aspect);
-                        const color =
-                          BASE_ASPECT_COLORS[aspectKey] ??
-                          palette[aspectIndex % palette.length] ??
-                          '#64748b';
-                        return (
-                          <Badge
-                            key={`${player.id}-${aspect}-${aspectIndex}`}
-                            variant="light"
-                            style={{
-                              color,
-                              backgroundColor: hexToRgba(color, 0.18),
-                              border: `1px solid ${hexToRgba(color, 0.45)}`,
-                            }}
-                          >
-                            {aspect}
-                          </Badge>
-                        );
-                      }
-                    )}
-                  </Group>
+                  {!isCompactDuelLayout && (
+                    <Group gap={4} wrap="wrap">
+                      {(player.baseAspects.length > 0 ? player.baseAspects : ['Neutral']).map(
+                        (aspect, aspectIndex) => {
+                          const aspectKey = normalizeAspectKey(aspect);
+                          const color =
+                            BASE_ASPECT_COLORS[aspectKey] ??
+                            palette[aspectIndex % palette.length] ??
+                            '#64748b';
+                          return (
+                            <Badge
+                              key={`${player.id}-${aspect}-${aspectIndex}`}
+                              variant="light"
+                              size="sm"
+                              style={{
+                                color,
+                                backgroundColor: hexToRgba(color, 0.18),
+                                border: `1px solid ${hexToRgba(color, 0.45)}`,
+                              }}
+                            >
+                              {aspect}
+                            </Badge>
+                          );
+                        }
+                      )}
+                    </Group>
+                  )}
 
                   <Title order={1} ta="center" style={{ fontSize: hpFontSize }}>
                     {player.health}
                   </Title>
-                  <Text size="xs" c="dimmed" ta="center">
-                    {player.health} / {player.maxHealth} HP
-                  </Text>
-                  <Progress value={hpPercent} color={healthColor} size="xl" radius="xl" />
-
-                  <Group justify="center" gap={6}>
-                    <ActionIcon
-                      variant="light"
-                      color="red"
-                      size={deltaActionSizePx}
-                      onClick={() => updatePlayerHealth(player.id, -5)}
-                      aria-label={`Remove five health from ${player.name}`}
-                    >
-                      <IconMinus size={deltaIconSizePx} />
-                    </ActionIcon>
-                    <Button
-                      variant="light"
-                      color="red"
-                      size={deltaButtonSize}
-                      style={{ minWidth: playerCount <= 2 ? 96 : 76, fontSize: deltaButtonFontSize }}
-                      onClick={() => updatePlayerHealth(player.id, -1)}
-                    >
-                      -1
-                    </Button>
-                    <Button
-                      variant="light"
-                      color="green"
-                      size={deltaButtonSize}
-                      style={{ minWidth: playerCount <= 2 ? 96 : 76, fontSize: deltaButtonFontSize }}
-                      onClick={() => updatePlayerHealth(player.id, 1)}
-                    >
-                      +1
-                    </Button>
-                    <ActionIcon
-                      variant="light"
-                      color="green"
-                      size={deltaActionSizePx}
-                      onClick={() => updatePlayerHealth(player.id, 5)}
-                      aria-label={`Add five health to ${player.name}`}
-                    >
-                      <IconPlus size={deltaIconSizePx} />
-                    </ActionIcon>
-                  </Group>
-
-                  <Switch
-                    checked={player.forceActive}
-                    onChange={(event) => togglePlayerForce(player.id, event.currentTarget.checked)}
-                    label="Activate the Force"
+                  {!isCompactDuelLayout && (
+                    <Text size="xs" c="dimmed" ta="center">
+                      {player.health} / {player.maxHealth} HP
+                    </Text>
+                  )}
+                  <Progress
+                    value={hpPercent}
+                    color={healthColor}
+                    size={isCompactDuelLayout ? 'md' : 'xl'}
+                    radius="xl"
                   />
+
+                  {isCompactDuelLayout ? (
+                    <Group justify="center" gap={4} wrap="nowrap">
+                      <ActionIcon
+                        variant="light"
+                        color="red"
+                        size={deltaActionSizePx}
+                        onClick={() => updatePlayerHealth(player.id, -5)}
+                        aria-label={`Remove five health from ${player.name}`}
+                      >
+                        <IconMinus size={deltaIconSizePx} />
+                      </ActionIcon>
+                      <ActionIcon
+                        variant="light"
+                        color="red"
+                        size={deltaActionSizePx}
+                        onClick={() => updatePlayerHealth(player.id, -1)}
+                        aria-label={`Remove one health from ${player.name}`}
+                      >
+                        <Text fw={700} size="xs">
+                          -1
+                        </Text>
+                      </ActionIcon>
+                      <ActionIcon
+                        variant="light"
+                        color="green"
+                        size={deltaActionSizePx}
+                        onClick={() => updatePlayerHealth(player.id, 1)}
+                        aria-label={`Add one health to ${player.name}`}
+                      >
+                        <Text fw={700} size="xs">
+                          +1
+                        </Text>
+                      </ActionIcon>
+                      <ActionIcon
+                        variant="light"
+                        color="green"
+                        size={deltaActionSizePx}
+                        onClick={() => updatePlayerHealth(player.id, 5)}
+                        aria-label={`Add five health to ${player.name}`}
+                      >
+                        <IconPlus size={deltaIconSizePx} />
+                      </ActionIcon>
+                      <Button
+                        size="xs"
+                        variant={player.forceActive ? 'filled' : 'light'}
+                        color={player.forceActive ? 'yellow' : 'gray'}
+                        onClick={() => togglePlayerForce(player.id, !player.forceActive)}
+                      >
+                        Force
+                      </Button>
+                    </Group>
+                  ) : (
+                    <>
+                      <Group justify="center" gap={6}>
+                        <ActionIcon
+                          variant="light"
+                          color="red"
+                          size={deltaActionSizePx}
+                          onClick={() => updatePlayerHealth(player.id, -5)}
+                          aria-label={`Remove five health from ${player.name}`}
+                        >
+                          <IconMinus size={deltaIconSizePx} />
+                        </ActionIcon>
+                        <Button
+                          variant="light"
+                          color="red"
+                          size={deltaButtonSize}
+                          style={{ minWidth: playerCount <= 2 ? 96 : 76, fontSize: deltaButtonFontSize }}
+                          onClick={() => updatePlayerHealth(player.id, -1)}
+                        >
+                          -1
+                        </Button>
+                        <Button
+                          variant="light"
+                          color="green"
+                          size={deltaButtonSize}
+                          style={{ minWidth: playerCount <= 2 ? 96 : 76, fontSize: deltaButtonFontSize }}
+                          onClick={() => updatePlayerHealth(player.id, 1)}
+                        >
+                          +1
+                        </Button>
+                        <ActionIcon
+                          variant="light"
+                          color="green"
+                          size={deltaActionSizePx}
+                          onClick={() => updatePlayerHealth(player.id, 5)}
+                          aria-label={`Add five health to ${player.name}`}
+                        >
+                          <IconPlus size={deltaIconSizePx} />
+                        </ActionIcon>
+                      </Group>
+
+                      <Switch
+                        checked={player.forceActive}
+                        onChange={(event) => togglePlayerForce(player.id, event.currentTarget.checked)}
+                        label="Activate the Force"
+                      />
+                    </>
+                  )}
                 </Stack>
               </Card>
             );
           })}
         </SimpleGrid>
 
-        <Divider my={4} />
+        {isCompactDuelLayout ? null : <Divider my={4} />}
 
-        <Card withBorder shadow="sm" p="sm">
+        <Card withBorder shadow="sm" p={isCompactDuelLayout ? 'xs' : 'sm'}>
           <Group justify="space-between" align="center" wrap="wrap">
             <Group gap="sm" wrap="wrap">
               <Text fw={700}>Round Clock</Text>
               <Text fw={700} size="xl">
                 {formatClock(secondsLeft)}
               </Text>
-              <NumberInput
-                label="Minutes"
-                min={1}
-                max={300}
-                allowDecimal={false}
-                value={roundMinutes}
-                onChange={(value) => setRoundMinutes(clampNumber(Number(value) || 1, 1, 300))}
-                w={110}
-                size="xs"
-              />
+              {isCompactDuelLayout ? null : (
+                <NumberInput
+                  label="Minutes"
+                  min={1}
+                  max={300}
+                  allowDecimal={false}
+                  value={roundMinutes}
+                  onChange={(value) => setRoundMinutes(clampNumber(Number(value) || 1, 1, 300))}
+                  w={110}
+                  size="xs"
+                />
+              )}
             </Group>
             <Group>
               <Button

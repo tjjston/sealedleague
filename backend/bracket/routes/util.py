@@ -109,10 +109,10 @@ async def team_with_players_dependency(
 
 async def disallow_archived_tournament(tournament_id: TournamentId) -> Tournament:
     tournament = await sql_get_tournament(tournament_id)
-    if tournament.status is TournamentStatus.ARCHIVED:
+    if tournament.status is TournamentStatus.CLOSED:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Can't update archived tournament",
+            detail="Can't update closed tournament",
             headers={"WWW-Authenticate": "Bearer"},
         )
 

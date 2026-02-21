@@ -1,4 +1,15 @@
-import { Button, Center, Checkbox, Divider, Grid, Modal, NumberInput, Text } from '@mantine/core';
+import {
+  Button,
+  Center,
+  Checkbox,
+  Divider,
+  Grid,
+  Group,
+  Modal,
+  NumberInput,
+  Text,
+  TextInput,
+} from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,7 +20,7 @@ import { formatMatchInput1, formatMatchInput2 } from '@components/utils/match';
 import { TournamentMinimal } from '@components/utils/tournament';
 import { MatchWithDetails, RoundWithMatches, StagesWithStageItemsResponse } from '@openapi';
 import { getMatchLookup, getStageItemLookup } from '@services/lookups';
-import { deleteMatch, updateMatch } from '@services/match';
+import { deleteMatch, updateKarabastGameName, updateMatch } from '@services/match';
 
 function MatchDeleteButton({
   tournamentData,
@@ -47,6 +58,7 @@ function MatchModalForm({
   round,
   allowAdvancedSettings,
   allowDelete,
+  karabastEnabled,
 }: {
   tournamentData: TournamentMinimal;
   match: MatchWithDetails | null;
@@ -56,6 +68,7 @@ function MatchModalForm({
   round: RoundWithMatches | null;
   allowAdvancedSettings: boolean;
   allowDelete: boolean;
+  karabastEnabled: boolean;
 }) {
   if (match == null) {
     return null;
@@ -85,6 +98,9 @@ function MatchModalForm({
   );
   const [customMarginEnabled, setCustomMarginEnabled] = useState(
     match.custom_margin_minutes != null
+  );
+  const [karabastGameNameInput, setKarabastGameNameInput] = useState(
+    String((match as any)?.karabast_game_name ?? '')
   );
 
   const stageItemsLookup = getStageItemLookup(swrStagesResponse);
@@ -125,6 +141,39 @@ function MatchModalForm({
           placeholder={`${t('score_of_label')} ${team2Name}`}
           {...form.getInputProps('stage_item_input2_score')}
         />
+        {karabastEnabled ? (
+          <>
+            <Divider mt="lg" />
+            <Text size="sm" mt="lg">
+              Karabast Lobby URL or Game Name
+            </Text>
+            <Text size="xs" c="dimmed" mb="xs">
+              Paste a full lobby URL like https://karabast.net/lobby?lobbyId=... or a shared game name.
+            </Text>
+            <Group grow align="end">
+              <TextInput
+                value={karabastGameNameInput}
+                onChange={(event) => setKarabastGameNameInput(event.currentTarget.value)}
+                placeholder="https://karabast.net/lobby?lobbyId=..."
+              />
+              <Button
+                type="button"
+                variant="light"
+                onClick={async () => {
+                  await updateKarabastGameName(
+                    tournamentData.id,
+                    match.id,
+                    karabastGameNameInput.trim() === '' ? null : karabastGameNameInput.trim()
+                  );
+                  await swrStagesResponse.mutate();
+                  if (swrUpcomingMatchesResponse != null) await swrUpcomingMatchesResponse.mutate();
+                }}
+              >
+                Save Lobby Details
+              </Button>
+            </Group>
+          </>
+        ) : null}
         {allowAdvancedSettings ? (
           <>
             <Divider mt="lg" />
@@ -209,6 +258,7 @@ export default function MatchModal({
   round,
   allowAdvancedSettings = true,
   allowDelete = true,
+  karabastEnabled = false,
 }: {
   tournamentData: TournamentMinimal;
   match: MatchWithDetails | null;
@@ -219,6 +269,7 @@ export default function MatchModal({
   round: RoundWithMatches | null;
   allowAdvancedSettings?: boolean;
   allowDelete?: boolean;
+  karabastEnabled?: boolean;
 }) {
   const { t } = useTranslation();
 
@@ -234,6 +285,7 @@ export default function MatchModal({
           round={round}
           allowAdvancedSettings={allowAdvancedSettings}
           allowDelete={allowDelete}
+          karabastEnabled={karabastEnabled}
         />
       </Modal>
     </>

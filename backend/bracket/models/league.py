@@ -110,6 +110,7 @@ class LeagueSeasonPrivilegesUpdateBody(BaseModel):
     role: SeasonMembershipRole = SeasonMembershipRole.PLAYER
     can_manage_points: bool = False
     can_manage_tournaments: bool = False
+    hide_from_standings: bool = False
 
 
 class LeagueAwardAccoladeBody(BaseModel):
@@ -208,6 +209,7 @@ class LeagueAdminUserView(BaseModel):
     role: SeasonMembershipRole | None = None
     can_manage_points: bool = False
     can_manage_tournaments: bool = False
+    hide_from_standings: bool = False
 
 
 class LeagueSeasonRecord(BaseModel):
@@ -319,6 +321,7 @@ class LeagueSeasonPointAdjustmentBody(BaseModel):
 
 
 class LeagueTournamentApplicationBody(BaseModel):
+    user_id: UserId | None = None
     season_id: int | None = None
     deck_id: DeckId | None = None
     participant_name: str | None = None
@@ -352,6 +355,11 @@ class LeagueProjectedScheduleItemUpsertBody(BaseModel):
     title: str = Field(min_length=1, max_length=180)
     details: str | None = Field(default=None, max_length=4000)
     status: str | None = Field(default=None, max_length=80)
+    event_template: Literal["STANDARD", "REGULAR_SEASON_MATCHUP"] = "STANDARD"
+    regular_season_week_index: int | None = Field(default=None, ge=1, le=500)
+    regular_season_games_per_opponent: int | None = Field(default=None, ge=1, le=20)
+    regular_season_games_per_week: int | None = Field(default=None, ge=1, le=20)
+    participant_user_ids: list[UserId] | None = None
     season_id: int | None = None
     sort_order: int = Field(default=0, ge=0, le=1000)
 
@@ -362,6 +370,11 @@ class LeagueProjectedScheduleItemUpdateBody(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=180)
     details: str | None = Field(default=None, max_length=4000)
     status: str | None = Field(default=None, max_length=80)
+    event_template: Literal["STANDARD", "REGULAR_SEASON_MATCHUP"] | None = None
+    regular_season_week_index: int | None = Field(default=None, ge=1, le=500)
+    regular_season_games_per_opponent: int | None = Field(default=None, ge=1, le=20)
+    regular_season_games_per_week: int | None = Field(default=None, ge=1, le=20)
+    participant_user_ids: list[UserId] | None = None
     season_id: int | None = None
     linked_tournament_id: TournamentId | None = None
     sort_order: int | None = Field(default=None, ge=0, le=1000)
@@ -413,10 +426,16 @@ class LeagueProjectedScheduleItemView(BaseModel):
     title: str
     details: str | None = None
     status: str | None = None
+    event_template: Literal["STANDARD", "REGULAR_SEASON_MATCHUP"] = "STANDARD"
+    regular_season_week_index: int | None = None
+    regular_season_games_per_opponent: int | None = None
+    regular_season_games_per_week: int | None = None
+    participant_user_ids: list[UserId] | None = None
     season_id: int | None = None
     sort_order: int = 0
     linked_tournament_id: TournamentId | None = None
     linked_tournament_name: str | None = None
+    linked_tournament_status: str | None = None
     created_by_user_id: UserId | None = None
     created_by_user_name: str | None = None
     created: datetime_utc

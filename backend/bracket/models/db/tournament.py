@@ -11,7 +11,9 @@ from bracket.utils.types import EnumAutoStr
 
 class TournamentStatus(EnumAutoStr):
     OPEN = auto()
-    ARCHIVED = auto()
+    PLANNED = auto()
+    IN_PROGRESS = auto()
+    CLOSED = auto()
 
 
 class TournamentInsertable(BaseModelORM):

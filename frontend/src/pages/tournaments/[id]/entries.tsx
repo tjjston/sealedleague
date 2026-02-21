@@ -19,6 +19,8 @@ import { submitTournamentApplication, withdrawTournamentApplication } from '@ser
 
 type TournamentDeck = {
   id: number;
+  user_id?: number;
+  user_name?: string;
   name: string;
   leader: string;
   base: string;
@@ -98,7 +100,7 @@ export default function TournamentEntriesPage() {
     () =>
       decks.map((deck) => ({
         value: String(deck.id),
-        label: `${deck.name} (${formatCardName(deck.leader)} / ${formatCardName(deck.base)}) - ${deck.wins ?? 0}-${deck.draws ?? 0}-${deck.losses ?? 0}`,
+        label: `${deck.user_name ?? 'Player'}: ${deck.name} (${formatCardName(deck.leader)} / ${formatCardName(deck.base)}) - ${deck.wins ?? 0}-${deck.draws ?? 0}-${deck.losses ?? 0}`,
       })),
     [decks, cardLookup]
   );
@@ -138,7 +140,7 @@ export default function TournamentEntriesPage() {
                 </Text>
               ) : null}
             </Stack>
-            <Badge color={tournament?.status === 'ARCHIVED' ? 'gray' : 'green'} variant="light">
+            <Badge color={tournament?.status === 'CLOSED' ? 'gray' : 'green'} variant="light">
               {tournament?.status ?? 'OPEN'}
             </Badge>
           </Group>
@@ -159,8 +161,10 @@ export default function TournamentEntriesPage() {
               <Button
                 onClick={async () => {
                   if (selectedDeckId == null) return;
+                  const targetDeck = decks.find((deck) => String(deck.id) === selectedDeckId) ?? null;
                   await submitTournamentApplication(tournamentData.id, {
                     deck_id: Number(selectedDeckId),
+                    user_id: isAdmin ? targetDeck?.user_id : undefined,
                   });
                   await Promise.all([swrApplicationsResponse.mutate(), swrMyApplicationResponse.mutate()]);
                 }}

@@ -1,0 +1,247 @@
+.theme {
+  width: 100%;
+  border-radius: 10px;
+}
+
+.themeDark {
+  background: #0e1217;
+  border: 1px solid #232c36;
+}
+
+.scrollWrap {
+  overflow-x: auto;
+  overflow-y: auto;
+  padding: 18px;
+}
+
+.sections {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  min-width: max-content;
+}
+
+.sectionBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sectionHeader {
+  color: #e3e8ef;
+  font-size: 0.96rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.sectionDescription {
+  color: #91a4bc;
+  font-size: 0.8rem;
+}
+
+.bracket {
+  position: relative;
+  display: flex;
+  flex-direction: row;
+  gap: 18px;
+  width: max-content;
+  min-width: 100%;
+  align-items: flex-start;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  min-width: 240px;
+  gap: 8px;
+  position: relative;
+  z-index: 1;
+}
+
+.columnMatches {
+  position: relative;
+  width: 240px;
+  min-height: 90px;
+}
+
+.columnHeader {
+  color: #cdd6e2;
+  font-size: 0.9rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.match {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 240px;
+  height: 62px;
+  z-index: 2;
+  position: absolute;
+  left: 0;
+}
+
+.team {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  border: 1px solid #232c36;
+  background: #182026;
+  color: #6b798c;
+}
+
+.matchTop {
+  border-radius: 2px 2px 0 0;
+  margin-bottom: -1px;
+}
+
+.matchBottom {
+  border-radius: 0 0 2px 2px;
+}
+
+.winnerTop .matchTop,
+.winnerBottom .matchBottom {
+  background: #232c36;
+  color: #e3e8ef;
+  border-color: #36404e;
+}
+
+.matchStatus {
+  position: absolute;
+  top: -10px;
+  left: 8px;
+  z-index: 3;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid #4a5567;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.statusPending {
+  background: #121922;
+  color: #91a4bc;
+}
+
+.statusInProgress {
+  background: #232013;
+  color: #e5d386;
+}
+
+.statusComplete {
+  background: #13231a;
+  color: #87c79e;
+}
+
+.matchNote {
+  position: absolute;
+  top: -10px;
+  right: 8px;
+  z-index: 3;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid #4a5567;
+  background: #131a23;
+  color: #9fb0c6;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.loserTeam {
+  opacity: 0.52;
+  filter: saturate(0.7);
+}
+
+.team .image {
+  display: none;
+}
+
+.team .seed {
+  padding-left: 8px;
+  min-width: 16px;
+  font-size: 12px;
+}
+
+.team .name {
+  padding-left: 8px;
+  padding-right: 8px;
+  font-size: 13px;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.team .score {
+  margin-left: auto;
+  padding-right: 8px;
+  color: #03d9ce;
+  font-size: 14px;
+}
+
+.connectionLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 0;
+}
+
+.connectionPath {
+  fill: none;
+  stroke: #36404e;
+  stroke-width: 1.25;
+}
+
+.winnerTop .team .score,
+.winnerBottom .team .score {
+  color: #03d9ce;
+}
+
+.winnerTop .matchTop .score,
+.winnerBottom .matchBottom .score {
+  color: #03d9ce;
+}
+
+.winnerTop .matchTop,
+.winnerBottom .matchBottom {
+  border-color: #4a5567;
+}
+
+/* Keep bracket compact on narrow screens while preserving readability. */
+@media (max-width: 900px) {
+  .column {
+    min-width: 220px;
+  }
+  .match {
+    width: 220px;
+  }
+}
+
+/* Legacy connector classes retained as no-op for compatibility. */
+.matchLines {
+  display: none;
+  position: absolute;
+}
+
+.matchLines .line {
+  display: none;
+}
+
+.matchLines .one {
+  display: none;
+}
+
+.matchLines .two {
+  display: none;
+}
+
+.matchLinesAlt {
+  display: none;
+}

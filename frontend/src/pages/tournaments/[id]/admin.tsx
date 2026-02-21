@@ -13,7 +13,7 @@ import {
   Title,
 } from '@mantine/core';
 import { IconTrash } from '@tabler/icons-react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { showNotification } from '@mantine/notifications';
 
 import { getTournamentIdFromRouter } from '@components/utils/util';
@@ -36,7 +36,11 @@ import {
 
 export default function LeagueAdminPage() {
   const { tournamentData } = getTournamentIdFromRouter();
-  const swrUsersResponse = getLeagueAdminUsers(tournamentData.id);
+  const [seasonForPoints, setSeasonForPoints] = useState<string | null>(null);
+  const swrUsersResponse = getLeagueAdminUsers(
+    tournamentData.id,
+    seasonForPoints != null ? Number(seasonForPoints) : null
+  );
   const swrSeasonsResponse = getLeagueAdminSeasons(tournamentData.id);
   const swrTournamentsResponse = getTournaments('OPEN');
   const swrDecksResponse = getLeagueDecks(tournamentData.id);
@@ -50,9 +54,23 @@ export default function LeagueAdminPage() {
   const [tournamentTemplateJson, setTournamentTemplateJson] = useState('');
   const [seasonName, setSeasonName] = useState('');
   const [seasonTournamentIds, setSeasonTournamentIds] = useState<string[]>([]);
-  const [seasonForPoints, setSeasonForPoints] = useState<string | null>(null);
   const [pointsDeltaByUser, setPointsDeltaByUser] = useState<Record<string, string>>({});
   const [pointsReasonByUser, setPointsReasonByUser] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (seasons.length < 1) {
+      setSeasonForPoints(null);
+      return;
+    }
+    if (
+      seasonForPoints != null &&
+      seasons.some((season: any) => String(season.season_id) === String(seasonForPoints))
+    ) {
+      return;
+    }
+    const activeSeason = seasons.find((season: any) => Boolean(season?.is_active));
+    setSeasonForPoints(String(activeSeason?.season_id ?? seasons[0]?.season_id));
+  }, [seasons, seasonForPoints]);
 
   return (
     <TournamentLayout tournament_id={tournamentData.id}>
@@ -270,6 +288,7 @@ export default function LeagueAdminPage() {
                           role,
                           can_manage_points: Boolean(user.can_manage_points),
                           can_manage_tournaments: Boolean(user.can_manage_tournaments),
+                          hide_from_standings: Boolean(user.hide_from_standings),
                         }, seasonForPoints != null ? Number(seasonForPoints) : undefined);
                         await swrUsersResponse.mutate();
                       }}
@@ -285,6 +304,7 @@ export default function LeagueAdminPage() {
                             role: (user.role ?? 'PLAYER') as 'PLAYER' | 'ADMIN',
                             can_manage_points: event.currentTarget.checked,
                             can_manage_tournaments: Boolean(user.can_manage_tournaments),
+                            hide_from_standings: Boolean(user.hide_from_standings),
                           }, seasonForPoints != null ? Number(seasonForPoints) : undefined);
                           await swrUsersResponse.mutate();
                         }}
@@ -297,6 +317,20 @@ export default function LeagueAdminPage() {
                             role: (user.role ?? 'PLAYER') as 'PLAYER' | 'ADMIN',
                             can_manage_points: Boolean(user.can_manage_points),
                             can_manage_tournaments: event.currentTarget.checked,
+                            hide_from_standings: Boolean(user.hide_from_standings),
+                          }, seasonForPoints != null ? Number(seasonForPoints) : undefined);
+                          await swrUsersResponse.mutate();
+                        }}
+                      />
+                      <Checkbox
+                        label="Hide from standings"
+                        checked={Boolean(user.hide_from_standings)}
+                        onChange={async (event) => {
+                          await updateSeasonPrivileges(tournamentData.id, user.user_id, {
+                            role: (user.role ?? 'PLAYER') as 'PLAYER' | 'ADMIN',
+                            can_manage_points: Boolean(user.can_manage_points),
+                            can_manage_tournaments: Boolean(user.can_manage_tournaments),
+                            hide_from_standings: event.currentTarget.checked,
                           }, seasonForPoints != null ? Number(seasonForPoints) : undefined);
                           await swrUsersResponse.mutate();
                         }}

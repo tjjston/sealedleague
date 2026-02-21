@@ -86,6 +86,7 @@ export async function submitLeagueEntry(
 export async function submitTournamentApplication(
   tournament_id: number,
   body: {
+    user_id?: number;
     season_id?: number;
     deck_id?: number;
     participant_name?: string;
@@ -110,6 +111,7 @@ export async function updateSeasonPrivileges(
     role: 'PLAYER' | 'ADMIN';
     can_manage_points: boolean;
     can_manage_tournaments: boolean;
+    hide_from_standings: boolean;
   },
   season_id?: number
 ) {
@@ -231,6 +233,11 @@ export async function createProjectedScheduleItem(
     title: string;
     details?: string | null;
     status?: string | null;
+    event_template?: 'STANDARD' | 'REGULAR_SEASON_MATCHUP';
+    regular_season_week_index?: number | null;
+    regular_season_games_per_opponent?: number | null;
+    regular_season_games_per_week?: number | null;
+    participant_user_ids?: number[] | null;
     season_id?: number | null;
     sort_order?: number;
   }
@@ -249,6 +256,11 @@ export async function updateProjectedScheduleItem(
     title?: string;
     details?: string | null;
     status?: string | null;
+    event_template?: 'STANDARD' | 'REGULAR_SEASON_MATCHUP' | null;
+    regular_season_week_index?: number | null;
+    regular_season_games_per_opponent?: number | null;
+    regular_season_games_per_week?: number | null;
+    participant_user_ids?: number[] | null;
     season_id?: number | null;
     linked_tournament_id?: number | null;
     sort_order?: number;

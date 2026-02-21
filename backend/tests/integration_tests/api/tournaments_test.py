@@ -144,25 +144,25 @@ async def test_update_tournament(
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_archive_and_unarchive_tournament(
+async def test_close_and_reopen_tournament(
     startup_and_shutdown_uvicorn_server: None, auth_context: AuthContext
 ) -> None:
     query = tournaments.select().where(tournaments.c.id == auth_context.tournament.id)
-    body = {"status": "ARCHIVED"}
+    body = {"status": "CLOSED"}
     assert (
         await send_tournament_request(HTTPMethod.POST, "change-status", auth_context, json=body)
         == SUCCESS_RESPONSE
     )
     updated_tournament = await fetch_one_parsed_certain(database, Tournament, query)
-    assert updated_tournament.status is TournamentStatus.ARCHIVED
+    assert updated_tournament.status is TournamentStatus.CLOSED
     assert updated_tournament.dashboard_public is False
 
-    # Archiving twice is not allowed
+    # Closing twice is not allowed
     assert await send_tournament_request(
         HTTPMethod.POST, "change-status", auth_context, json=body
     ) == {"detail": "Tournament already has the requested status"}
 
-    # Unarchive the tournament
+    # Reopen the tournament
     body = {"status": "OPEN"}
     assert (
         await send_tournament_request(HTTPMethod.POST, "change-status", auth_context, json=body)

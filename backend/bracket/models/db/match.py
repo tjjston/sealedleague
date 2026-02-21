@@ -1,12 +1,12 @@
 from decimal import Decimal
 
 from heliclockter import datetime_utc, timedelta
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from bracket.models.db.court import Court
 from bracket.models.db.shared import BaseModelORM
 from bracket.models.db.stage_item_inputs import StageItemInput
-from bracket.utils.id_types import CourtId, MatchId, RoundId, StageItemInputId
+from bracket.utils.id_types import CourtId, DeckId, MatchId, RoundId, StageItemInputId, UserId
 from bracket.utils.types import assert_some
 
 
@@ -17,6 +17,7 @@ class MatchBaseInsertable(BaseModelORM):
     margin_minutes: int
     custom_duration_minutes: int | None = None
     custom_margin_minutes: int | None = None
+    karabast_game_name: str | None = None
     position_in_schedule: int | None = None
     round_id: RoundId
     stage_item_input1_score: int
@@ -36,6 +37,8 @@ class MatchInsertable(MatchBaseInsertable):
     stage_item_input2_id: StageItemInputId | None = None
     stage_item_input1_winner_from_match_id: MatchId | None = None
     stage_item_input2_winner_from_match_id: MatchId | None = None
+    stage_item_input1_loser_from_match_id: MatchId | None = None
+    stage_item_input2_loser_from_match_id: MatchId | None = None
 
 
 class Match(MatchInsertable):
@@ -48,6 +51,14 @@ class Match(MatchInsertable):
             return self.stage_item_input1
         if self.stage_item_input1_score < self.stage_item_input2_score:
             return self.stage_item_input2
+
+        return None
+
+    def get_loser(self) -> StageItemInput | None:
+        if self.stage_item_input1_score > self.stage_item_input2_score:
+            return self.stage_item_input2
+        if self.stage_item_input1_score < self.stage_item_input2_score:
+            return self.stage_item_input1
 
         return None
 
@@ -102,11 +113,15 @@ class MatchCreateBodyFrontend(BaseModelORM):
     stage_item_input2_id: StageItemInputId | None = None
     stage_item_input1_winner_from_match_id: MatchId | None = None
     stage_item_input2_winner_from_match_id: MatchId | None = None
+    stage_item_input1_loser_from_match_id: MatchId | None = None
+    stage_item_input2_loser_from_match_id: MatchId | None = None
 
 
 class MatchCreateBody(MatchCreateBodyFrontend):
     duration_minutes: int
     margin_minutes: int
+    stage_item_input1_score: int = 0
+    stage_item_input2_score: int = 0
     custom_duration_minutes: int | None = None
     custom_margin_minutes: int | None = None
 
@@ -137,3 +152,23 @@ class SuggestedMatch(BaseModel):
     @property
     def stage_item_input_ids(self) -> list[int]:
         return [self.stage_item_input1.id, self.stage_item_input2.id]
+
+
+class MatchKarabastGameNameBody(BaseModelORM):
+    karabast_game_name: str | None = Field(default=None, max_length=120)
+
+
+class MatchKarabastDeckExport(BaseModel):
+    slot: int
+    team_name: str | None = None
+    user_id: UserId | None = None
+    user_name: str | None = None
+    deck_id: DeckId | None = None
+    deck_name: str | None = None
+    deck_export: dict | None = None
+
+
+class MatchKarabastBundle(BaseModel):
+    match_id: MatchId
+    game_name: str
+    players: list[MatchKarabastDeckExport]

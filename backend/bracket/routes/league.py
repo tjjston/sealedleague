@@ -1,6 +1,7 @@
 import asyncio
 import io
 import csv
+from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from heliclockter import datetime_utc
@@ -9,10 +10,14 @@ from starlette import status
 
 from bracket.config import config
 from bracket.database import database
+from bracket.logic.scheduling.round_robin import get_round_robin_combinations
 from bracket.schema import courts
 from bracket.models.db.court import CourtInsertable
+from bracket.models.db.match import MatchCreateBody
 from bracket.models.db.player import PlayerBody
 from bracket.models.db.ranking import RankingCreateBody
+from bracket.models.db.round import RoundInsertable
+from bracket.models.db.stage_item import StageItemCreateBody, StageType
 from bracket.models.db.tournament import TournamentBody, TournamentUpdateBody
 from bracket.models.db.user import UserPublic
 from bracket.models.league import (
@@ -69,8 +74,10 @@ from bracket.sql.league import (
     delete_tournament_application,
     ensure_user_registered_as_participant,
     get_card_pool_entries,
+    get_card_pool_entries_for_tournament_scope,
     get_deck_by_id,
     get_decks,
+    get_decks_for_tournament_club_users,
     get_decks_for_tournament_scope,
     get_league_admin_users,
     get_league_meta_analysis,
@@ -86,12 +93,14 @@ from bracket.sql.league import (
     list_league_communications,
     get_dashboard_background_settings,
     list_projected_schedule_items,
+    sync_projected_schedule_tournament_statuses,
     get_seasons_for_tournament,
     get_user_id_by_email,
     insert_accolade,
     insert_points_ledger_delta,
     list_admin_seasons_for_tournament,
     set_team_logo_for_user_in_tournament,
+    set_season_tournaments,
     reset_season_draft_results,
     upsert_tournament_application,
     update_season,
@@ -105,14 +114,21 @@ from bracket.sql.league import (
 )
 from bracket.utils.id_types import DeckId, TournamentId, UserId
 from bracket.utils.logging import logger
+from bracket.utils.swudb import build_swudb_deck_export
 from bracket.sql.players import (
     ensure_tournament_records_fresh,
     insert_player,
     recalculate_tournament_records,
 )
 from bracket.sql.rankings import sql_create_ranking
+from bracket.sql.rounds import sql_create_round
+from bracket.sql.stage_item_inputs import sql_set_team_id_for_stage_item_input
+from bracket.sql.stage_items import get_stage_item, sql_create_stage_item_with_empty_inputs
+from bracket.sql.stages import sql_create_stage
+from bracket.sql.matches import sql_create_match
+from bracket.sql.teams import get_teams_with_members
 from bracket.sql.tournaments import sql_create_tournament, sql_get_tournament, sql_update_tournament
-from bracket.sql.users import get_users_for_club
+from bracket.sql.users import get_user_by_id, get_users_for_club
 
 router = APIRouter(prefix=config.api_prefix)
 
@@ -129,19 +145,252 @@ def can_manage_other_users(current_user: UserPublic, target_user_id: UserId | No
     return target_user_id is not None and target_user_id != current_user.id
 
 
+def normalize_person_name(value: str | None) -> str:
+    return str(value or "").strip().lower()
+
+
+async def normalize_projected_schedule_participant_ids(
+    tournament_id: TournamentId,
+    participant_user_ids: list[UserId] | None,
+    season_id: int | None = None,
+) -> list[int] | None:
+    if participant_user_ids is None:
+        return None
+
+    normalized_ids: list[int] = []
+    seen_ids: set[int] = set()
+    for user_id in participant_user_ids:
+        normalized_id = int(user_id)
+        if normalized_id <= 0 or normalized_id in seen_ids:
+            continue
+        seen_ids.add(normalized_id)
+        normalized_ids.append(normalized_id)
+
+    if len(normalized_ids) < 1:
+        return []
+
+    season = await resolve_season_for_tournament(tournament_id, season_id)
+    current_users = await get_league_admin_users(tournament_id, season.id)
+    allowed_user_ids = {int(user.user_id) for user in current_users}
+    invalid_user_ids = [user_id for user_id in normalized_ids if user_id not in allowed_user_ids]
+    if len(invalid_user_ids) > 0:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "One or more selected participants are not in the current user pool",
+        )
+
+    return normalized_ids
+
+
+async def maybe_build_regular_season_matchup_event(
+    source_tournament_id: TournamentId,
+    source_tournament: Any,
+    created_tournament_id: TournamentId,
+    schedule_item: Any,
+    club_users: list[Any],
+) -> None:
+    if schedule_item.event_template != "REGULAR_SEASON_MATCHUP":
+        return
+
+    selected_participant_ids = [
+        int(user_id)
+        for user_id in (schedule_item.participant_user_ids or [])
+        if user_id is not None
+    ]
+    if len(selected_participant_ids) > 0:
+        name_by_user_id: dict[int, str] = {
+            int(user.id): str(user.name).strip() for user in club_users if str(user.name).strip() != ""
+        }
+        if schedule_item.season_id is not None:
+            season_users = await get_league_admin_users(source_tournament_id, int(schedule_item.season_id))
+            for user in season_users:
+                user_name = str(user.user_name).strip()
+                if user_name == "":
+                    continue
+                name_by_user_id[int(user.user_id)] = user_name
+
+        participant_tuples: list[tuple[int, str]] = []
+        seen_user_ids: set[int] = set()
+        for selected_user_id in selected_participant_ids:
+            if selected_user_id in seen_user_ids:
+                continue
+            seen_user_ids.add(selected_user_id)
+            participant_name = name_by_user_id.get(selected_user_id, "").strip()
+            if participant_name == "":
+                selected_user = await get_user_by_id(selected_user_id)
+                participant_name = (
+                    str(selected_user.name).strip() if selected_user is not None else ""
+                )
+            if participant_name != "":
+                participant_tuples.append((selected_user_id, participant_name))
+    elif schedule_item.season_id is not None:
+        season_users = await get_league_admin_users(source_tournament_id, int(schedule_item.season_id))
+        participant_tuples = [
+            (int(user.user_id), str(user.user_name).strip())
+            for user in season_users
+            if user.role is not None and str(user.user_name).strip() != ""
+        ]
+    else:
+        participant_tuples = [
+            (int(user.id), str(user.name).strip()) for user in club_users if str(user.name).strip() != ""
+        ]
+
+    participants_by_name: dict[str, tuple[int, str]] = {}
+    for user_id, participant_name in participant_tuples:
+        normalized_name = normalize_person_name(participant_name)
+        if normalized_name == "":
+            continue
+        participants_by_name.setdefault(normalized_name, (user_id, participant_name))
+
+    if len(participants_by_name) < 2:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Regular season matchup requires at least 2 participants",
+        )
+
+    for user_id, participant_name in participants_by_name.values():
+        await ensure_user_registered_as_participant(
+            tournament_id=created_tournament_id,
+            user_id=user_id,
+            participant_name=participant_name,
+        )
+
+    all_teams = await get_teams_with_members(created_tournament_id, only_active_teams=True)
+    participants_lookup = set(participants_by_name.keys())
+    participant_teams = [
+        team
+        for team in all_teams
+        if normalize_person_name(team.name) in participants_lookup
+    ]
+    participant_teams.sort(key=lambda team: (str(team.name).strip().lower(), int(team.id)))
+
+    if len(participant_teams) < 2:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Regular season matchup requires at least 2 participant teams",
+        )
+    if len(participant_teams) > 64:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Regular season matchup supports at most 64 participants",
+        )
+
+    created_stage = await sql_create_stage(created_tournament_id)
+    created_stage_item = await sql_create_stage_item_with_empty_inputs(
+        created_tournament_id,
+        StageItemCreateBody(
+            stage_id=created_stage.id,
+            name="Regular Season Matchup",
+            type=StageType.REGULAR_SEASON_MATCHUP,
+            team_count=len(participant_teams),
+            ranking_id=None,
+        ),
+    )
+    stage_item_with_inputs = await get_stage_item(created_tournament_id, created_stage_item.id)
+    sorted_inputs = sorted(stage_item_with_inputs.inputs, key=lambda input_: int(input_.slot))
+    for index, stage_input in enumerate(sorted_inputs):
+        await sql_set_team_id_for_stage_item_input(
+            created_tournament_id,
+            stage_input.id,
+            participant_teams[index].id,
+        )
+
+    week_index = (
+        int(schedule_item.regular_season_week_index)
+        if schedule_item.regular_season_week_index is not None
+        else max(1, int(schedule_item.sort_order) + 1)
+    )
+    total_games_per_opponent = (
+        int(schedule_item.regular_season_games_per_opponent)
+        if schedule_item.regular_season_games_per_opponent is not None
+        else 1
+    )
+    games_per_week = (
+        int(schedule_item.regular_season_games_per_week)
+        if schedule_item.regular_season_games_per_week is not None
+        else 1
+    )
+    if total_games_per_opponent < 1:
+        total_games_per_opponent = 1
+    if games_per_week < 1:
+        games_per_week = 1
+
+    round_id = await sql_create_round(
+        RoundInsertable(
+            created=datetime_utc.now(),
+            is_draft=False,
+            stage_item_id=created_stage_item.id,
+            name=f"Week {week_index}",
+        )
+    )
+
+    pairings_by_round = get_round_robin_combinations(len(participant_teams))
+    if len(pairings_by_round) < 1:
+        return
+
+    rounds_per_cycle = len(pairings_by_round)
+    normalized_week_index = max(1, week_index)
+    cycle_index = (normalized_week_index - 1) // rounds_per_cycle
+    pairings_round_index = (normalized_week_index - 1) % rounds_per_cycle
+    games_played_before_week = cycle_index * games_per_week
+    remaining_games_for_pair = max(0, total_games_per_opponent - games_played_before_week)
+    games_this_week = min(games_per_week, remaining_games_for_pair)
+    if games_this_week < 1:
+        return
+    pairings = pairings_by_round[pairings_round_index]
+
+    input_ids_by_slot_index = [stage_input.id for stage_input in sorted_inputs]
+    for left_index, right_index in pairings:
+        if left_index >= len(input_ids_by_slot_index) or right_index >= len(input_ids_by_slot_index):
+            continue
+
+        for game_index in range(games_this_week):
+            left_input_id = input_ids_by_slot_index[left_index]
+            right_input_id = input_ids_by_slot_index[right_index]
+            game_number = games_played_before_week + game_index + 1
+            if game_number % 2 == 0:
+                left_input_id, right_input_id = right_input_id, left_input_id
+
+            await sql_create_match(
+                MatchCreateBody(
+                    round_id=round_id,
+                    stage_item_input1_id=left_input_id,
+                    stage_item_input1_winner_from_match_id=None,
+                    stage_item_input2_id=right_input_id,
+                    stage_item_input2_winner_from_match_id=None,
+                    court_id=None,
+                    duration_minutes=source_tournament.duration_minutes,
+                    margin_minutes=source_tournament.margin_minutes,
+                    custom_duration_minutes=None,
+                    custom_margin_minutes=None,
+                )
+            )
+
+
 async def resolve_season_for_tournament(
     tournament_id: TournamentId,
     season_id: int | None,
 ):
     if season_id is None:
+        seasons = await list_admin_seasons_for_tournament(tournament_id)
+        if len(seasons) > 0:
+            active = next((season for season in seasons if bool(season.is_active)), None)
+            if active is not None:
+                active_season = await get_season_by_id(active.season_id)
+                if active_season is not None:
+                    return active_season
+            most_recent = max(seasons, key=lambda season: int(season.season_id))
+            recent_season = await get_season_by_id(most_recent.season_id)
+            if recent_season is not None:
+                return recent_season
         return await get_or_create_active_season(tournament_id)
 
     season = await get_season_by_id(season_id)
     if season is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Season not found")
 
-    mapped_tournaments = await get_tournament_ids_for_season(season.id)
-    if int(tournament_id) not in {int(mapped_id) for mapped_id in mapped_tournaments}:
+    available_seasons = await list_admin_seasons_for_tournament(tournament_id)
+    if int(season.id) not in {int(item.season_id) for item in available_seasons}:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Season does not belong to this tournament")
     return season
 
@@ -169,6 +418,7 @@ async def get_season_history(
     _: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueSeasonHistoryResponse:
     await ensure_tournament_records_fresh(tournament_id)
+    await get_or_create_active_season(tournament_id)
     seasons = await get_seasons_for_tournament(tournament_id)
     standings_results = await asyncio.gather(
         *(get_league_standings(tournament_id, season.id) for season in seasons),
@@ -298,6 +548,7 @@ async def get_projected_schedule(
     tournament_id: TournamentId,
     _: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueProjectedScheduleResponse:
+    await sync_projected_schedule_tournament_statuses(tournament_id)
     return LeagueProjectedScheduleResponse(data=await list_projected_schedule_items(tournament_id))
 
 
@@ -314,6 +565,13 @@ async def post_projected_schedule_item(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
     if body.season_id is not None:
         await resolve_season_for_tournament(tournament_id, body.season_id)
+    body = body.model_copy(
+        update={
+            "participant_user_ids": await normalize_projected_schedule_participant_ids(
+                tournament_id, body.participant_user_ids, body.season_id
+            )
+        }
+    )
     created = await create_projected_schedule_item(tournament_id, body, user_public.id)
     return LeagueProjectedScheduleItemResponse(data=created)
 
@@ -332,6 +590,20 @@ async def put_projected_schedule_item(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
     if body.season_id is not None:
         await resolve_season_for_tournament(tournament_id, body.season_id)
+    if "participant_user_ids" in body.model_fields_set:
+        effective_season_id = body.season_id
+        if effective_season_id is None:
+            existing_item = await get_projected_schedule_item_by_id(tournament_id, schedule_item_id)
+            if existing_item is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Projected schedule item not found")
+            effective_season_id = existing_item.season_id
+        body = body.model_copy(
+            update={
+                "participant_user_ids": await normalize_projected_schedule_participant_ids(
+                    tournament_id, body.participant_user_ids, effective_season_id
+                )
+            }
+        )
     updated = await update_projected_schedule_item(tournament_id, schedule_item_id, body)
     if updated is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Projected schedule item not found")
@@ -402,6 +674,15 @@ async def post_create_projected_schedule_event(
 
     async with database.transaction():
         created_tournament_id = await sql_create_tournament(event_body)
+        if schedule_item.season_id is not None:
+            tournament_ids_for_season = await get_tournament_ids_for_season(int(schedule_item.season_id))
+            if int(created_tournament_id) not in {
+                int(season_tournament_id) for season_tournament_id in tournament_ids_for_season
+            }:
+                await set_season_tournaments(
+                    int(schedule_item.season_id),
+                    [*tournament_ids_for_season, created_tournament_id],
+                )
         await sql_create_ranking(created_tournament_id, RankingCreateBody(), position=0)
         await database.execute(
             query=courts.insert(),
@@ -417,6 +698,13 @@ async def post_create_projected_schedule_event(
             if player_name == "":
                 continue
             await insert_player(PlayerBody(name=player_name, active=True), created_tournament_id)
+        await maybe_build_regular_season_matchup_event(
+            source_tournament_id=tournament_id,
+            source_tournament=source_tournament,
+            created_tournament_id=created_tournament_id,
+            schedule_item=schedule_item,
+            club_users=club_users,
+        )
         await update_projected_schedule_item(
             tournament_id,
             schedule_item_id,
@@ -424,6 +712,7 @@ async def post_create_projected_schedule_event(
         )
 
     created_event = await sql_get_tournament(created_tournament_id)
+    await sync_projected_schedule_tournament_statuses(tournament_id)
     return LeagueProjectedScheduleEventCreateResponse(
         data={
             "schedule_item_id": int(schedule_item.id),
@@ -446,6 +735,16 @@ async def get_card_pool(
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
     if can_manage_other_users(user_public, user_id) and not has_admin_access:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+
+    if season_id is None:
+        if has_admin_access and user_id is None:
+            return LeagueCardPoolEntriesResponse(
+                data=await get_card_pool_entries_for_tournament_scope(tournament_id, None)
+            )
+        target_user_id = user_id if user_id is not None and has_admin_access else user_public.id
+        return LeagueCardPoolEntriesResponse(
+            data=await get_card_pool_entries_for_tournament_scope(tournament_id, target_user_id)
+        )
 
     season = await resolve_season_for_tournament(tournament_id, season_id)
     if has_admin_access and user_id is None:
@@ -489,16 +788,21 @@ async def list_decks(
     if season_id is None:
         if user_id is None:
             if has_admin_access:
-                return LeagueDecksResponse(data=await get_decks_for_tournament_scope(tournament_id))
-            return LeagueDecksResponse(
-                data=await get_decks_for_tournament_scope(tournament_id, user_public.id)
-            )
+                decks = await get_decks_for_tournament_scope(tournament_id)
+                if len(decks) < 1:
+                    decks = await get_decks_for_tournament_club_users(tournament_id)
+                return LeagueDecksResponse(data=decks)
+            decks = await get_decks_for_tournament_scope(tournament_id, user_public.id)
+            if len(decks) < 1:
+                decks = await get_decks_for_tournament_club_users(tournament_id, user_public.id)
+            return LeagueDecksResponse(data=decks)
 
         if can_manage_other_users(user_public, user_id) and not has_admin_access:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
-        return LeagueDecksResponse(
-            data=await get_decks_for_tournament_scope(tournament_id, user_id)
-        )
+        decks = await get_decks_for_tournament_scope(tournament_id, user_id)
+        if len(decks) < 1:
+            decks = await get_decks_for_tournament_club_users(tournament_id, user_id)
+        return LeagueDecksResponse(data=decks)
 
     season = await resolve_season_for_tournament(tournament_id, season_id)
     if user_id is None:
@@ -673,8 +977,11 @@ async def list_league_seasons(
     tournament_id: TournamentId,
     _: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueAdminSeasonsResponse:
-    await get_or_create_active_season(tournament_id)
-    return LeagueAdminSeasonsResponse(data=await list_admin_seasons_for_tournament(tournament_id))
+    seasons = await list_admin_seasons_for_tournament(tournament_id)
+    if len(seasons) < 1:
+        await get_or_create_active_season(tournament_id)
+        seasons = await list_admin_seasons_for_tournament(tournament_id)
+    return LeagueAdminSeasonsResponse(data=seasons)
 
 
 @router.get(
@@ -683,12 +990,13 @@ async def list_league_seasons(
 )
 async def list_league_admin_users(
     tournament_id: TournamentId,
+    season_id: int | None = Query(default=None),
     user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueAdminUsersResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
-    season = await get_or_create_active_season(tournament_id)
+    season = await resolve_season_for_tournament(tournament_id, season_id)
     users = await get_league_admin_users(tournament_id, season.id)
     return LeagueAdminUsersResponse(data=users)
 
@@ -703,7 +1011,11 @@ async def list_admin_seasons(
 ) -> LeagueAdminSeasonsResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
-    return LeagueAdminSeasonsResponse(data=await list_admin_seasons_for_tournament(tournament_id))
+    seasons = await list_admin_seasons_for_tournament(tournament_id)
+    if len(seasons) < 1:
+        await get_or_create_active_season(tournament_id)
+        seasons = await list_admin_seasons_for_tournament(tournament_id)
+    return LeagueAdminSeasonsResponse(data=seasons)
 
 
 @router.get(
@@ -909,11 +1221,19 @@ async def post_tournament_application(
     body: LeagueTournamentApplicationBody,
     user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> SuccessResponse:
-    participant_name = (
-        body.participant_name.strip() if body.participant_name is not None else user_public.name.strip()
+    has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
+    if can_manage_other_users(user_public, body.user_id) and not has_admin_access:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
+
+    target_user_id = (
+        body.user_id if body.user_id is not None and has_admin_access else user_public.id
     )
-    if participant_name == "":
-        participant_name = user_public.name
+    target_user_name = user_public.name
+    if int(target_user_id) != int(user_public.id):
+        target_user = await get_user_by_id(target_user_id)
+        if target_user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Target user not found")
+        target_user_name = target_user.name
 
     season = (
         await get_season_by_id(body.season_id)
@@ -925,18 +1245,38 @@ async def post_tournament_application(
 
     if body.deck_id is not None:
         deck = await get_deck_by_id(body.deck_id)
-        if deck is None or deck.user_id != user_public.id:
+        if deck is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Deck not found")
+        if not has_admin_access and deck.user_id != user_public.id:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid deck selection")
+        if has_admin_access and deck.user_id != target_user_id:
+            if body.user_id is None:
+                target_user_id = deck.user_id
+                target_user = await get_user_by_id(target_user_id)
+                target_user_name = target_user.name if target_user is not None else target_user_name
+            else:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    "Selected deck does not belong to the specified user",
+                )
+
+    participant_name = (
+        body.participant_name.strip()
+        if body.participant_name is not None
+        else str(target_user_name).strip()
+    )
+    if participant_name == "":
+        participant_name = str(target_user_name)
 
     await ensure_user_registered_as_participant(
         tournament_id=tournament_id,
-        user_id=user_public.id,
+        user_id=target_user_id,
         participant_name=participant_name,
         leader_image_url=body.leader_image_url,
     )
     await upsert_tournament_application(
         tournament_id=tournament_id,
-        user_id=user_public.id,
+        user_id=target_user_id,
         season_id=season.id,
         deck_id=body.deck_id,
     )
@@ -1050,15 +1390,14 @@ async def export_deck_swudb(
     if deck.user_id != user_public.id and not has_admin_access:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Cannot export this deck")
 
-    return {
-        "name": deck.name,
-        "leader": {"id": deck.leader, "count": 1},
-        "base": {"id": deck.base, "count": 1},
-        "deck": [{"id": card_id, "count": count} for card_id, count in deck.mainboard.items()],
-        "sideboard": [
-            {"id": card_id, "count": count} for card_id, count in deck.sideboard.items()
-        ],
-    }
+    return build_swudb_deck_export(
+        name=deck.name,
+        leader=deck.leader,
+        base=deck.base,
+        mainboard=deck.mainboard,
+        sideboard=deck.sideboard,
+        author=user_public.name,
+    )
 
 
 @router.post("/tournaments/{tournament_id}/league/decks/import/swudb", response_model=LeagueDeckResponse)
