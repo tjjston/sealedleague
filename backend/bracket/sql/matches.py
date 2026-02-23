@@ -262,3 +262,31 @@ async def clear_scores_for_matches_in_stage_item(
             "tournament_id": tournament_id,
         },
     )
+
+
+async def null_unreported_matchups_in_stage_item(
+    tournament_id: TournamentId, stage_item_id: StageItemId
+) -> None:
+    query = """
+        UPDATE matches
+        SET stage_item_input1_id = NULL,
+            stage_item_input2_id = NULL,
+            court_id = NULL,
+            start_time = NULL,
+            position_in_schedule = NULL
+        FROM rounds
+        JOIN stage_items ON rounds.stage_item_id = stage_items.id
+        JOIN stages ON stages.id = stage_items.stage_id
+        WHERE rounds.id = matches.round_id
+          AND stages.tournament_id = :tournament_id
+          AND stage_items.id = :stage_item_id
+          AND matches.stage_item_input1_score = 0
+          AND matches.stage_item_input2_score = 0
+    """
+    await database.execute(
+        query=query,
+        values={
+            "stage_item_id": int(stage_item_id),
+            "tournament_id": int(tournament_id),
+        },
+    )

@@ -2,13 +2,14 @@ from fastapi import HTTPException
 from starlette import status
 
 from bracket.database import database
+from bracket.models.db.user import UserPublic
 from bracket.models.db.stage_item import StageItem, StageItemCreateBody, StageItemWithInputsCreate
 from bracket.models.db.stage_item_inputs import StageItemInputCreateBodyEmpty
 from bracket.models.db.util import StageItemWithRounds
 from bracket.sql.rankings import get_default_rankings_in_tournament
 from bracket.sql.stage_item_inputs import sql_create_stage_item_input
 from bracket.sql.stages import get_full_tournament_details
-from bracket.utils.id_types import StageItemId, TournamentId
+from bracket.utils.id_types import StageItemId, TeamId, TournamentId
 
 
 async def sql_create_stage_item(
@@ -82,3 +83,50 @@ async def get_stage_item(
         )
 
     return stages[0].stage_items[0]
+
+
+async def sql_confirm_stage_item_winner(
+    stage_item_id: StageItemId,
+    winner_team_id: TeamId,
+    winner_team_name: str,
+    confirmed_by_user: UserPublic,
+    *,
+    ended_early: bool = False,
+) -> None:
+    await database.execute(
+        """
+        UPDATE stage_items
+        SET winner_confirmed = true,
+            winner_confirmed_at = NOW(),
+            winner_confirmed_by_user_id = :winner_confirmed_by_user_id,
+            winner_team_id = :winner_team_id,
+            winner_team_name = :winner_team_name,
+            ended_early = :ended_early,
+            ended_early_at = CASE WHEN :ended_early THEN NOW() ELSE NULL END
+        WHERE id = :stage_item_id
+        """,
+        values={
+            "stage_item_id": int(stage_item_id),
+            "winner_confirmed_by_user_id": int(confirmed_by_user.id),
+            "winner_team_id": int(winner_team_id),
+            "winner_team_name": winner_team_name,
+            "ended_early": bool(ended_early),
+        },
+    )
+
+
+async def sql_clear_stage_item_winner_confirmation(stage_item_id: StageItemId) -> None:
+    await database.execute(
+        """
+        UPDATE stage_items
+        SET winner_confirmed = false,
+            winner_confirmed_at = NULL,
+            winner_confirmed_by_user_id = NULL,
+            winner_team_id = NULL,
+            winner_team_name = NULL,
+            ended_early = false,
+            ended_early_at = NULL
+        WHERE id = :stage_item_id
+        """,
+        values={"stage_item_id": int(stage_item_id)},
+    )

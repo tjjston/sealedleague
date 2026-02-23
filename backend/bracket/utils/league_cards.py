@@ -73,6 +73,19 @@ def fetch_swu_cards_cached(
         with _SWU_CACHE_LOCK:
             for set_code in stale_codes:
                 set_cards = by_set.get(set_code, [])
+                existing_entry = _SWU_CACHE.get(set_code)
+                existing_cards = (
+                    existing_entry[1]
+                    if existing_entry is not None and len(existing_entry) > 1
+                    else []
+                )
+
+                # Keep stale-but-known-good data when upstream fetch temporarily fails.
+                if len(set_cards) < 1 and len(existing_cards) > 0:
+                    _SWU_CACHE[set_code] = (time.monotonic(), existing_cards)
+                    cards.extend(existing_cards)
+                    continue
+
                 _SWU_CACHE[set_code] = (time.monotonic(), set_cards)
                 cards.extend(set_cards)
 

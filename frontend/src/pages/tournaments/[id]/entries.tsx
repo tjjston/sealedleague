@@ -24,6 +24,8 @@ type TournamentDeck = {
   name: string;
   leader: string;
   base: string;
+  created?: string;
+  updated?: string;
   tournaments_submitted?: number;
   wins?: number;
   draws?: number;
@@ -41,6 +43,31 @@ type TournamentApplication = {
   deck_base: string | null;
   status: string;
 };
+
+function normalizeCardIdLookupKey(value: string | null | undefined) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/--+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function removeNumericPaddingFromCardId(value: string | null | undefined) {
+  const normalized = normalizeCardIdLookupKey(value);
+  const match = normalized.match(/^([a-z]+)-(\d+)([a-z]*)$/i);
+  if (match == null) return normalized;
+  const [, setCode, number, suffix] = match;
+  const trimmedNumber = String(Number(number));
+  return `${setCode}-${trimmedNumber}${suffix}`;
+}
+
+function buildCardLookupKeys(value: string | null | undefined) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  const normalized = normalizeCardIdLookupKey(value);
+  const noPadding = removeNumericPaddingFromCardId(value);
+  return [raw, normalized, noPadding].filter((item, index, all) => item !== '' && all.indexOf(item) === index);
+}
 
 export default function TournamentEntriesPage() {
   const { tournamentData } = getTournamentIdFromRouter();
@@ -70,11 +97,11 @@ export default function TournamentEntriesPage() {
   const cardLookup: Record<string, string> = useMemo(() => {
     const rows = swrCardsResponse.data?.data?.cards ?? [];
     return rows.reduce((result: Record<string, string>, card: any) => {
-      const cardId = String(card?.card_id ?? '').trim().toLowerCase();
       const cardName = String(card?.name ?? '').trim();
-      if (cardId !== '' && cardName !== '' && result[cardId] == null) {
-        result[cardId] = cardName;
-      }
+      if (cardName === '') return result;
+      buildCardLookupKeys(card?.card_id).forEach((key) => {
+        if (result[key] == null) result[key] = cardName;
+      });
       return result;
     }, {});
   }, [swrCardsResponse.data?.data?.cards]);
@@ -83,9 +110,11 @@ export default function TournamentEntriesPage() {
   const nextOpponent = swrNextOpponentResponse.data?.data;
 
   const formatCardName = (cardId: string | null | undefined) => {
-    const normalized = String(cardId ?? '').trim().toLowerCase();
-    if (normalized === '') return '-';
-    return cardLookup[normalized] ?? cardId ?? '-';
+    const raw = String(cardId ?? '').trim();
+    if (raw === '') return '-';
+    const lookupKey = buildCardLookupKeys(raw).find((candidate) => cardLookup[candidate] != null);
+    if (lookupKey == null) return cardId ?? '-';
+    return cardLookup[lookupKey] ?? cardId ?? '-';
   };
 
   const [selectedDeckId, setSelectedDeckId] = useState<string | null>(null);
@@ -207,7 +236,12 @@ export default function TournamentEntriesPage() {
               <Text size="sm" c="dimmed">
                 Selected deck record: {selectedDeck.wins ?? 0}-{selectedDeck.draws ?? 0}-{selectedDeck.losses ?? 0} (
                 {selectedDeck.matches ?? 0} matches, {(selectedDeck.win_percentage ?? 0).toFixed(2)}% win rate,{' '}
-                {selectedDeck.tournaments_submitted ?? 0} tournament entries)
+                {selectedDeck.tournaments_submitted ?? 0} event entries)
+                {(selectedDeck.updated ?? selectedDeck.created) != null ? (
+                  <>
+                    {' '}| Updated: <DateTime datetime={String(selectedDeck.updated ?? selectedDeck.created)} />
+                  </>
+                ) : null}
               </Text>
             ) : null}
           </Stack>

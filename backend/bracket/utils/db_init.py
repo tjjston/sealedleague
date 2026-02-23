@@ -113,60 +113,74 @@ async def create_admin_user() -> UserId:
 
 
 async def init_db_when_empty() -> UserId | None:
-    table_count = await database.fetch_val(
-        "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
-    )
-    users_table_exists = (
-        await database.fetch_val(
-            """
-            SELECT EXISTS(
-                SELECT 1
-                FROM information_schema.tables
-                WHERE table_schema = 'public'
-                  AND table_name = 'users'
-            )
-            """
+    # Serialize first-boot initialization across gunicorn workers.
+    bootstrap_lock_id = 8400001
+    async with database.connection() as connection:
+        await connection.execute(
+            query="SELECT pg_advisory_lock(:lock_id)",
+            values={"lock_id": bootstrap_lock_id},
         )
-        is True
-    )
-    admin_exists = False
-    if config.admin_email and users_table_exists:
         try:
-            admin_exists = (
-                await database.fetch_val(
-                    "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
-                    values={"email": config.admin_email},
+            table_count = await connection.fetch_val(
+                "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'"
+            )
+            users_table_exists = (
+                await connection.fetch_val(
+                    """
+                    SELECT EXISTS(
+                        SELECT 1
+                        FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                          AND table_name = 'users'
+                    )
+                    """
                 )
                 is True
             )
-        except Exception as exc:
-            # Fail-safe for partially initialized schemas where `users` is not available yet.
-            logger.warning("Admin existence check skipped during bootstrap: %s", exc)
-            users_table_exists = False
             admin_exists = False
-    should_bootstrap = (table_count <= 1 and environment != Environment.CI) or (
-        environment is Environment.DEVELOPMENT and (not users_table_exists or not admin_exists)
-    )
-    if config.admin_email and config.admin_password:
-        if should_bootstrap:
-            logger.warning("Empty db detected, creating tables...")
-            metadata.create_all(engine)
-            alembic_stamp_head()
-
-            try:
-                admin_exists_after_create = (
-                    await database.fetch_val(
-                        "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
-                        values={"email": config.admin_email},
+            if config.admin_email and users_table_exists:
+                try:
+                    admin_exists = (
+                        await connection.fetch_val(
+                            "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
+                            values={"email": config.admin_email},
+                        )
+                        is True
                     )
-                    is True
-                )
-            except Exception as exc:
-                logger.warning("Admin existence re-check failed after bootstrap: %s", exc)
-                admin_exists_after_create = False
-            if not admin_exists_after_create:
-                logger.warning("Empty db detected, creating admin user...")
-                return await create_admin_user()
+                except Exception as exc:
+                    # Fail-safe for partially initialized schemas where `users` is not available yet.
+                    logger.warning("Admin existence check skipped during bootstrap: %s", exc)
+                    users_table_exists = False
+                    admin_exists = False
+
+            should_bootstrap = (table_count <= 1 and environment != Environment.CI) or (
+                environment is Environment.DEVELOPMENT and (not users_table_exists or not admin_exists)
+            )
+            if config.admin_email and config.admin_password:
+                if should_bootstrap:
+                    logger.warning("Empty db detected, creating tables...")
+                    metadata.create_all(engine)
+                    alembic_stamp_head()
+
+                    try:
+                        admin_exists_after_create = (
+                            await connection.fetch_val(
+                                "SELECT EXISTS(SELECT 1 FROM users WHERE email = :email)",
+                                values={"email": config.admin_email},
+                            )
+                            is True
+                        )
+                    except Exception as exc:
+                        logger.warning("Admin existence re-check failed after bootstrap: %s", exc)
+                        admin_exists_after_create = False
+                    if not admin_exists_after_create:
+                        logger.warning("Empty db detected, creating admin user...")
+                        return await create_admin_user()
+        finally:
+            await connection.execute(
+                query="SELECT pg_advisory_unlock(:lock_id)",
+                values={"lock_id": bootstrap_lock_id},
+            )
 
     return None
 

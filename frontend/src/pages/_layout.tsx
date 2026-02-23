@@ -70,8 +70,23 @@ const BACKGROUND_IMAGES = [
   '/backgrounds/yoda.jpg',
 ];
 
+function isExternalLink(link: string | null | undefined) {
+  return /^https?:\/\//i.test(String(link ?? '').trim());
+}
+
 function normalizeAspectKey(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+function formatCardIdForDisplay(value: string | null | undefined) {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '-');
+  if (normalized === '') return '';
+  const match = normalized.match(/^([a-z]+)-0*(\d+)([a-z]*)$/i);
+  if (match == null) return normalized;
+  return `${match[1]}-${Number(match[2])}${String(match[3] ?? '').toLowerCase()}`;
 }
 
 function getMenuItemsForLink(link: HeaderActionLink, _classes: any, pathName: string) {
@@ -79,7 +94,13 @@ function getMenuItemsForLink(link: HeaderActionLink, _classes: any, pathName: st
     pathName === link.link ||
     (Array.isArray(link.links) && link.links.some((item) => item.link === pathName));
   const menuItems = (link.links ?? []).map((item) => (
-    <a key={item.label} className={classes.link} href={item.link}>
+    <a
+      key={item.label}
+      className={classes.link}
+      href={item.link}
+      target={isExternalLink(item.link) ? '_blank' : undefined}
+      rel={isExternalLink(item.link) ? 'noreferrer' : undefined}
+    >
       <Center>
         <item.icon />
         <span style={{ marginLeft: '0.25rem', marginTop: '0.2rem' }}>{item.label}</span>
@@ -107,7 +128,12 @@ function ProfileMenu({ pathName }: { pathName: string }) {
     <Menu trigger="hover" transitionProps={{ exitDuration: 0 }} withinPortal>
       <Menu.Target>
         <Tooltip label="Profile" transitionProps={{ duration: 0 }}>
-          <ActionIcon variant={pathName.startsWith('/user') ? 'filled' : 'default'} size={30}>
+          <ActionIcon
+            component={PreloadLink}
+            href="/user"
+            variant={pathName.startsWith('/user') ? 'filled' : 'default'}
+            size={30}
+          >
             <IconUser size={16} />
           </ActionIcon>
         </Tooltip>
@@ -219,7 +245,7 @@ function HeaderUserSummary() {
   const leaderLabel =
     String(user.current_leader_name ?? '').trim() !== ''
       ? String(user.current_leader_name)
-      : String(user.current_leader_card_id ?? 'No leader selected');
+      : formatCardIdForDisplay(String(user.current_leader_card_id ?? '')) || 'No leader selected';
   const leaderImageUrl =
     String(user.current_leader_image_url ?? '').trim() !== ''
       ? String(user.current_leader_image_url)
@@ -351,8 +377,10 @@ export function HeaderAction({
                       {(link.links ?? []).map((nestedLink) => (
                         <Menu.Item
                           key={`overflow-${link.label}-${nestedLink.label}`}
-                          component={PreloadLink}
+                          component={isExternalLink(nestedLink.link) ? 'a' : PreloadLink}
                           href={nestedLink.link}
+                          target={isExternalLink(nestedLink.link) ? '_blank' : undefined}
+                          rel={isExternalLink(nestedLink.link) ? 'noreferrer' : undefined}
                         >
                           <Group gap={6} wrap="nowrap">
                             <nestedLink.icon size={14} />

@@ -136,6 +136,8 @@ class LeagueDeckView(BaseModel):
     base: str
     mainboard: dict[str, int] = Field(default_factory=dict)
     sideboard: dict[str, int] = Field(default_factory=dict)
+    created: datetime_utc
+    updated: datetime_utc
     tournaments_submitted: int = 0
     wins: int = 0
     draws: int = 0

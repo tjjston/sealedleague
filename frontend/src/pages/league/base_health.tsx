@@ -86,6 +86,31 @@ function normalizeKey(value: unknown) {
   return String(value ?? '').trim().toLowerCase();
 }
 
+function normalizeCardIdLookupKey(value: unknown) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/--+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function removeNumericPaddingFromCardId(value: unknown) {
+  const normalized = normalizeCardIdLookupKey(value);
+  const match = normalized.match(/^([a-z]+)-(\d+)([a-z]*)$/i);
+  if (match == null) return normalized;
+  const [, setCode, number, suffix] = match;
+  const trimmedNumber = String(Number(number));
+  return `${setCode}-${trimmedNumber}${suffix}`;
+}
+
+function buildCardLookupKeys(value: unknown) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  const normalized = normalizeCardIdLookupKey(value);
+  const noPadding = removeNumericPaddingFromCardId(value);
+  return [raw, normalized, noPadding].filter((item, index, all) => item !== '' && all.indexOf(item) === index);
+}
+
 function normalizeAspectKey(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, '_');
 }
@@ -185,10 +210,8 @@ export default function BaseHealthPage() {
         >,
         card: any
       ) => {
-        const id = normalizeKey(card?.card_id);
-        if (id === '' || result[id] != null) return result;
-        result[id] = {
-          name: String(card?.name ?? card?.card_id ?? id),
+        const payload = {
+          name: String(card?.name ?? card?.card_id ?? ''),
           hp: Number.isFinite(Number(card?.hp)) ? Number(card.hp) : null,
           aspects: Array.isArray(card?.aspects)
             ? card.aspects.map((value: any) => String(value))
@@ -196,6 +219,11 @@ export default function BaseHealthPage() {
           image_url:
             String(card?.image_url ?? '').trim() === '' ? null : String(card?.image_url ?? ''),
         };
+        buildCardLookupKeys(card?.card_id).forEach((id) => {
+          if (id !== '' && result[id] == null) {
+            result[id] = payload;
+          }
+        });
         return result;
       },
       {}
@@ -277,10 +305,12 @@ export default function BaseHealthPage() {
       const lookupKeys = [...new Set([teamName, ...playerNames].map(normalizeKey).filter(Boolean))];
       const application = lookupKeys.map((key) => applicationByName[key]).find((row) => row != null) ?? null;
 
-      const leaderId = normalizeKey(application?.deck_leader);
-      const baseId = normalizeKey(application?.deck_base);
-      const leaderCard = leaderId === '' ? null : cardsById[leaderId] ?? null;
-      const baseCard = baseId === '' ? null : cardsById[baseId] ?? null;
+      const leaderLookupKey =
+        buildCardLookupKeys(application?.deck_leader).find((candidate) => cardsById[candidate] != null) ?? '';
+      const baseLookupKey =
+        buildCardLookupKeys(application?.deck_base).find((candidate) => cardsById[candidate] != null) ?? '';
+      const leaderCard = leaderLookupKey === '' ? null : cardsById[leaderLookupKey] ?? null;
+      const baseCard = baseLookupKey === '' ? null : cardsById[baseLookupKey] ?? null;
       const maxHealth = clampNumber(Number(baseCard?.hp ?? DEFAULT_BASE_HEALTH), 1, 99);
 
       return {

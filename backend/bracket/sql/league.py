@@ -814,31 +814,46 @@ async def get_card_pool_entries_for_tournament_scope(
         values["user_id"] = int(user_id)
         user_filter = """
             cpe.user_id = :user_id
-            AND cpe.user_id IN (
-                SELECT uxc.user_id
-                FROM users_x_clubs uxc
-                WHERE uxc.club_id = (
-                    SELECT t0.club_id
-                    FROM tournaments t0
-                    WHERE t0.id = :tournament_id
-                )
-            )
         """
 
-    latest_season_row = await database.fetch_one(
-        f"""
-        SELECT s.id AS season_id
-        FROM seasons s
-        WHERE s.id IN (
-            SELECT DISTINCT cpe.season_id
-            FROM card_pool_entries cpe
-            WHERE {user_filter}
+    latest_season_row = None
+    if user_id is not None:
+        # Prefer seasons that are in scope for this tournament when looking up a single user.
+        # This keeps single-user view aligned with tournament-scoped all-users view.
+        scoped_season_ids = [int(season.id) for season in await get_seasons_for_tournament(tournament_id)]
+        if len(scoped_season_ids) > 0:
+            season_ids_csv = ",".join(str(season_id) for season_id in scoped_season_ids)
+            latest_season_row = await database.fetch_one(
+                f"""
+                SELECT s.id AS season_id
+                FROM seasons s
+                WHERE s.id IN ({season_ids_csv})
+                  AND s.id IN (
+                      SELECT DISTINCT cpe.season_id
+                      FROM card_pool_entries cpe
+                      WHERE cpe.user_id = :user_id
+                  )
+                ORDER BY s.created DESC, s.id DESC
+                LIMIT 1
+                """,
+                values={"user_id": int(user_id)},
+            )
+
+    if latest_season_row is None:
+        latest_season_row = await database.fetch_one(
+            f"""
+            SELECT s.id AS season_id
+            FROM seasons s
+            WHERE s.id IN (
+                SELECT DISTINCT cpe.season_id
+                FROM card_pool_entries cpe
+                WHERE {user_filter}
+            )
+            ORDER BY s.created DESC, s.id DESC
+            LIMIT 1
+            """,
+            values=values,
         )
-        ORDER BY s.created DESC, s.id DESC
-        LIMIT 1
-        """,
-        values=values,
-    )
     if latest_season_row is None:
         return []
     season_id = int(latest_season_row._mapping["season_id"])
@@ -1276,9 +1291,9 @@ async def get_season_draft_view(tournament_id: TournamentId) -> LeagueSeasonDraf
 
     set_codes = sorted(
         {
-            str(entry.card_id).split("-", 1)[0].strip().lower()
-            for entry in card_pool_entries
-            if "-" in str(entry.card_id)
+            set_code
+            for set_code in (_extract_set_code_from_card_id(str(entry.card_id)) for entry in card_pool_entries)
+            if set_code is not None and set_code != ""
         }
     )
     card_lookup: dict[str, dict] = {}
@@ -1286,7 +1301,12 @@ async def get_season_draft_view(tournament_id: TournamentId) -> LeagueSeasonDraf
         try:
             cards_raw = await asyncio.to_thread(fetch_swu_cards_cached, set_codes, 8, 1800)
             cards = [normalize_card_for_deckbuilding(card) for card in cards_raw]
-            card_lookup = {str(card["card_id"]).lower(): card for card in cards}
+            for card in cards:
+                card_id = _normalize_meta_card_id(str(card.get("card_id") or ""))
+                if card_id == "":
+                    continue
+                previous = card_lookup.get(card_id)
+                card_lookup[card_id] = _preferred_card_row(previous, card)
         except Exception:
             card_lookup = {}
 
@@ -1318,7 +1338,7 @@ async def get_season_draft_view(tournament_id: TournamentId) -> LeagueSeasonDraf
             if quantity <= 0:
                 continue
             total_cards += quantity
-            card = card_lookup.get(str(entry.card_id).lower())
+            card = _resolve_meta_card(card_lookup, str(entry.card_id))
             if card is None:
                 by_type["Unknown"] += quantity
                 by_rarity["Unknown"] += quantity
@@ -1526,6 +1546,8 @@ def _build_get_decks_query(*, scope_filter: str, condition: str) -> str:
             d.base,
             d.mainboard,
             d.sideboard,
+            d.created,
+            d.updated,
             COALESCE(ds.tournaments_submitted, 0) AS tournaments_submitted,
             COALESCE(ds.wins, 0) AS wins,
             COALESCE(ds.draws, 0) AS draws,
@@ -2649,6 +2671,8 @@ async def upsert_deck(
             d.base,
             d.mainboard,
             d.sideboard,
+            d.created,
+            d.updated,
             COALESCE(ds.tournaments_submitted, 0) AS tournaments_submitted,
             COALESCE(ds.wins, 0) AS wins,
             COALESCE(ds.draws, 0) AS draws,
@@ -2711,6 +2735,8 @@ async def get_deck_by_id(deck_id: DeckId) -> LeagueDeckView | None:
             d.base,
             d.mainboard,
             d.sideboard,
+            d.created,
+            d.updated,
             COALESCE(ds.tournaments_submitted, 0) AS tournaments_submitted,
             COALESCE(ds.wins, 0) AS wins,
             COALESCE(ds.draws, 0) AS draws,
@@ -4042,12 +4068,23 @@ def _get_card_lookup(card_ids: Sequence[str]) -> dict[str, dict]:
 
     cards_raw = fetch_swu_cards_cached(DEFAULT_SWU_SET_CODES, timeout_s=8, cache_ttl_s=1800)
     cards = [normalize_card_for_deckbuilding(card) for card in cards_raw]
-    by_id = {str(card["card_id"]).lower(): card for card in cards}
-    return {
-        card_id.lower(): by_id[card_id.lower()]
-        for card_id in card_ids
-        if card_id.lower() in by_id
-    }
+    card_lookup: dict[str, dict] = {}
+    for card in cards:
+        normalized_card_id = _normalize_meta_card_id(str(card.get("card_id") or ""))
+        if normalized_card_id == "":
+            continue
+        previous = card_lookup.get(normalized_card_id)
+        card_lookup[normalized_card_id] = _preferred_card_row(previous, card)
+
+    resolved: dict[str, dict] = {}
+    for card_id in card_ids:
+        normalized_card_id = _normalize_meta_card_id(card_id)
+        if normalized_card_id == "":
+            continue
+        card = _resolve_meta_card(card_lookup, normalized_card_id)
+        if card is not None:
+            resolved[normalized_card_id] = card
+    return resolved
 
 
 async def get_user_career_profile(
@@ -4103,8 +4140,8 @@ async def get_user_career_profile(
     card_ids: set[str] = set()
 
     for row in deck_rows:
-        leader = str(row._mapping["leader"] or "").strip().lower()
-        base = str(row._mapping["base"] or "").strip().lower()
+        leader = _normalize_meta_card_id(str(row._mapping["leader"] or ""))
+        base = _normalize_meta_card_id(str(row._mapping["base"] or ""))
         if leader != "":
             card_ids.add(leader)
         if base != "":
@@ -4118,7 +4155,7 @@ async def get_user_career_profile(
                 mainboard_raw = {}
         if isinstance(mainboard_raw, dict):
             for card_id, amount in mainboard_raw.items():
-                normalized_card_id = str(card_id).strip().lower()
+                normalized_card_id = _normalize_meta_card_id(str(card_id))
                 if normalized_card_id == "":
                     continue
                 try:
@@ -4132,12 +4169,15 @@ async def get_user_career_profile(
 
     card_lookup = await asyncio.to_thread(_get_card_lookup, list(card_ids))
     for row in deck_rows:
-        leader = str(row._mapping["leader"] or "").strip().lower()
-        base = str(row._mapping["base"] or "").strip().lower()
+        leader = _normalize_meta_card_id(str(row._mapping["leader"] or ""))
+        base = _normalize_meta_card_id(str(row._mapping["base"] or ""))
         for deck_card_id in [leader, base]:
-            if deck_card_id == "" or deck_card_id not in card_lookup:
+            if deck_card_id == "":
                 continue
-            for aspect in card_lookup[deck_card_id].get("aspects", []):
+            card = _resolve_meta_card(card_lookup, deck_card_id)
+            if card is None:
+                continue
+            for aspect in card.get("aspects", []):
                 normalized_aspect = str(aspect).strip()
                 if normalized_aspect != "":
                     aspect_counts[normalized_aspect] += 1

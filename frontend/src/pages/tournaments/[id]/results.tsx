@@ -46,7 +46,8 @@ import {
   getUserDirectory,
 } from '@services/adapter';
 import { getMatchLookup, getStageItemLookup, stringToColour } from '@services/lookups';
-import { getKarabastMatchBundle } from '@services/match';
+import { getKarabastMatchBundle, updateKarabastGameName } from '@services/match';
+import { endStageItemEarly, updateStageItemWinnerConfirmation } from '@services/stage_item';
 
 type TeamDeckPreview = {
   leaderName: string;
@@ -56,16 +57,191 @@ type TeamDeckPreview = {
 };
 
 type BracketSectionKey = 'WINNERS' | 'LOSERS' | 'FINALS' | 'MAIN';
+const WIN_CELEBRATION_STORAGE_PREFIX = 'results_win_celebrated';
+const OUTCOME_CONFIRMATION_NOTICE_STORAGE_PREFIX = 'results_pending_winner_notice';
 
 function getSingleEliminationRoundCount(teamCount: number): number {
   if (!Number.isFinite(teamCount) || teamCount <= 1) return 0;
   return Math.ceil(Math.log2(teamCount));
 }
 
+function launchWinnerConfetti() {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+  const viewportHeight = Math.max(window.innerHeight, 600);
+  const container = document.createElement('div');
+  container.style.position = 'fixed';
+  container.style.left = '0';
+  container.style.top = '0';
+  container.style.width = '100vw';
+  container.style.height = '100vh';
+  container.style.pointerEvents = 'none';
+  container.style.overflow = 'hidden';
+  container.style.zIndex = '9999';
+
+  const colors = ['#f59f00', '#fab005', '#69db7c', '#4dabf7', '#ff8787', '#da77f2'];
+  const pieceCount = 140;
+
+  for (let index = 0; index < pieceCount; index += 1) {
+    const piece = document.createElement('span');
+    const size = 5 + Math.random() * 7;
+    const startXPercent = Math.random() * 100;
+    const driftX = (Math.random() - 0.5) * 360;
+    const rotate = (Math.random() - 0.5) * 1080;
+    const duration = 1200 + Math.random() * 1600;
+    const delay = Math.random() * 220;
+
+    piece.style.position = 'absolute';
+    piece.style.left = `${startXPercent}%`;
+    piece.style.top = '-14px';
+    piece.style.width = `${size}px`;
+    piece.style.height = `${size * (0.7 + Math.random() * 0.8)}px`;
+    piece.style.borderRadius = `${Math.max(1, size / 4)}px`;
+    piece.style.background = colors[index % colors.length];
+    piece.style.opacity = '0.95';
+
+    piece.animate(
+      [
+        { transform: 'translate3d(0, 0, 0) rotate(0deg)', opacity: 1 },
+        {
+          transform: `translate3d(${driftX}px, ${viewportHeight + 80}px, 0) rotate(${rotate}deg)`,
+          opacity: 0,
+        },
+      ],
+      {
+        duration,
+        delay,
+        easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+        fill: 'forwards',
+      }
+    );
+    container.appendChild(piece);
+  }
+
+  document.body.appendChild(container);
+  window.setTimeout(() => {
+    container.remove();
+  }, 3400);
+}
+
 function normalizeRoundName(value: unknown): string {
   return String(value ?? '')
     .trim()
     .replace(/\s+/g, ' ');
+}
+
+function normalizeCardIdLookupKey(value: string | null | undefined) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/--+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function removeNumericPaddingFromCardId(value: string | null | undefined) {
+  const normalized = normalizeCardIdLookupKey(value);
+  const match = normalized.match(/^([a-z]+)-(\d+)([a-z]*)$/i);
+  if (match == null) return normalized;
+  const [, setCode, number, suffix] = match;
+  const trimmedNumber = String(Number(number));
+  return `${setCode}-${trimmedNumber}${suffix}`;
+}
+
+function buildCardLookupKeys(value: string | null | undefined) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  const normalized = normalizeCardIdLookupKey(value);
+  const noPadding = removeNumericPaddingFromCardId(value);
+  return [raw, normalized, noPadding].filter((item, index, all) => item !== '' && all.indexOf(item) === index);
+}
+
+function toPositiveInt(value: unknown) {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed)) return 0;
+  const normalized = Math.trunc(parsed);
+  return normalized > 0 ? normalized : 0;
+}
+
+function toSwudbCardId(cardId: unknown) {
+  const normalized = String(cardId ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, '-');
+  if (normalized === '') return '';
+
+  const [setCode, ...rest] = normalized.split('-');
+  const remainder = rest.join('-').trim();
+  if (setCode === '' || remainder === '') {
+    return normalized.replace(/-/g, '_').toUpperCase();
+  }
+
+  const firstToken = remainder.split('-', 1)[0].trim();
+  const parsed = firstToken.match(/^0*(\d+)([a-z]*)$/i);
+  if (parsed == null) {
+    return `${setCode}_${remainder}`.toUpperCase();
+  }
+  const number = Number(parsed[1] ?? 0);
+  const suffixRaw = String(parsed[2] ?? '').toLowerCase();
+  const suffix = suffixRaw === 'f' ? '' : suffixRaw;
+  return `${setCode}_${String(number).padStart(3, '0')}${suffix}`.toUpperCase();
+}
+
+function normalizeSwudbEntries(value: unknown): Array<{ id: string; count: number }> {
+  const aggregated: Record<string, number> = {};
+  if (Array.isArray(value)) {
+    value.forEach((entry: any) => {
+      const cardId = toSwudbCardId(entry?.id ?? entry?.card_id ?? '');
+      const count = toPositiveInt(entry?.count ?? entry?.quantity ?? entry?.qty);
+      if (cardId === '' || count <= 0) return;
+      aggregated[cardId] = (aggregated[cardId] ?? 0) + count;
+    });
+  } else if (value != null && typeof value === 'object') {
+    Object.entries(value as Record<string, unknown>).forEach(([cardIdRaw, countRaw]) => {
+      const cardId = toSwudbCardId(cardIdRaw);
+      const count = toPositiveInt(countRaw);
+      if (cardId === '' || count <= 0) return;
+      aggregated[cardId] = (aggregated[cardId] ?? 0) + count;
+    });
+  }
+  return Object.entries(aggregated)
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([id, count]) => ({ id, count }));
+}
+
+function normalizeSwudbDeckExport(
+  value: any,
+  fallbackName: string | null | undefined,
+  fallbackAuthor: string | null | undefined
+):
+  | {
+      metadata: { name: string; author?: string };
+      leader: { id: string; count: 1 };
+      base: { id: string; count: 1 };
+      deck: Array<{ id: string; count: number }>;
+      sideboard: Array<{ id: string; count: number }>;
+    }
+  | null {
+  if (value == null || typeof value !== 'object') return null;
+
+  const leaderId = toSwudbCardId(value?.leader?.id ?? value?.leader);
+  const baseId = toSwudbCardId(value?.base?.id ?? value?.base);
+  if (leaderId === '' || baseId === '') return null;
+
+  const deck = normalizeSwudbEntries(value?.deck ?? value?.mainboard ?? value?.main_board ?? {});
+  const sideboard = normalizeSwudbEntries(value?.sideboard ?? value?.side_board ?? {});
+  const metadataName =
+    String(value?.metadata?.name ?? value?.name ?? fallbackName ?? '')
+      .trim() || 'Deck';
+  const metadataAuthor = String(value?.metadata?.author ?? value?.author ?? fallbackAuthor ?? '').trim();
+  const metadata = metadataAuthor === '' ? { name: metadataName } : { name: metadataName, author: metadataAuthor };
+
+  return {
+    metadata,
+    leader: { id: leaderId, count: 1 },
+    base: { id: baseId, count: 1 },
+    deck,
+    sideboard,
+  };
 }
 
 function inferDoubleEliminationSection(
@@ -121,11 +297,12 @@ function ScheduleRow({
   winnerByStageItemId,
   resolveDeckPreviewForTeam,
   baseTrackerHref,
-  karabastEnabled,
   karabastGameName,
   karabastLobbyUrl,
   onCopyKarabastGameName,
   onCopyKarabastDeckSlot,
+  onEditKarabastLobbyUrl,
+  karabastEnabled,
 }: {
   data: any;
   openMatchModal: any;
@@ -136,11 +313,12 @@ function ScheduleRow({
   winnerByStageItemId: Record<number, string>;
   resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
   baseTrackerHref: string;
-  karabastEnabled: boolean;
   karabastGameName: string;
   karabastLobbyUrl: string | null;
   onCopyKarabastGameName: () => Promise<void>;
   onCopyKarabastDeckSlot: (slot: number) => Promise<void>;
+  onEditKarabastLobbyUrl: () => Promise<void>;
+  karabastEnabled: boolean;
 }) {
   const { t } = useTranslation();
   const winColor = '#2a8f37';
@@ -166,6 +344,7 @@ function ScheduleRow({
     team1Name !== '' ? team1Name : formatMatchInput1(t, stageItemsLookup, matchesLookup, data.match);
   const team2Label =
     team2Name !== '' ? team2Name : formatMatchInput2(t, stageItemsLookup, matchesLookup, data.match);
+  const karabastHref = karabastLobbyUrl ?? 'https://karabast.net/';
 
   const renderTeamLabel = (teamLabel: string, teamNameForLookup: string) => {
     const preview = resolveDeckPreviewForTeam(teamNameForLookup);
@@ -211,61 +390,70 @@ function ScheduleRow({
   return (
     <div style={{ width: '48rem' }}>
       <Group justify="space-between" mt="md" mb={4}>
-        {karabastEnabled ? (
-          <Group gap={8}>
-            <Text size="sm" c="dimmed">
-              Lobby: {karabastLobbyUrl ?? karabastGameName}
-            </Text>
-            {karabastLobbyUrl != null ? (
-              <Button
-                size="xs"
-                variant="light"
-                component="a"
-                href={karabastLobbyUrl}
-                target="_blank"
-                rel="noreferrer"
-                onClick={(event) => event.stopPropagation()}
-              >
-                Open Lobby
-              </Button>
-            ) : null}
+        <Group gap={8}>
+          <Text size="sm" c="dimmed">
+            Lobby: {karabastLobbyUrl ?? karabastGameName}
+          </Text>
+          <Button
+            size="xs"
+            variant="filled"
+            color="teal"
+            component="a"
+            href={karabastHref}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {karabastLobbyUrl != null ? 'Open Lobby' : 'Open Karabast'}
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            onClick={async (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              await onCopyKarabastGameName();
+            }}
+          >
+            {karabastLobbyUrl != null ? 'Copy Lobby URL' : 'Copy Lobby Name'}
+          </Button>
+          {karabastEnabled && editable ? (
             <Button
               size="xs"
               variant="light"
+              color="violet"
               onClick={async (event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                await onCopyKarabastGameName();
+                await onEditKarabastLobbyUrl();
               }}
             >
-              {karabastLobbyUrl != null ? 'Copy Lobby URL' : 'Copy Lobby Name'}
+              Set Invite Link
             </Button>
-            <Button
-              size="xs"
-              variant="light"
-              onClick={async (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                await onCopyKarabastDeckSlot(1);
-              }}
-            >
-              Copy {team1Label} Deck
-            </Button>
-            <Button
-              size="xs"
-              variant="light"
-              onClick={async (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                await onCopyKarabastDeckSlot(2);
-              }}
-            >
-              Copy {team2Label} Deck
-            </Button>
-          </Group>
-        ) : (
-          <div />
-        )}
+          ) : null}
+          <Button
+            size="xs"
+            variant="light"
+            onClick={async (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              await onCopyKarabastDeckSlot(1);
+            }}
+          >
+            Copy {team1Label} Deck
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            onClick={async (event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              await onCopyKarabastDeckSlot(2);
+            }}
+          >
+            Copy {team2Label} Deck
+          </Button>
+        </Group>
         <Button component={PreloadLink} href={baseTrackerHref} size="xs" variant="light">
           Open Base Tracker
         </Button>
@@ -411,11 +599,12 @@ function Schedule({
   winnerByStageItemId,
   resolveDeckPreviewForTeam,
   buildBaseTrackerHref,
-  karabastEnabled,
   getKarabastGameName,
   getKarabastLobbyUrl,
   copyKarabastGameName,
   copyKarabastDeckForSlot,
+  editKarabastLobbyUrl,
+  karabastEnabled,
 }: {
   t: Translator;
   stageItemsLookup: any;
@@ -426,11 +615,12 @@ function Schedule({
   winnerByStageItemId: Record<number, string>;
   resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
   buildBaseTrackerHref: (match: any) => string;
-  karabastEnabled: boolean;
   getKarabastGameName: (match: any) => string;
   getKarabastLobbyUrl: (match: any) => string | null;
   copyKarabastGameName: (match: any) => Promise<void>;
   copyKarabastDeckForSlot: (match: any, slot: number) => Promise<void>;
+  editKarabastLobbyUrl: (match: any) => Promise<void>;
+  karabastEnabled: boolean;
 }) {
   const matches: any[] = Object.values(matchesLookup ?? {}).filter(
     (value: any) => value != null && value.match != null && value.stageItem != null
@@ -477,11 +667,12 @@ function Schedule({
         winnerByStageItemId={winnerByStageItemId}
         resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
         baseTrackerHref={buildBaseTrackerHref(data.match)}
-        karabastEnabled={karabastEnabled}
         karabastGameName={getKarabastGameName(data.match)}
         karabastLobbyUrl={getKarabastLobbyUrl(data.match)}
         onCopyKarabastGameName={async () => copyKarabastGameName(data.match)}
         onCopyKarabastDeckSlot={async (slot) => copyKarabastDeckForSlot(data.match, slot)}
+        onEditKarabastLobbyUrl={async () => editKarabastLobbyUrl(data.match)}
+        karabastEnabled={karabastEnabled}
       />
     );
   }
@@ -523,6 +714,7 @@ export default function ResultsPage() {
   const [match, setMatch] = useState<MatchWithDetails | null>(null);
   const [selectedStageId, setSelectedStageId] = useState<string | null>(null);
   const [selectedBracketStageItemId, setSelectedBracketStageItemId] = useState<number | null>(null);
+  const [winnerActionStageItemIds, setWinnerActionStageItemIds] = useState<number[]>([]);
   const useStageDropdown = useMediaQuery('(max-width: 62em)');
 
   const { t } = useTranslation();
@@ -582,19 +774,30 @@ export default function ResultsPage() {
       setSelectedBracketStageItemId(eliminationStageItemsInSelectedStage[0].id);
     }
   }, [eliminationStageItemsInSelectedStage, selectedBracketStageItemId]);
-  const finishedStageItemWinners = useMemo(() => {
-    const summaries: Array<{ stage_item_id: number; stage_item_name: string; winner: string }> = [];
+  const stageItemOutcomeSummaries = useMemo(() => {
+    const summaries: Array<{
+      stage_item_id: number;
+      stage_item_name: string;
+      is_complete: boolean;
+      has_pending_matches: boolean;
+      is_confirmed: boolean;
+      ended_early: boolean;
+      computed_winner: string;
+      computed_winner_player_names: string[];
+      confirmed_winner: string;
+      confirmed_winner_player_names: string[];
+    }> = [];
     stages.forEach((stage: any) => {
       (stage.stage_items ?? []).forEach((stageItem: any) => {
         const nonDraftMatches = (stageItem.rounds ?? []).flatMap((round: any) =>
           round.is_draft ? [] : (round.matches ?? [])
         );
         if (nonDraftMatches.length < 1) return;
-        const finished = nonDraftMatches.every(
-          (match: any) =>
-            !(match.stage_item_input1_score === 0 && match.stage_item_input2_score === 0)
+
+        const hasPendingMatches = nonDraftMatches.some(
+          (match: any) => match.stage_item_input1_score === 0 && match.stage_item_input2_score === 0
         );
-        if (!finished) return;
+        const isComplete = !hasPendingMatches;
 
         const rankedInputs = [...(stageItem.inputs ?? [])]
           .filter((input: any) => input?.team?.name != null)
@@ -605,20 +808,88 @@ export default function ResultsPage() {
             if (winsDiff !== 0) return winsDiff;
             const drawsDiff = Number(b?.draws ?? 0) - Number(a?.draws ?? 0);
             if (drawsDiff !== 0) return drawsDiff;
-            return Number(a?.losses ?? 0) - Number(b?.losses ?? 0);
+            const lossesDiff = Number(a?.losses ?? 0) - Number(b?.losses ?? 0);
+            if (lossesDiff !== 0) return lossesDiff;
+            return String(a?.team?.name ?? '').localeCompare(String(b?.team?.name ?? ''));
           });
-        const winnerName = String(rankedInputs[0]?.team?.name ?? '').trim();
-        if (winnerName === '') return;
+        const winnerInput = rankedInputs[0] ?? null;
+        const computedWinner = String(winnerInput?.team?.name ?? '').trim();
+        const computedWinnerPlayerNames = Array.isArray(winnerInput?.team?.players)
+          ? winnerInput.team.players
+              .map((player: any) => String(player?.name ?? '').trim().toLowerCase())
+              .filter((name: string) => name !== '')
+          : [];
+
+        const confirmed = Boolean(stageItem?.winner_confirmed);
+        const endedEarly = Boolean(stageItem?.ended_early);
+        const confirmedWinnerTeamId = Number(stageItem?.winner_team_id ?? 0);
+        let confirmedWinner = String(stageItem?.winner_team_name ?? '').trim();
+        let confirmedWinnerPlayerNames: string[] = [];
+        if (confirmedWinnerTeamId > 0) {
+          const confirmedInput =
+            (stageItem.inputs ?? []).find(
+              (input: any) => Number(input?.team?.id ?? 0) === confirmedWinnerTeamId
+            ) ?? null;
+          if (confirmedInput != null) {
+            if (confirmedWinner === '') {
+              confirmedWinner = String(confirmedInput?.team?.name ?? '').trim();
+            }
+            confirmedWinnerPlayerNames = Array.isArray(confirmedInput?.team?.players)
+              ? confirmedInput.team.players
+                  .map((player: any) => String(player?.name ?? '').trim().toLowerCase())
+                  .filter((name: string) => name !== '')
+              : [];
+          }
+        }
+        if (confirmedWinner === '') confirmedWinner = computedWinner;
 
         summaries.push({
           stage_item_id: stageItem.id,
-          stage_item_name: stageItem.name,
-          winner: winnerName,
+          stage_item_name: String(stageItem?.name ?? `Event ${stageItem?.id ?? ''}`),
+          is_complete: isComplete,
+          has_pending_matches: hasPendingMatches,
+          is_confirmed: confirmed,
+          ended_early: endedEarly,
+          computed_winner: computedWinner,
+          computed_winner_player_names: [...new Set(computedWinnerPlayerNames)],
+          confirmed_winner: confirmedWinner,
+          confirmed_winner_player_names: [...new Set(confirmedWinnerPlayerNames)],
         });
       });
     });
     return summaries;
   }, [stages]);
+  const confirmedStageItemWinners = useMemo(
+    () =>
+      stageItemOutcomeSummaries
+        .filter((summary) => summary.is_confirmed && summary.confirmed_winner !== '')
+        .map((summary) => ({
+          stage_item_id: summary.stage_item_id,
+          stage_item_name: summary.stage_item_name,
+          winner: summary.confirmed_winner,
+          winner_player_names: summary.confirmed_winner_player_names,
+          ended_early: summary.ended_early,
+        })),
+    [stageItemOutcomeSummaries]
+  );
+  const pendingOutcomeConfirmations = useMemo(
+    () =>
+      stageItemOutcomeSummaries.filter(
+        (summary) => summary.is_complete && !summary.is_confirmed && summary.computed_winner !== ''
+      ),
+    [stageItemOutcomeSummaries]
+  );
+  const endEarlyEligibleStageItems = useMemo(
+    () =>
+      stageItemOutcomeSummaries.filter(
+        (summary) =>
+          !summary.is_complete &&
+          summary.has_pending_matches &&
+          !summary.is_confirmed &&
+          summary.computed_winner !== ''
+      ),
+    [stageItemOutcomeSummaries]
+  );
   const eventStandings = useMemo(() => {
     const statsByTeamName = new Map<
       string,
@@ -680,12 +951,15 @@ export default function ResultsPage() {
   const cardLookupById = useMemo(() => {
     const rows = swrCardsResponse.data?.data?.cards ?? [];
     return rows.reduce((result: Record<string, { name: string; image_url: string | null }>, card: any) => {
-      const id = String(card?.card_id ?? '').trim().toLowerCase();
-      if (id === '' || result[id] != null) return result;
-      result[id] = {
-        name: String(card?.name ?? card?.card_id ?? id),
+      const payload = {
+        name: String(card?.name ?? card?.card_id ?? ''),
         image_url: card?.image_url ?? null,
       };
+      buildCardLookupKeys(card?.card_id).forEach((key) => {
+        if (key !== '' && result[key] == null) {
+          result[key] = payload;
+        }
+      });
       return result;
     }, {});
   }, [swrCardsResponse.data?.data?.cards]);
@@ -705,26 +979,28 @@ export default function ResultsPage() {
     if (key === '') return null;
     const application = applicationByUserName[key];
     if (application == null) return null;
-    const leaderId = String(application.deck_leader ?? '').trim().toLowerCase();
-    const baseId = String(application.deck_base ?? '').trim().toLowerCase();
-    if (leaderId === '' || baseId === '') return null;
+    const leaderLookupKey =
+      buildCardLookupKeys(application.deck_leader).find((candidate) => cardLookupById[candidate] != null) ?? '';
+    const baseLookupKey =
+      buildCardLookupKeys(application.deck_base).find((candidate) => cardLookupById[candidate] != null) ?? '';
+    if (leaderLookupKey === '' || baseLookupKey === '') return null;
     return {
-      leaderName: cardLookupById[leaderId]?.name ?? application.deck_leader ?? '-',
-      baseName: cardLookupById[baseId]?.name ?? application.deck_base ?? '-',
-      leaderImageUrl: cardLookupById[leaderId]?.image_url ?? null,
-      baseImageUrl: cardLookupById[baseId]?.image_url ?? null,
+      leaderName: cardLookupById[leaderLookupKey]?.name ?? application.deck_leader ?? '-',
+      baseName: cardLookupById[baseLookupKey]?.name ?? application.deck_base ?? '-',
+      leaderImageUrl: cardLookupById[leaderLookupKey]?.image_url ?? null,
+      baseImageUrl: cardLookupById[baseLookupKey]?.image_url ?? null,
     };
   };
   const winnerByStageItemId = useMemo(
     () =>
-      finishedStageItemWinners.reduce(
+      confirmedStageItemWinners.reduce(
         (result: Record<number, string>, item) => {
           result[item.stage_item_id] = item.winner;
           return result;
         },
         {}
       ),
-    [finishedStageItemWinners]
+    [confirmedStageItemWinners]
   );
   const avatarUrlByUserName = useMemo(() => {
     const rows = swrUserDirectoryResponse.data?.data ?? [];
@@ -739,7 +1015,7 @@ export default function ResultsPage() {
     }, {});
   }, [swrUserDirectoryResponse.data?.data]);
   const championBannerAvatarUrl = useMemo(() => {
-    for (const winnerSummary of finishedStageItemWinners) {
+    for (const winnerSummary of confirmedStageItemWinners) {
       const winnerNameKey = String(winnerSummary?.winner ?? '').trim().toLowerCase();
       if (winnerNameKey === '') continue;
       const avatarUrl = avatarUrlByUserName[winnerNameKey];
@@ -748,7 +1024,68 @@ export default function ResultsPage() {
       }
     }
     return null;
-  }, [avatarUrlByUserName, finishedStageItemWinners]);
+  }, [avatarUrlByUserName, confirmedStageItemWinners]);
+  useEffect(() => {
+    if (!isAdmin || pendingOutcomeConfirmations.length < 1) return;
+    if (typeof window === 'undefined') return;
+
+    const unseen = pendingOutcomeConfirmations.filter((summary) => {
+      const storageKey = `${OUTCOME_CONFIRMATION_NOTICE_STORAGE_PREFIX}_${tournamentData.id}_${summary.stage_item_id}`;
+      if (window.localStorage.getItem(storageKey) === '1') return false;
+      window.localStorage.setItem(storageKey, '1');
+      return true;
+    });
+    if (unseen.length < 1) return;
+
+    showNotification({
+      color: 'orange',
+      title: 'Event outcome confirmation required',
+      message:
+        unseen.length === 1
+          ? `${unseen[0].stage_item_name} has a calculated winner ready to confirm.`
+          : `${unseen.length} events have calculated winners ready to confirm.`,
+      autoClose: 8000,
+    });
+  }, [isAdmin, pendingOutcomeConfirmations, tournamentData.id]);
+  useEffect(() => {
+    const currentUserName = String(currentUser?.name ?? '').trim().toLowerCase();
+    if (currentUserName === '' || confirmedStageItemWinners.length < 1) return;
+    if (typeof window === 'undefined') return;
+
+    const newlyWon: Array<{ stage_item_id: number; stage_item_name: string }> = [];
+    confirmedStageItemWinners.forEach((winnerSummary) => {
+      const winnerName = String(winnerSummary?.winner ?? '').trim().toLowerCase();
+      const winnerPlayers = Array.isArray(winnerSummary?.winner_player_names)
+        ? winnerSummary.winner_player_names
+        : [];
+      const isWinner =
+        winnerName === currentUserName ||
+        winnerPlayers.some((playerName: string) => playerName === currentUserName);
+      if (!isWinner) return;
+
+      const storageKey = `${WIN_CELEBRATION_STORAGE_PREFIX}_${tournamentData.id}_${winnerSummary.stage_item_id}_${currentUserName}`;
+      if (window.localStorage.getItem(storageKey) === '1') return;
+      window.localStorage.setItem(storageKey, '1');
+      newlyWon.push({
+        stage_item_id: winnerSummary.stage_item_id,
+        stage_item_name: String(winnerSummary.stage_item_name ?? '').trim() || 'event',
+      });
+    });
+
+    if (newlyWon.length < 1) return;
+
+    launchWinnerConfetti();
+    const wonLabel =
+      newlyWon.length === 1
+        ? `You won ${newlyWon[0].stage_item_name}.`
+        : `You won ${newlyWon.length} events: ${newlyWon.map((item) => item.stage_item_name).join(', ')}.`;
+    showNotification({
+      color: 'yellow',
+      title: 'Congratulations, Champion!',
+      message: `${wonLabel} Great run.`,
+      autoClose: 9000,
+    });
+  }, [currentUser?.name, confirmedStageItemWinners, tournamentData.id]);
   const activeBracketStageItem =
     eliminationStageItemsInSelectedStage.find(
       (stageItem: any) => stageItem.id === selectedBracketStageItemId
@@ -1183,7 +1520,8 @@ export default function ResultsPage() {
     try {
       const parsed = new URL(customValue);
       if (!['http:', 'https:'].includes(parsed.protocol)) return null;
-      if (parsed.hostname.toLowerCase() !== 'karabast.net') return null;
+      const hostname = parsed.hostname.toLowerCase();
+      if (hostname !== 'karabast.net' && hostname !== 'www.karabast.net') return null;
       return parsed.toString();
     } catch (_error) {
       return null;
@@ -1216,6 +1554,23 @@ export default function ResultsPage() {
     );
   };
 
+  const editKarabastLobbyUrl = async (matchToTrack: any) => {
+    const matchId = Number(matchToTrack?.id ?? 0);
+    if (!Number.isFinite(matchId) || matchId <= 0) return;
+    const currentValue = String((matchToTrack as any)?.karabast_game_name ?? '').trim();
+    const nextValue = window.prompt(
+      'Paste the private Karabast invite link (or shared game name). Leave blank to clear.',
+      currentValue
+    );
+    if (nextValue == null) return;
+    await updateKarabastGameName(
+      tournamentData.id,
+      matchId,
+      nextValue.trim() === '' ? null : nextValue.trim()
+    );
+    await swrStagesResponse.mutate();
+  };
+
   const copyKarabastDeckForSlot = async (matchToTrack: any, slot: number) => {
     const matchId = Number(matchToTrack?.id ?? 0);
     if (!Number.isFinite(matchId) || matchId <= 0) return;
@@ -1239,10 +1594,81 @@ export default function ResultsPage() {
       return;
     }
     const teamName = String(selectedPlayer?.team_name ?? '').trim();
+    const strictSwudbDeck = normalizeSwudbDeckExport(
+      deckExport,
+      String(selectedPlayer?.deck_name ?? '').trim(),
+      String(selectedPlayer?.user_name ?? '').trim()
+    );
+    if (strictSwudbDeck == null) {
+      showNotification({
+        color: 'red',
+        title: 'Invalid deck export format',
+        message:
+          teamName !== ''
+            ? `Could not build SWUDB JSON for ${teamName}.`
+            : 'Could not build SWUDB JSON for this deck.',
+      });
+      return;
+    }
     await copyText(
-      JSON.stringify(deckExport, null, 2),
+      JSON.stringify(strictSwudbDeck, null, 2),
       teamName !== '' ? `${teamName} SWUDB deck copied` : 'SWUDB deck JSON copied'
     );
+  };
+  const setWinnerActionRunning = (stageItemId: number, running: boolean) => {
+    setWinnerActionStageItemIds((current) => {
+      if (running) {
+        if (current.includes(stageItemId)) return current;
+        return [...current, stageItemId];
+      }
+      return current.filter((id) => id !== stageItemId);
+    });
+  };
+  const stageItemActionIsRunning = (stageItemId: number) =>
+    winnerActionStageItemIds.includes(stageItemId);
+
+  const confirmEventOutcome = async (summary: any) => {
+    const stageItemId = Number(summary?.stage_item_id ?? 0);
+    if (!Number.isFinite(stageItemId) || stageItemId <= 0) return;
+    setWinnerActionRunning(stageItemId, true);
+    try {
+      const response = await updateStageItemWinnerConfirmation(tournamentData.id, stageItemId, true);
+      if (response == null || Number((response as any)?.status ?? 500) >= 400) return;
+      await swrStagesResponse.mutate();
+      showNotification({
+        color: 'green',
+        title: 'Winner confirmed',
+        message: `${String(summary?.computed_winner ?? '').trim() || 'Winner'} was confirmed for ${summary.stage_item_name}.`,
+      });
+    } finally {
+      setWinnerActionRunning(stageItemId, false);
+    }
+  };
+
+  const endEventEarly = async (summary: any) => {
+    const stageItemId = Number(summary?.stage_item_id ?? 0);
+    if (!Number.isFinite(stageItemId) || stageItemId <= 0) return;
+    if (
+      typeof window !== 'undefined' &&
+      !window.confirm(
+        `End "${summary.stage_item_name}" early? Remaining unplayed matchups will be cleared, and the current standings leader will be declared winner.`
+      )
+    ) {
+      return;
+    }
+    setWinnerActionRunning(stageItemId, true);
+    try {
+      const response = await endStageItemEarly(tournamentData.id, stageItemId);
+      if (response == null || Number((response as any)?.status ?? 500) >= 400) return;
+      await swrStagesResponse.mutate();
+      showNotification({
+        color: 'green',
+        title: 'Event ended early',
+        message: `${summary.stage_item_name} was ended early and winner confirmed from current standings.`,
+      });
+    } finally {
+      setWinnerActionRunning(stageItemId, false);
+    }
   };
 
   return (
@@ -1265,7 +1691,57 @@ export default function ResultsPage() {
           Base Health Tool
         </Button>
       </Group>
-      {finishedStageItemWinners.length > 0 ? (
+      {isAdmin && pendingOutcomeConfirmations.length > 0 ? (
+        <Card withBorder mt="sm">
+          <Stack>
+            <Group gap="xs">
+              <IconAlertCircle size={18} />
+              <Title order={4}>Admin: Confirm Calculated Winners</Title>
+            </Group>
+            {pendingOutcomeConfirmations.map((summary) => (
+              <Group key={`confirm-${summary.stage_item_id}`} justify="space-between" align="center">
+                <Text>
+                  {summary.stage_item_name}: <b>{summary.computed_winner || 'Unknown'}</b>
+                </Text>
+                <Button
+                  size="xs"
+                  onClick={() => confirmEventOutcome(summary)}
+                  loading={stageItemActionIsRunning(summary.stage_item_id)}
+                >
+                  Confirm outcome
+                </Button>
+              </Group>
+            ))}
+          </Stack>
+        </Card>
+      ) : null}
+      {isAdmin && endEarlyEligibleStageItems.length > 0 ? (
+        <Card withBorder mt="sm">
+          <Stack>
+            <Group gap="xs">
+              <IconAlertCircle size={18} />
+              <Title order={4}>Admin: End Event Early</Title>
+            </Group>
+            {endEarlyEligibleStageItems.map((summary) => (
+              <Group key={`end-early-${summary.stage_item_id}`} justify="space-between" align="center">
+                <Text>
+                  {summary.stage_item_name}
+                  {summary.computed_winner !== '' ? ` (Current leader: ${summary.computed_winner})` : ''}
+                </Text>
+                <Button
+                  size="xs"
+                  color="red"
+                  onClick={() => endEventEarly(summary)}
+                  loading={stageItemActionIsRunning(summary.stage_item_id)}
+                >
+                  End event early
+                </Button>
+              </Group>
+            ))}
+          </Stack>
+        </Card>
+      ) : null}
+      {confirmedStageItemWinners.length > 0 ? (
         <Card
           withBorder
           mt="sm"
@@ -1289,9 +1765,10 @@ export default function ResultsPage() {
               </Group>
             </Group>
             <Group>
-              {finishedStageItemWinners.map((item) => (
+              {confirmedStageItemWinners.map((item) => (
                 <Badge key={item.stage_item_id} size="lg" color="yellow" variant="filled">
                   {item.stage_item_name}: {item.winner}
+                  {item.ended_early ? ' (Ended Early)' : ''}
                 </Badge>
               ))}
             </Group>
@@ -1481,11 +1958,12 @@ export default function ResultsPage() {
             winnerByStageItemId={winnerByStageItemId}
             resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
             buildBaseTrackerHref={buildBaseTrackerHref}
-            karabastEnabled={karabastEnabled}
             getKarabastGameName={getKarabastGameName}
             getKarabastLobbyUrl={getKarabastLobbyUrl}
             copyKarabastGameName={copyKarabastGameName}
             copyKarabastDeckForSlot={copyKarabastDeckForSlot}
+            editKarabastLobbyUrl={editKarabastLobbyUrl}
+            karabastEnabled={karabastEnabled}
           />
         </SectionErrorBoundary>
       </Center>

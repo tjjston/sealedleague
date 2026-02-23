@@ -65,7 +65,7 @@ from bracket.sql.matches import (
 )
 from bracket.sql.players import recalculate_tournament_records
 from bracket.sql.rounds import get_round_by_id
-from bracket.sql.stage_items import get_stage_item
+from bracket.sql.stage_items import get_stage_item, sql_clear_stage_item_winner_confirmation
 from bracket.sql.stages import get_full_tournament_details
 from bracket.sql.tournaments import sql_get_tournament
 from bracket.sql.validation import check_foreign_keys_belong_to_tournament
@@ -509,7 +509,15 @@ async def update_match_by_id(
     if stage_item.type == StageType.REGULAR_SEASON_MATCHUP:
         await ensure_regular_season_match_has_submitted_decks(tournament_id, match)
 
+    scores_changed = (
+        int(match_body.stage_item_input1_score) != int(match.stage_item_input1_score)
+        or int(match_body.stage_item_input2_score) != int(match.stage_item_input2_score)
+    )
+
     await sql_update_match(match_id, match_body, tournament)
+
+    if scores_changed:
+        await sql_clear_stage_item_winner_confirmation(stage_item.id)
 
     if (
         match_body.custom_duration_minutes != match.custom_duration_minutes

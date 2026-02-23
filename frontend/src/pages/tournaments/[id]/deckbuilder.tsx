@@ -8,6 +8,7 @@ import {
   Modal,
   MultiSelect,
   NumberInput,
+  Pagination,
   Progress,
   ScrollArea,
   SegmentedControl,
@@ -30,6 +31,7 @@ import {
 import { showNotification } from '@mantine/notifications';
 import { useEffect, useMemo, useState } from 'react';
 
+import { DateTime } from '@components/utils/datetime';
 import { getTournamentIdFromRouter } from '@components/utils/util';
 import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
@@ -106,7 +108,15 @@ const ASPECT_ICON_BY_KEY: Record<string, string> = {
   heroic: '/icons/aspects/heroism.png',
   heroism: '/icons/aspects/heroism.png',
 };
-const MAX_RENDERED_CARD_ROWS = 250;
+const DEFAULT_ROWS_PER_PAGE = 20;
+const DEFAULT_VISIBLE_LINES = 20;
+const MIN_VISIBLE_LINES = 8;
+const MAX_VISIBLE_LINES = 80;
+const TABLE_BASE_HEIGHT = 56;
+const TABLE_ROW_HEIGHT = 40;
+const PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100];
+const CARD_LIST_ROWS_PER_PAGE_STORAGE_KEY = 'deckbuilder_card_list_rows_per_page';
+const CARD_LIST_VISIBLE_LINES_STORAGE_KEY = 'deckbuilder_card_list_visible_lines';
 const ALL_DECK_OWNERS_VALUE = '__ALL__';
 const ALL_SEASONS_VALUE = '__ALL_SEASONS__';
 
@@ -132,6 +142,24 @@ function aggregateCountMap(entries: Array<[string, number]>) {
   return map;
 }
 
+function combineBoardQuantities(
+  main: Record<string, number> | null | undefined,
+  side: Record<string, number> | null | undefined
+) {
+  const totals: Record<string, number> = {};
+  Object.entries(main ?? {}).forEach(([cardId, qty]) => {
+    const numeric = Number(qty ?? 0);
+    if (!Number.isFinite(numeric) || numeric <= 0) return;
+    totals[cardId] = (totals[cardId] ?? 0) + Math.trunc(numeric);
+  });
+  Object.entries(side ?? {}).forEach(([cardId, qty]) => {
+    const numeric = Number(qty ?? 0);
+    if (!Number.isFinite(numeric) || numeric <= 0) return;
+    totals[cardId] = (totals[cardId] ?? 0) + Math.trunc(numeric);
+  });
+  return totals;
+}
+
 function parseCardNumber(value: string | null | undefined) {
   if (value == null) return Number.NEGATIVE_INFINITY;
   const cleaned = String(value).trim();
@@ -148,11 +176,84 @@ function compareText(a: string, b: string) {
   });
 }
 
+function clampVisibleLines(value: number) {
+  return Math.max(MIN_VISIBLE_LINES, Math.min(MAX_VISIBLE_LINES, Math.trunc(value)));
+}
+
+function getTableHeightFromVisibleLines(visibleLines: number) {
+  return TABLE_BASE_HEIGHT + clampVisibleLines(visibleLines) * TABLE_ROW_HEIGHT;
+}
+
+function normalizePageSize(value: number) {
+  const normalized = Math.trunc(value);
+  return PAGE_SIZE_OPTIONS.includes(normalized) ? normalized : DEFAULT_ROWS_PER_PAGE;
+}
+
+function getStoredNumber(key: string) {
+  if (typeof window === 'undefined') return null;
+  const raw = window.localStorage.getItem(key);
+  if (raw == null) return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
 function normalizeCardIdLookupKey(value: string | null | undefined) {
   return String(value ?? '')
     .trim()
     .toLowerCase()
     .replace(/[_\s]+/g, '-');
+}
+
+function removeNumericPaddingFromCardId(value: string | null | undefined) {
+  const normalized = normalizeCardIdLookupKey(value).replace(/--+/g, '-').replace(/^-+|-+$/g, '');
+  const match = normalized.match(/^([a-z]+)-(\d+)([a-z]*)$/i);
+  if (match == null) return normalized;
+  const [, setCode, number, suffix] = match;
+  const trimmedNumber = String(Number(number));
+  return `${setCode}-${trimmedNumber}${suffix}`;
+}
+
+function buildCardLookupKeys(value: string | null | undefined) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  const normalized = normalizeCardIdLookupKey(value).replace(/--+/g, '-').replace(/^-+|-+$/g, '');
+  const noPadding = removeNumericPaddingFromCardId(value);
+  return [raw, normalized, noPadding].filter((item, index, all) => item !== '' && all.indexOf(item) === index);
+}
+
+function normalizeLooseCardId(value: string | null | undefined) {
+  const noPadding = removeNumericPaddingFromCardId(value);
+  if (noPadding !== '') return noPadding;
+  return normalizeCardIdLookupKey(value).replace(/--+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function normalizeBoardEntries(
+  entries: Record<string, number> | null | undefined,
+  resolveCatalogCardId: (value: string | null | undefined) => string
+) {
+  const result: Record<string, number> = {};
+  Object.entries(entries ?? {}).forEach(([rawCardId, rawQty]) => {
+    const qty = Number(rawQty ?? 0);
+    if (!Number.isFinite(qty)) return;
+    const normalizedQty = Math.max(0, Math.min(99, Math.trunc(qty)));
+    if (normalizedQty <= 0) return;
+    const resolvedCatalogId = resolveCatalogCardId(rawCardId);
+    const normalizedCardId =
+      resolvedCatalogId !== '' ? resolvedCatalogId : normalizeLooseCardId(rawCardId);
+    if (normalizedCardId === '') return;
+    result[normalizedCardId] = (result[normalizedCardId] ?? 0) + normalizedQty;
+  });
+  return result;
+}
+
+function boardEntriesEqual(
+  left: Record<string, number> | null | undefined,
+  right: Record<string, number> | null | undefined
+) {
+  const leftEntries = Object.entries(left ?? {});
+  const rightEntries = Object.entries(right ?? {});
+  if (leftEntries.length !== rightEntries.length) return false;
+  return leftEntries.every(([cardId, qty]) => Number(right?.[cardId] ?? NaN) === Number(qty ?? 0));
 }
 
 function normalizeAspectKey(value: string) {
@@ -260,6 +361,8 @@ export default function DeckbuilderPage({
     selectedTargetUserId !== ALL_DECK_OWNERS_VALUE
       ? Number(selectedTargetUserId)
       : null;
+  const isAdminAllOwnersView = isAdmin && targetUserId == null;
+  const currentUserId = Number(swrCurrentUserResponse.data?.data?.id ?? 0);
   const swrSeasonsResponse = getLeagueSeasons(hasTournament ? activeTournamentId : null);
   const seasons = swrSeasonsResponse.data?.data ?? [];
   const seasonOptions = useMemo(() => {
@@ -390,17 +493,62 @@ export default function DeckbuilderPage({
 
   const cardIdByLookupKey = useMemo(() => {
     return (allCards as CardItem[]).reduce((result: Record<string, string>, card: CardItem) => {
-      result[normalizeCardIdLookupKey(card.card_id)] = card.card_id;
+      buildCardLookupKeys(card.card_id).forEach((key) => {
+        result[key] = card.card_id;
+      });
       return result;
     }, {});
   }, [allCards]);
+  function resolveCatalogCardId(value: string | null | undefined) {
+    const lookupKey = buildCardLookupKeys(value).find((candidate) => cardIdByLookupKey[candidate] != null);
+    return lookupKey == null ? '' : (cardIdByLookupKey[lookupKey] ?? '');
+  }
+  function resolveCardDisplayName(value: string | null | undefined) {
+    const raw = String(value ?? '').trim();
+    if (raw === '') return '-';
+    const resolvedId = resolveCatalogCardId(raw);
+    if (resolvedId !== '' && cardsById[resolvedId]?.name != null) {
+      return cardsById[resolvedId].name;
+    }
+    return normalizeLooseCardId(raw);
+  }
 
   const cardPoolMap = useMemo(() => {
     return (cardPoolEntries as any[]).reduce((result: Record<string, number>, entry: any) => {
-      result[entry.card_id] = entry.quantity;
+      const rawCardId = String(entry?.card_id ?? '').trim();
+      const resolvedCatalogId = resolveCatalogCardId(rawCardId);
+      const cardId = resolvedCatalogId !== '' ? resolvedCatalogId : normalizeLooseCardId(rawCardId);
+      if (cardId === '') return result;
+      const quantity = Number(entry?.quantity ?? 0);
+      if (!Number.isFinite(quantity)) return result;
+      if (isAdminAllOwnersView) {
+        result[cardId] = (result[cardId] ?? 0) + Math.trunc(quantity);
+      } else {
+        result[cardId] = Math.trunc(quantity);
+      }
       return result;
     }, {});
-  }, [cardPoolEntries]);
+  }, [cardIdByLookupKey, cardPoolEntries, isAdminAllOwnersView]);
+  const normalizedCardPoolMap = useMemo(() => {
+    return Object.entries(cardPoolMap).reduce((result: Record<string, number>, [cardId, quantity]) => {
+      buildCardLookupKeys(cardId).forEach((lookupKey) => {
+        result[lookupKey] = (result[lookupKey] ?? 0) + Number(quantity ?? 0);
+      });
+      return result;
+    }, {});
+  }, [cardPoolMap]);
+  function getPoolQuantity(cardId: string) {
+    const directQuantity = cardPoolMap[cardId];
+    if (directQuantity != null) return directQuantity;
+    const resolvedCatalogId = resolveCatalogCardId(cardId);
+    if (resolvedCatalogId !== '' && cardPoolMap[resolvedCatalogId] != null) {
+      return cardPoolMap[resolvedCatalogId] ?? 0;
+    }
+    return buildCardLookupKeys(cardId).reduce(
+      (maxQty, lookupKey) => Math.max(maxQty, normalizedCardPoolMap[lookupKey] ?? 0),
+      0
+    );
+  }
 
   const [query, setQuery] = useState('');
   const [nameQuery, setNameQuery] = useState('');
@@ -423,6 +571,13 @@ export default function DeckbuilderPage({
   const [showPoolWarnings, setShowPoolWarnings] = useState(false);
   const [previewImageUrl, setPreviewImageUrl] = useState<string | null>(null);
   const [previewImageLabel, setPreviewImageLabel] = useState<string>('');
+  const [cardListRowsPerPage, setCardListRowsPerPage] = useState<number>(() =>
+    normalizePageSize(getStoredNumber(CARD_LIST_ROWS_PER_PAGE_STORAGE_KEY) ?? DEFAULT_ROWS_PER_PAGE)
+  );
+  const [cardListPage, setCardListPage] = useState<number>(1);
+  const [cardListVisibleLines, setCardListVisibleLines] = useState<number>(() =>
+    clampVisibleLines(getStoredNumber(CARD_LIST_VISIBLE_LINES_STORAGE_KEY) ?? DEFAULT_VISIBLE_LINES)
+  );
 
   const [deckName, setDeckName] = useState('League Deck');
   const [leaderCardId, setLeaderCardId] = useState<string | null>(null);
@@ -432,6 +587,17 @@ export default function DeckbuilderPage({
 
   const [graphView, setGraphView] = useState<DeckGraphView>('cost');
   const [swudbImportJson, setSwudbImportJson] = useState('');
+
+  useEffect(() => {
+    setMainboard((prev) => {
+      const next = normalizeBoardEntries(prev, resolveCatalogCardId);
+      return boardEntriesEqual(prev, next) ? prev : next;
+    });
+    setSideboard((prev) => {
+      const next = normalizeBoardEntries(prev, resolveCatalogCardId);
+      return boardEntriesEqual(prev, next) ? prev : next;
+    });
+  }, [cardIdByLookupKey]);
 
   const typeOptions = useMemo(
     () =>
@@ -635,7 +801,7 @@ export default function DeckbuilderPage({
         if (selectedRaritySet.size > 0 && !selectedRaritySet.has(card.rarity)) return false;
         if (selectedSetSet.size > 0 && !selectedSetSet.has(card.set_code)) return false;
         if (arenaFilter != null && !(card.arenas ?? []).includes(arenaFilter)) return false;
-        if (onlyCardsInPool && (cardPoolMap[card.card_id] ?? 0) <= 0) return false;
+        if (onlyCardsInPool && getPoolQuantity(card.card_id) <= 0) return false;
 
         if (onlyLegalCards) {
           if (allowedAspects.size < 1) return false;
@@ -704,7 +870,7 @@ export default function DeckbuilderPage({
           sortValue = parseCardNumber(a.number) - parseCardNumber(b.number);
         }
       } else if (cardSortKey === 'pool') {
-        sortValue = (cardPoolMap[a.card_id] ?? 0) - (cardPoolMap[b.card_id] ?? 0);
+        sortValue = getPoolQuantity(a.card_id) - getPoolQuantity(b.card_id);
       }
 
       if (sortValue === 0) return defaultSort(a, b);
@@ -714,10 +880,41 @@ export default function DeckbuilderPage({
     return sorted;
   }, [filteredCards, cardSortKey, cardSortDirection, cardPoolMap]);
 
-  const visibleFilteredCards = useMemo(
-    () => sortedFilteredCards.slice(0, MAX_RENDERED_CARD_ROWS),
-    [sortedFilteredCards]
+  const cappedFilteredCards = sortedFilteredCards;
+  const cardListTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(cappedFilteredCards.length / cardListRowsPerPage)),
+    [cappedFilteredCards, cardListRowsPerPage]
   );
+  const visibleFilteredCards = useMemo(() => {
+    const start = (cardListPage - 1) * cardListRowsPerPage;
+    return cappedFilteredCards.slice(start, start + cardListRowsPerPage);
+  }, [cappedFilteredCards, cardListPage, cardListRowsPerPage]);
+  const cardListTableHeight = useMemo(
+    () => getTableHeightFromVisibleLines(cardListVisibleLines),
+    [cardListVisibleLines]
+  );
+  const cardListStart = cappedFilteredCards.length < 1 ? 0 : (cardListPage - 1) * cardListRowsPerPage + 1;
+  const cardListEnd = Math.min(cardListPage * cardListRowsPerPage, cappedFilteredCards.length);
+
+  useEffect(() => {
+    setCardListPage(1);
+  }, [cardListRowsPerPage, sortedFilteredCards]);
+
+  useEffect(() => {
+    if (cardListPage > cardListTotalPages) {
+      setCardListPage(cardListTotalPages);
+    }
+  }, [cardListPage, cardListTotalPages]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(CARD_LIST_ROWS_PER_PAGE_STORAGE_KEY, String(cardListRowsPerPage));
+  }, [cardListRowsPerPage]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(CARD_LIST_VISIBLE_LINES_STORAGE_KEY, String(cardListVisibleLines));
+  }, [cardListVisibleLines]);
 
   const deckUsageByCard = useMemo(() => {
     const usage: Record<string, { main: number; side: number; total: number }> = {};
@@ -747,7 +944,7 @@ export default function DeckbuilderPage({
     }> = [];
     Object.entries(deckUsageByCard).forEach(([cardId, usage]) => {
       if (usage.total <= 0) return;
-      const poolQty = cardPoolMap[cardId] ?? 0;
+      const poolQty = getPoolQuantity(cardId);
       if (poolQty <= 0) {
         violations.push({ card_id: cardId, used: usage.total, pool: 0, reason: 'missing' });
       } else if (usage.total > poolQty) {
@@ -757,55 +954,149 @@ export default function DeckbuilderPage({
     return violations;
   }, [deckUsageByCard, cardPoolMap]);
 
-  async function addToPool(cardId: string, nextQuantity: number) {
+  async function addToPool(
+    cardId: string,
+    nextQuantity: number,
+    ownerUserId?: number,
+    options?: { silent?: boolean; skipMutate?: boolean }
+  ) {
     if (!hasTournament) return;
+    const resolvedCatalogId = resolveCatalogCardId(cardId);
+    const normalizedCardId = resolvedCatalogId !== '' ? resolvedCatalogId : normalizeLooseCardId(cardId);
+    if (normalizedCardId === '') return;
+    const resolvedQuantity = Math.max(0, Math.min(99, Math.trunc(Number(nextQuantity) || 0)));
+    const resolvedOwnerUserId =
+      isAdmin && Number.isFinite(ownerUserId ?? NaN)
+        ? Number(ownerUserId)
+        : isAdmin && Number.isFinite(targetUserId ?? NaN)
+          ? Number(targetUserId)
+          : undefined;
+    if (isAdmin && (resolvedOwnerUserId == null || resolvedOwnerUserId <= 0)) {
+      if (!options?.silent) {
+        showNotification({
+          color: 'red',
+          title: 'Select a single player',
+          message: 'Choose one Deck/Card Pool Owner to edit card pool quantities.',
+        });
+      }
+      return;
+    }
     const response = await upsertCardPoolEntry(
       activeTournamentId,
-      cardId,
-      nextQuantity,
-      targetUserId ?? undefined,
+      normalizedCardId,
+      resolvedQuantity,
+      resolvedOwnerUserId,
       selectedSeasonNumber ?? undefined
     );
     if (response == null) return;
-    await swrCardPoolResponse.mutate();
-    const cardName = cardsById[cardId]?.name ?? cardId;
+    if (!options?.skipMutate) {
+      await swrCardPoolResponse.mutate();
+    }
+    if (!options?.silent) {
+      const cardName = cardsById[normalizedCardId]?.name ?? resolveCardDisplayName(normalizedCardId);
+      showNotification({
+        id: `card-pool-update-${normalizedCardId}`,
+        color: 'green',
+        title: 'Card pool updated',
+        message: `${cardName}: ${resolvedQuantity}`,
+      });
+    }
+  }
+
+  async function addDeckToCardPool(
+    mainboardEntries: Record<string, number>,
+    sideboardEntries: Record<string, number>,
+    sourceLabel: string,
+    ownerUserId?: number
+  ) {
+    if (!hasTournament) return;
+    if (isAdmin && isAdminAllOwnersView) {
+      showNotification({
+        color: 'red',
+        title: 'Select a single player',
+        message: 'Choose one Deck/Card Pool Owner before adding deck cards to a pool.',
+      });
+      return;
+    }
+    const combined = combineBoardQuantities(mainboardEntries, sideboardEntries);
+    const updates = Object.entries(combined);
+    if (updates.length < 1) {
+      showNotification({
+        color: 'red',
+        title: 'No cards to add',
+        message: 'This deck does not contain any cards.',
+      });
+      return;
+    }
+    const confirmed = window.confirm(
+      `Are you sure you want to add cards from "${sourceLabel}" to this card pool?\n\n` +
+      `This can update up to ${updates.length} card entries and will not reduce existing quantities.`
+    );
+    if (!confirmed) return;
+
+    let changedCount = 0;
+    let attemptedCount = 0;
+    for (const [cardId, requiredQty] of updates) {
+      attemptedCount += 1;
+      const currentQty = getPoolQuantity(cardId);
+      const nextQty = Math.max(currentQty, requiredQty);
+      if (nextQty === currentQty) continue;
+      await addToPool(cardId, nextQty, ownerUserId, { silent: true, skipMutate: true });
+      changedCount += 1;
+    }
+    if (changedCount > 0) {
+      await swrCardPoolResponse.mutate();
+    }
+
     showNotification({
-      id: `card-pool-update-${cardId}`,
       color: 'green',
-      title: 'Card pool updated',
-      message: `${cardName}: ${nextQuantity}`,
+      title: 'Card pool synced from deck',
+      message:
+        changedCount > 0
+          ? `${sourceLabel}: updated ${changedCount} of ${attemptedCount} cards.`
+          : `${sourceLabel}: card pool already covers this deck.`,
     });
   }
 
-  function addCardToDeck(cardId: string, side: 'main' | 'side') {
-    const card = cardsById[cardId];
-    if (side === 'main' && isLeaderOrBase(card)) {
-      return;
-    }
-
-    if (side === 'main') {
-      setMainboard((prev) => ({ ...prev, [cardId]: (prev[cardId] ?? 0) + 1 }));
-      return;
-    }
-    setSideboard((prev) => ({ ...prev, [cardId]: (prev[cardId] ?? 0) + 1 }));
-  }
-
-  function removeCardFromDeck(cardId: string, side: 'main' | 'side') {
+  function setDeckCardQuantity(cardId: string, side: 'main' | 'side', nextQuantity: number) {
+    const resolvedCatalogId = resolveCatalogCardId(cardId);
+    const normalizedCardId = resolvedCatalogId !== '' ? resolvedCatalogId : normalizeLooseCardId(cardId);
+    if (normalizedCardId === '') return;
+    const normalizedQty = Math.max(0, Math.min(99, Math.trunc(Number(nextQuantity) || 0)));
     const update = (prev: Record<string, number>) => {
-      const current = prev[cardId] ?? 0;
-      if (current <= 1) {
+      if (normalizedQty <= 0) {
+        if (prev[normalizedCardId] == null) return prev;
         const next = { ...prev };
-        delete next[cardId];
+        delete next[normalizedCardId];
         return next;
       }
-      return { ...prev, [cardId]: current - 1 };
+      return { ...prev, [normalizedCardId]: normalizedQty };
     };
-
     if (side === 'main') {
       setMainboard(update);
       return;
     }
     setSideboard(update);
+  }
+
+  function clearDeckCard(cardId: string, side: 'main' | 'side') {
+    setDeckCardQuantity(cardId, side, 0);
+  }
+
+  function addCardToDeck(cardId: string, side: 'main' | 'side') {
+    const resolvedCatalogId = resolveCatalogCardId(cardId);
+    const normalizedCardId = resolvedCatalogId !== '' ? resolvedCatalogId : normalizeLooseCardId(cardId);
+    if (normalizedCardId === '') return;
+    const card = cardsById[normalizedCardId];
+    if (side === 'main' && isLeaderOrBase(card)) {
+      return;
+    }
+
+    if (side === 'main') {
+      setDeckCardQuantity(normalizedCardId, 'main', (mainboard[normalizedCardId] ?? 0) + 1);
+      return;
+    }
+    setDeckCardQuantity(normalizedCardId, 'side', (sideboard[normalizedCardId] ?? 0) + 1);
   }
 
   async function onSaveDeck() {
@@ -860,8 +1151,8 @@ export default function DeckbuilderPage({
       const resolveCardId = (rawId: unknown) => {
         const asString = String(rawId ?? '').trim();
         if (asString === '') return '';
-        const mapped = cardIdByLookupKey[normalizeCardIdLookupKey(asString)];
-        return mapped ?? asString;
+        const mapped = resolveCatalogCardId(asString);
+        return mapped !== '' ? mapped : asString;
       };
       const sanitizeEntries = (entries: unknown) =>
         (Array.isArray(entries) ? entries : [])
@@ -887,7 +1178,7 @@ export default function DeckbuilderPage({
       }
 
       const deck = sanitizeEntries(parsed?.deck);
-      const sideboard = sanitizeEntries(parsed?.sideboard);
+      const importedSideboard = sanitizeEntries(parsed?.sideboard);
       const importedName =
         String(parsed?.metadata?.name ?? parsed?.name ?? '').trim() ||
         `Imported Deck ${new Date().toISOString()}`;
@@ -895,24 +1186,28 @@ export default function DeckbuilderPage({
       setDeckName(importedName);
       setLeaderCardId(leader);
       setBaseCardId(base);
-      setMainboard(
+      const nextMainboard = normalizeBoardEntries(
         deck.reduce(
           (result: Record<string, number>, entry: { id: string; count: number }) => ({
             ...result,
             [entry.id]: entry.count,
           }),
           {}
-        )
+        ),
+        resolveCatalogCardId
       );
-      setSideboard(
-        sideboard.reduce(
+      const nextSideboard = normalizeBoardEntries(
+        importedSideboard.reduce(
           (result: Record<string, number>, entry: { id: string; count: number }) => ({
             ...result,
             [entry.id]: entry.count,
           }),
           {}
-        )
+        ),
+        resolveCatalogCardId
       );
+      setMainboard(nextMainboard);
+      setSideboard(nextSideboard);
 
       if (hasTournament) {
         await importDeckSwuDb(activeTournamentId, {
@@ -921,8 +1216,8 @@ export default function DeckbuilderPage({
           name: importedName,
           leader,
           base,
-          deck,
-          sideboard,
+          deck: Object.entries(nextMainboard).map(([id, count]) => ({ id, count })),
+          sideboard: Object.entries(nextSideboard).map(([id, count]) => ({ id, count })),
         });
         await swrDecksResponse.mutate();
       }
@@ -948,14 +1243,32 @@ export default function DeckbuilderPage({
     Object.entries(mainboard).forEach(([card_id, qty]) => rows.push({ side: 'Main', card_id, qty }));
     Object.entries(sideboard).forEach(([card_id, qty]) => rows.push({ side: 'Side', card_id, qty }));
     return rows.sort((a, b) => {
-      const cardA = cardsById[a.card_id];
-      const cardB = cardsById[b.card_id];
-      return (cardA?.name ?? a.card_id).localeCompare(cardB?.name ?? b.card_id);
+      const cardAId = resolveCatalogCardId(a.card_id);
+      const cardBId = resolveCatalogCardId(b.card_id);
+      const cardA = cardsById[cardAId !== '' ? cardAId : a.card_id];
+      const cardB = cardsById[cardBId !== '' ? cardBId : b.card_id];
+      return resolveCardDisplayName(cardA?.name ?? a.card_id).localeCompare(
+        resolveCardDisplayName(cardB?.name ?? b.card_id)
+      );
     });
-  }, [mainboard, sideboard, cardsById]);
+  }, [mainboard, sideboard, cardsById, cardIdByLookupKey]);
+  const mainDeckRows = useMemo(
+    () => deckRows.filter((row) => row.side === 'Main'),
+    [deckRows]
+  );
+  const sideDeckRows = useMemo(
+    () => deckRows.filter((row) => row.side === 'Side'),
+    [deckRows]
+  );
 
   const deckMetrics = useMemo(() => {
-    const deckEntries = deckRows.map((row) => ({ row, card: cardsById[row.card_id] })).filter((x) => x.card != null);
+    const deckEntries = deckRows
+      .map((row) => {
+        const resolvedCardId = resolveCatalogCardId(row.card_id);
+        const effectiveCardId = resolvedCardId !== '' ? resolvedCardId : row.card_id;
+        return { row, card: cardsById[effectiveCardId] };
+      })
+      .filter((x) => x.card != null);
     const totalQty = deckEntries.reduce((sum, x) => sum + x.row.qty, 0);
 
     const byCost = aggregateCountMap(
@@ -1009,7 +1322,7 @@ export default function DeckbuilderPage({
         { label: 'Out of Aspect', value: outOfAspect },
       ],
     };
-  }, [deckRows, cardsById, allowedAspects]);
+  }, [deckRows, cardsById, allowedAspects, cardIdByLookupKey]);
 
   let graphContent = null;
   if (graphView === 'cost') {
@@ -1083,6 +1396,114 @@ export default function DeckbuilderPage({
     return <IconChevronDown size={14} stroke={1.8} />;
   }
 
+  const renderDeckSection = (
+    title: string,
+    rows: Array<{ side: 'Main' | 'Side'; card_id: string; qty: number }>,
+    side: 'main' | 'side'
+  ) => {
+    const visibleStart = rows.length < 1 ? 0 : 1;
+    const visibleEnd = rows.length;
+    return (
+      <Stack gap={6}>
+        <Group justify="space-between" align="end">
+          <Text fw={600}>{title}</Text>
+          <Text size="xs" c="dimmed">
+            Showing {visibleStart}-{visibleEnd} of {rows.length}
+          </Text>
+        </Group>
+        <Table stickyHeader stickyHeaderOffset={0}>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Qty</Table.Th>
+              <Table.Th>Name</Table.Th>
+              <Table.Th>Type</Table.Th>
+              <Table.Th>Cost</Table.Th>
+              <Table.Th>Power</Table.Th>
+              <Table.Th>HP</Table.Th>
+              <Table.Th>Aspect</Table.Th>
+              <Table.Th>Arena/Set</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {rows.length < 1 && (
+              <Table.Tr>
+                <Table.Td colSpan={8}>
+                  <Text c="dimmed" size="sm">
+                    No cards added yet.
+                  </Text>
+                </Table.Td>
+              </Table.Tr>
+            )}
+            {rows.map((row) => {
+              const resolvedRowCardId = resolveCatalogCardId(row.card_id);
+              const effectiveCardId = resolvedRowCardId !== '' ? resolvedRowCardId : row.card_id;
+              const card = cardsById[effectiveCardId];
+              const usage = deckUsageByCard[row.card_id];
+              const totalQty = usage?.total ?? row.qty;
+              const poolQty = getPoolQuantity(effectiveCardId);
+              const rowHighlightColor =
+                showPoolWarnings && totalQty > 0
+                  ? poolQty <= 0
+                    ? 'rgba(255, 0, 0, 0.12)'
+                    : totalQty > poolQty
+                      ? 'rgba(255, 215, 0, 0.20)'
+                      : undefined
+                  : undefined;
+              return (
+                <Table.Tr
+                  key={`${side}-${row.card_id}`}
+                  style={rowHighlightColor ? { backgroundColor: rowHighlightColor } : undefined}
+                >
+                  <Table.Td>
+                    <Group gap={4} wrap="nowrap">
+                      <NumberInput
+                        value={row.qty}
+                        min={0}
+                        max={99}
+                        w={74}
+                        onChange={(value) => {
+                          const numeric = Number(value ?? 0);
+                          setDeckCardQuantity(row.card_id, side, Number.isNaN(numeric) ? 0 : numeric);
+                        }}
+                      />
+                      <ActionIcon
+                        size="sm"
+                        variant="subtle"
+                        color="red"
+                        onClick={() => clearDeckCard(row.card_id, side)}
+                        title="Remove card from this section"
+                      >
+                        <IconTrash size={14} />
+                      </ActionIcon>
+                    </Group>
+                  </Table.Td>
+                  <Table.Td>
+                    <Stack gap={0}>
+                      <Text size="sm">{card?.name ?? resolveCardDisplayName(row.card_id)}</Text>
+                      {card?.character_variant != null && card.character_variant !== '' ? (
+                        <Text size="xs" c="dimmed">
+                          {card.character_variant}
+                        </Text>
+                      ) : null}
+                    </Stack>
+                  </Table.Td>
+                  <Table.Td>{card?.type ?? '-'}</Table.Td>
+                  <Table.Td>{card?.cost ?? '-'}</Table.Td>
+                  <Table.Td>{card?.power ?? '-'}</Table.Td>
+                  <Table.Td>{card?.hp ?? '-'}</Table.Td>
+                  <Table.Td>{card != null ? <AspectIcons aspects={card.aspects ?? []} /> : '-'}</Table.Td>
+                  <Table.Td>
+                    {card != null ? `${(card.arenas ?? []).join('/') || '-'} / ${card.set_code.toUpperCase()}` : '-'}
+                  </Table.Td>
+                </Table.Tr>
+              );
+            })}
+          </Table.Tbody>
+        </Table>
+      </Stack>
+    );
+  };
+
   const content = (
     <Stack>
         <Modal
@@ -1135,6 +1556,11 @@ export default function DeckbuilderPage({
                     })),
                   ]}
                 />
+              )}
+              {isAdminAllOwnersView && (
+                <Text size="xs" c="dimmed">
+                  Card pool quantity edits are disabled while viewing all users. Select one owner to edit pool values.
+                </Text>
               )}
               {seasonOptions.length > 0 && (
                 <Select
@@ -1362,14 +1788,21 @@ export default function DeckbuilderPage({
                     onChange={(event) => setShowPoolWarnings(event.currentTarget.checked)}
                   />
                 </Group>
-
-                <ScrollArea h={500}>
-                  {filteredCards.length > MAX_RENDERED_CARD_ROWS ? (
-                    <Text size="sm" c="dimmed" mb="xs">
-                      Showing first {MAX_RENDERED_CARD_ROWS} of {filteredCards.length} cards. Narrow search filters to
-                      load a smaller set.
+                <ScrollArea h={cardListTableHeight}>
+                  <Group justify="space-between" mb="xs">
+                    <Text size="sm" c="dimmed">
+                      Showing {cardListStart}-{cardListEnd} of {cappedFilteredCards.length}
                     </Text>
-                  ) : null}
+                    <Pagination
+                      value={cardListPage}
+                      onChange={setCardListPage}
+                      total={cardListTotalPages}
+                      withEdges
+                      siblings={1}
+                      boundaries={1}
+                      size="sm"
+                    />
+                  </Group>
                   <Table highlightOnHover stickyHeader>
                     <Table.Thead>
                       <Table.Tr>
@@ -1441,7 +1874,7 @@ export default function DeckbuilderPage({
                     </Table.Thead>
                     <Table.Tbody>
                       {visibleFilteredCards.map((card: CardItem) => {
-                        const currentQty = cardPoolMap[card.card_id] ?? 0;
+                        const currentQty = getPoolQuantity(card.card_id);
                         const mainQty = mainboard[card.card_id] ?? 0;
                         const sideQty = sideboard[card.card_id] ?? 0;
                         const totalQty = mainQty + sideQty;
@@ -1505,16 +1938,19 @@ export default function DeckbuilderPage({
                             <Table.Td>{(card.arenas ?? []).join(', ') || '-'}</Table.Td>
                             <Table.Td>{card.set_code.toUpperCase()}</Table.Td>
                             <Table.Td>
-                              <NumberInput
-                                value={currentQty}
-                                min={0}
-                                max={99}
-                                w={86}
-                                onChange={(value) => {
-                                  const numeric = Number(value ?? 0);
-                                  addToPool(card.card_id, Number.isNaN(numeric) ? 0 : numeric);
-                                }}
-                              />
+                              <Group gap={4} wrap="nowrap">
+                                <NumberInput
+                                  value={currentQty}
+                                  min={0}
+                                  max={99}
+                                  w={86}
+                                  disabled={isAdminAllOwnersView}
+                                  onChange={(value) => {
+                                    const numeric = Number(value ?? 0);
+                                    addToPool(card.card_id, Number.isNaN(numeric) ? 0 : numeric);
+                                  }}
+                                />
+                              </Group>
                             </Table.Td>
                             <Table.Td>{mainQty}</Table.Td>
                             <Table.Td>{sideQty}</Table.Td>
@@ -1545,6 +1981,29 @@ export default function DeckbuilderPage({
                     </Table.Tbody>
                   </Table>
                 </ScrollArea>
+                <Group grow>
+                  <Select
+                    label="Card rows per page"
+                    value={String(cardListRowsPerPage)}
+                    onChange={(value) => {
+                      const numeric = Number(value ?? DEFAULT_ROWS_PER_PAGE);
+                      if (!Number.isFinite(numeric) || numeric <= 0) return;
+                      setCardListRowsPerPage(normalizePageSize(numeric));
+                    }}
+                    data={PAGE_SIZE_OPTIONS.map((value) => ({ value: String(value), label: String(value) }))}
+                  />
+                  <NumberInput
+                    label="Card table visible lines"
+                    value={cardListVisibleLines}
+                    min={MIN_VISIBLE_LINES}
+                    max={MAX_VISIBLE_LINES}
+                    onChange={(value) => {
+                      const numeric = Number(value ?? DEFAULT_VISIBLE_LINES);
+                      if (!Number.isFinite(numeric)) return;
+                      setCardListVisibleLines(clampVisibleLines(numeric));
+                    }}
+                  />
+                </Group>
               </Stack>
             </Card>
           </Grid.Col>
@@ -1598,91 +2057,30 @@ export default function DeckbuilderPage({
                     Sideboard ({countCards(sideboard)})
                   </Text>
                 </Group>
-
-                <ScrollArea h={260}>
-                  <Table>
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>Side</Table.Th>
-                        <Table.Th>Qty</Table.Th>
-                        <Table.Th>Name</Table.Th>
-                        <Table.Th>Type</Table.Th>
-                        <Table.Th>Cost</Table.Th>
-                        <Table.Th>Power</Table.Th>
-                        <Table.Th>HP</Table.Th>
-                        <Table.Th>Aspect</Table.Th>
-                        <Table.Th>Arena/Set</Table.Th>
-                        <Table.Th></Table.Th>
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {deckRows.length < 1 && (
-                        <Table.Tr>
-                          <Table.Td colSpan={10}>
-                            <Text c="dimmed" size="sm">
-                              No cards added yet.
-                            </Text>
-                          </Table.Td>
-                        </Table.Tr>
-                      )}
-                      {deckRows.map((row) => {
-                        const card = cardsById[row.card_id];
-                        const usage = deckUsageByCard[row.card_id];
-                        const totalQty = usage?.total ?? row.qty;
-                        const poolQty = cardPoolMap[row.card_id] ?? 0;
-                        const rowHighlightColor =
-                          showPoolWarnings && totalQty > 0
-                            ? poolQty <= 0
-                              ? 'rgba(255, 0, 0, 0.12)'
-                              : totalQty > poolQty
-                                ? 'rgba(255, 215, 0, 0.20)'
-                                : undefined
-                            : undefined;
-                        return (
-                          <Table.Tr
-                            key={`${row.side}-${row.card_id}`}
-                            style={rowHighlightColor ? { backgroundColor: rowHighlightColor } : undefined}
-                          >
-                            <Table.Td>{row.side}</Table.Td>
-                            <Table.Td>{row.qty}</Table.Td>
-                            <Table.Td>
-                              <Stack gap={0}>
-                                <Text size="sm">{card?.name ?? row.card_id}</Text>
-                                {card?.character_variant != null && card.character_variant !== '' ? (
-                                  <Text size="xs" c="dimmed">
-                                    {card.character_variant}
-                                  </Text>
-                                ) : null}
-                              </Stack>
-                            </Table.Td>
-                            <Table.Td>{card?.type ?? '-'}</Table.Td>
-                            <Table.Td>{card?.cost ?? '-'}</Table.Td>
-                            <Table.Td>{card?.power ?? '-'}</Table.Td>
-                            <Table.Td>{card?.hp ?? '-'}</Table.Td>
-                            <Table.Td>
-                              {card != null ? <AspectIcons aspects={card.aspects ?? []} /> : '-'}
-                            </Table.Td>
-                            <Table.Td>
-                              {card != null
-                                ? `${(card.arenas ?? []).join('/') || '-'} / ${card.set_code.toUpperCase()}`
-                                : '-'}
-                            </Table.Td>
-                            <Table.Td>
-                              <ActionIcon
-                                size="sm"
-                                variant="subtle"
-                                color="red"
-                                onClick={() => removeCardFromDeck(row.card_id, row.side === 'Main' ? 'main' : 'side')}
-                              >
-                                <IconTrash size={14} />
-                              </ActionIcon>
-                            </Table.Td>
-                          </Table.Tr>
-                        );
-                      })}
-                    </Table.Tbody>
-                  </Table>
-                </ScrollArea>
+                {renderDeckSection(
+                  `Mainboard (${countCards(mainboard)})`,
+                  mainDeckRows,
+                  'main'
+                )}
+                {renderDeckSection(
+                  `Sideboard (${countCards(sideboard)})`,
+                  sideDeckRows,
+                  'side'
+                )}
+                <Button
+                  variant="outline"
+                  disabled={deckRows.length < 1 || (isAdmin && isAdminAllOwnersView)}
+                  onClick={() =>
+                    addDeckToCardPool(
+                      mainboard,
+                      sideboard,
+                      deckName.trim() === '' ? 'Current deck' : deckName,
+                      isAdmin ? targetUserId ?? undefined : currentUserId
+                    )
+                  }
+                >
+                  Add Current Deck to Card Pool
+                </Button>
 
                 <Button onClick={onSaveDeck} disabled={leaderCardId == null || baseCardId == null}>
                   Save Deck
@@ -1720,12 +2118,8 @@ export default function DeckbuilderPage({
                     {(decks as any[]).map((deck: any) => (
                       <Card key={deck.id} withBorder>
                         {(() => {
-                          const leaderLabel =
-                            allCards.find((card: CardItem) => card.card_id === deck.leader)?.name ??
-                            deck.leader;
-                          const baseLabel =
-                            allCards.find((card: CardItem) => card.card_id === deck.base)?.name ??
-                            deck.base;
+                          const leaderLabel = resolveCardDisplayName(deck.leader);
+                          const baseLabel = resolveCardDisplayName(deck.base);
                           return (
                         <Group justify="space-between" align="start">
                           <Stack gap={0}>
@@ -1736,8 +2130,16 @@ export default function DeckbuilderPage({
                             <Text size="xs" c="dimmed">
                               Record: {deck.wins ?? 0}-{deck.draws ?? 0}-{deck.losses ?? 0} (
                               {deck.matches ?? 0} matches, {(deck.win_percentage ?? 0).toFixed(2)}% win rate,{' '}
-                              {deck.tournaments_submitted ?? 0} tournaments)
+                              {deck.tournaments_submitted ?? 0} events submitted)
                             </Text>
+                            {(deck.updated ?? deck.created) != null && (
+                              <Text size="xs" c="dimmed">
+                                Updated:{' '}
+                                <DateTime
+                                  datetime={String(deck.updated ?? deck.created)}
+                                />
+                              </Text>
+                            )}
                             {isAdmin && (
                               <Text size="xs" c="dimmed">
                                 {deck.user_name}
@@ -1745,23 +2147,44 @@ export default function DeckbuilderPage({
                             )}
                           </Stack>
                           <Group gap={4}>
+                            {isAdmin && (
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                disabled={isAdminAllOwnersView}
+                                onClick={async () => {
+                                  await addDeckToCardPool(
+                                    deck.mainboard ?? {},
+                                    deck.sideboard ?? {},
+                                    String(deck.name ?? 'Saved deck').trim() || 'Saved deck',
+                                    Number(deck.user_id ?? 0)
+                                  );
+                                }}
+                              >
+                                Add to Pool
+                              </Button>
+                            )}
                             <Button
                               size="xs"
                               variant="light"
                               onClick={() => {
                                 setDeckName(deck.name);
-                                setMainboard(deck.mainboard ?? {});
-                                setSideboard(deck.sideboard ?? {});
+                                setMainboard(normalizeBoardEntries(deck.mainboard ?? {}, resolveCatalogCardId));
+                                setSideboard(normalizeBoardEntries(deck.sideboard ?? {}, resolveCatalogCardId));
 
+                                const leaderDeckValue = String(deck.leader ?? '');
+                                const baseDeckValue = String(deck.base ?? '');
+                                const leaderResolvedId = resolveCatalogCardId(leaderDeckValue);
+                                const baseResolvedId = resolveCatalogCardId(baseDeckValue);
                                 const leader = allCards.find(
                                   (card: CardItem) =>
                                     card.type.toLowerCase() === 'leader' &&
-                                    (card.name === deck.leader || card.card_id === deck.leader)
+                                    (card.name === leaderDeckValue || card.card_id === leaderResolvedId)
                                 );
                                 const base = allCards.find(
                                   (card: CardItem) =>
                                     card.type.toLowerCase() === 'base' &&
-                                    (card.name === deck.base || card.card_id === deck.base)
+                                    (card.name === baseDeckValue || card.card_id === baseResolvedId)
                                 );
                                 setLeaderCardId(leader?.card_id ?? null);
                                 setBaseCardId(base?.card_id ?? null);

@@ -27,3 +27,21 @@ export async function deleteStageItem(tournament_id: number, stage_item_id: numb
     .delete(`tournaments/${tournament_id}/stage_items/${stage_item_id}`)
     .catch((response: any) => handleRequestError(response));
 }
+
+export async function updateStageItemWinnerConfirmation(
+  tournament_id: number,
+  stage_item_id: number,
+  confirmed: boolean
+) {
+  return createAxios()
+    .put(`tournaments/${tournament_id}/stage_items/${stage_item_id}/winner_confirmation`, {
+      confirmed,
+    })
+    .catch((response: any) => handleRequestError(response));
+}
+
+export async function endStageItemEarly(tournament_id: number, stage_item_id: number) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/stage_items/${stage_item_id}/end_early`)
+    .catch((response: any) => handleRequestError(response));
+}

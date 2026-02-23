@@ -27,6 +27,7 @@ from bracket.models.db.stage_item import (
     StageItemActivateNextBody,
     StageItemCreateBody,
     StageItemUpdateBody,
+    StageItemWinnerConfirmationBody,
     StageType,
 )
 from bracket.models.db.tournament import Tournament
@@ -39,6 +40,7 @@ from bracket.routes.models import SuccessResponse
 from bracket.routes.util import disallow_archived_tournament, stage_item_dependency
 from bracket.sql.courts import get_all_courts_in_tournament
 from bracket.sql.matches import (
+    null_unreported_matchups_in_stage_item,
     sql_create_match,
     sql_reschedule_match_and_determine_duration_and_margin,
 )
@@ -51,6 +53,8 @@ from bracket.sql.rounds import (
 from bracket.sql.shared import sql_delete_stage_item_with_foreign_keys
 from bracket.sql.stage_items import (
     get_stage_item,
+    sql_clear_stage_item_winner_confirmation,
+    sql_confirm_stage_item_winner,
     sql_create_stage_item_with_empty_inputs,
 )
 from bracket.sql.stages import get_full_tournament_details
@@ -63,6 +67,47 @@ from bracket.utils.errors import (
 from bracket.utils.id_types import StageItemId, TournamentId
 
 router = APIRouter(prefix=config.api_prefix)
+
+
+def match_has_reported_result(match: object) -> bool:
+    score1 = int(getattr(match, "stage_item_input1_score", 0) or 0)
+    score2 = int(getattr(match, "stage_item_input2_score", 0) or 0)
+    return not (score1 == 0 and score2 == 0)
+
+
+def get_stage_item_winner_from_current_standings(
+    stage_item: StageItemWithRounds,
+) -> tuple[int, str]:
+    ranked_inputs = sorted(
+        [
+            input_
+            for input_ in stage_item.inputs
+            if getattr(getattr(input_, "team", None), "name", None) is not None
+        ],
+        key=lambda input_: (
+            -float(getattr(input_, "points", 0) or 0),
+            -int(getattr(input_, "wins", 0) or 0),
+            -int(getattr(input_, "draws", 0) or 0),
+            int(getattr(input_, "losses", 0) or 0),
+            str(getattr(getattr(input_, "team", None), "name", "") or "").lower(),
+        ),
+    )
+    if len(ranked_inputs) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No ranked teams found for this event",
+        )
+
+    winner_input = ranked_inputs[0]
+    winner_team = getattr(winner_input, "team", None)
+    winner_team_id = int(getattr(winner_team, "id", 0) or 0)
+    winner_team_name = str(getattr(winner_team, "name", "") or "").strip()
+    if winner_team_id <= 0 or winner_team_name == "":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not determine winner from current standings",
+        )
+    return winner_team_id, winner_team_name
 
 
 @router.delete(
@@ -140,6 +185,109 @@ async def update_stage_item(
     await recalculate_ranking_for_stage_item(tournament_id, stage_item)
     if stage_item.type in {StageType.SINGLE_ELIMINATION, StageType.DOUBLE_ELIMINATION}:
         await update_inputs_in_complete_elimination_stage_item(tournament_id, stage_item.id)
+    return SuccessResponse()
+
+
+@router.put(
+    "/tournaments/{tournament_id}/stage_items/{stage_item_id}/winner_confirmation",
+    response_model=SuccessResponse,
+)
+async def put_stage_item_winner_confirmation(
+    tournament_id: TournamentId,
+    stage_item_id: StageItemId,
+    body: StageItemWinnerConfirmationBody,
+    user: UserPublic = Depends(user_authenticated_for_tournament),
+    _: Tournament = Depends(disallow_archived_tournament),
+    stage_item: StageItemWithRounds = Depends(stage_item_dependency),
+) -> SuccessResponse:
+    if not body.confirmed:
+        await sql_clear_stage_item_winner_confirmation(stage_item_id)
+        return SuccessResponse()
+
+    non_draft_matches = [
+        match
+        for round_ in stage_item.rounds
+        if not round_.is_draft
+        for match in round_.matches
+    ]
+    if len(non_draft_matches) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot confirm winner: this event has no reported matchups",
+        )
+
+    has_pending_matches = any(not match_has_reported_result(match) for match in non_draft_matches)
+    if has_pending_matches:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot confirm winner while unreported matchups remain. Use end early if needed.",
+        )
+
+    await recalculate_ranking_for_stage_item(tournament_id, stage_item)
+    refreshed_stage_item = await get_stage_item(tournament_id, stage_item_id)
+    winner_team_id, winner_team_name = get_stage_item_winner_from_current_standings(
+        refreshed_stage_item
+    )
+    await sql_confirm_stage_item_winner(
+        stage_item_id,
+        winner_team_id,
+        winner_team_name,
+        user,
+        ended_early=False,
+    )
+    return SuccessResponse()
+
+
+@router.post(
+    "/tournaments/{tournament_id}/stage_items/{stage_item_id}/end_early",
+    response_model=SuccessResponse,
+)
+async def end_stage_item_early(
+    tournament_id: TournamentId,
+    stage_item_id: StageItemId,
+    user: UserPublic = Depends(user_authenticated_for_tournament),
+    _: Tournament = Depends(disallow_archived_tournament),
+    stage_item: StageItemWithRounds = Depends(stage_item_dependency),
+) -> SuccessResponse:
+    if stage_item.type in {StageType.SINGLE_ELIMINATION, StageType.DOUBLE_ELIMINATION}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Ending early is only supported for Swiss, Round Robin, and regular season events",
+        )
+
+    non_draft_matches = [
+        match
+        for round_ in stage_item.rounds
+        if not round_.is_draft
+        for match in round_.matches
+    ]
+    if len(non_draft_matches) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot end early: this event has no matchups",
+        )
+
+    has_pending_matches = any(not match_has_reported_result(match) for match in non_draft_matches)
+    if not has_pending_matches:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This event is already complete. Confirm the winner instead.",
+        )
+
+    await null_unreported_matchups_in_stage_item(tournament_id, stage_item_id)
+    refreshed_stage_item = await get_stage_item(tournament_id, stage_item_id)
+    await recalculate_ranking_for_stage_item(tournament_id, refreshed_stage_item)
+    refreshed_stage_item = await get_stage_item(tournament_id, stage_item_id)
+    winner_team_id, winner_team_name = get_stage_item_winner_from_current_standings(
+        refreshed_stage_item
+    )
+    await sql_confirm_stage_item_winner(
+        stage_item_id,
+        winner_team_id,
+        winner_team_name,
+        user,
+        ended_early=True,
+    )
     return SuccessResponse()
 
 

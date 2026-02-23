@@ -227,6 +227,18 @@ stage_items = Table(
         ),
         nullable=False,
     ),
+    Column("winner_confirmed", Boolean, nullable=False, server_default="f"),
+    Column("winner_confirmed_at", DateTimeTZ, nullable=True),
+    Column(
+        "winner_confirmed_by_user_id",
+        BigInteger,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    ),
+    Column("winner_team_id", BigInteger, ForeignKey("teams.id", ondelete="SET NULL"), nullable=True),
+    Column("winner_team_name", Text, nullable=True),
+    Column("ended_early", Boolean, nullable=False, server_default="f"),
+    Column("ended_early_at", DateTimeTZ, nullable=True),
 )
 
 stage_item_inputs = Table(

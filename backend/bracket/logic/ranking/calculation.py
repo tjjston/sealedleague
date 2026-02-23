@@ -15,6 +15,11 @@ K = 32
 D = 400
 
 
+def has_reported_result(match: MatchWithDetailsDefinitive) -> bool:
+    # Matches default to 0-0 before any result is entered.
+    return not (match.stage_item_input1_score == 0 and match.stage_item_input2_score == 0)
+
+
 def set_statistics_for_stage_item_input(
     team_index: int,
     stats: defaultdict[StageItemInputId, TeamStatistics],
@@ -81,6 +86,7 @@ def determine_ranking_for_stage_item(
         if not round_.is_draft
         for match in round_.matches
         if isinstance(match, MatchWithDetailsDefinitive)
+        if has_reported_result(match)
     ]
     for match in matches:
         for team_index, stage_item_input in enumerate(match.stage_item_inputs):

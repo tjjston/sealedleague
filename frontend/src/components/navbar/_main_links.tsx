@@ -29,13 +29,20 @@ interface MainLinkProps {
   links?: MainLinkProps[] | null;
 }
 
+function isExternalLink(link: string) {
+  return /^https?:\/\//i.test(String(link).trim());
+}
+
 function MainLinkMobile({ item, pathName }: { item: MainLinkProps; pathName: String }) {
+  const external = isExternalLink(item.link);
   return (
     <>
       <UnstyledButton
         hiddenFrom="sm"
-        component={PreloadLink}
+        component={external ? 'a' : PreloadLink}
         href={item.link}
+        target={external ? '_blank' : undefined}
+        rel={external ? 'noreferrer' : undefined}
         className={classes.mobileLink}
         style={{ width: '100%' }}
         data-active={pathName === item.link || undefined}
@@ -51,13 +58,16 @@ function MainLinkMobile({ item, pathName }: { item: MainLinkProps; pathName: Str
 }
 
 function MainLink({ item, pathName }: { item: MainLinkProps; pathName: String }) {
+  const external = isExternalLink(item.link);
   return (
     <>
       <Tooltip position="right" label={item.label} transitionProps={{ duration: 0 }}>
         <UnstyledButton
           visibleFrom="sm"
-          component={PreloadLink}
+          component={external ? 'a' : PreloadLink}
           href={item.link}
+          target={external ? '_blank' : undefined}
+          rel={external ? 'noreferrer' : undefined}
           className={classes.link}
           data-active={pathName.startsWith(item.link) || undefined}
         >
@@ -92,6 +102,7 @@ export function getBaseLinksDict() {
       links: [
         { link: '/league/sealed-draft', label: 'Sealed Sim', icon: IconCards },
         { link: '/league/base-health', label: 'Base Health', icon: IconScoreboard },
+        { link: 'https://karabast.net/', label: 'Karabast', icon: IconBrackets },
       ],
       icon: IconSettings,
     },

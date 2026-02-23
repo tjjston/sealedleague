@@ -97,6 +97,38 @@ docker compose down
 docker compose down -v
 ```
 
+### Database Backups (Recommended Before Every Update)
+
+Create a snapshot:
+
+```bash
+./scripts/db-backup.sh
+```
+
+Restore from latest snapshot:
+
+```bash
+./scripts/db-restore.sh
+```
+
+Restore from a specific snapshot:
+
+```bash
+./scripts/db-restore.sh ./backups/postgres/sealedleague_YYYYmmddTHHMMSSZ.dump
+```
+
+Run daily snapshots with cron (example: 03:00 UTC, keep 30 days):
+
+```bash
+0 3 * * * cd /path/to/sealedleague && KEEP_DAYS=30 ./scripts/db-backup.sh >> /var/log/sealedleague-db-backup.log 2>&1
+```
+
+Notes:
+
+- Backups are written to `backups/postgres/` by default.
+- `db-restore.sh` stops the app container, replaces DB contents, then starts the app again.
+- Avoid `docker compose down -v` unless you explicitly want to delete DB data.
+
 ### Server Update Flow (Always Build Current Commit)
 
 ```bash

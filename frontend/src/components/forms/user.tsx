@@ -35,6 +35,33 @@ import {
 } from '@services/adapter';
 import { updatePassword, updateUser, updateUserPreferences, uploadUserAvatar } from '@services/user';
 
+function normalizeCardLookupId(value: string | null | undefined) {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/--+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  if (normalized === '' || !normalized.includes('-')) return normalized;
+  const [setCode, remainder] = normalized.split('-', 2);
+  if (setCode === '' || remainder == null || remainder.trim() === '') return normalized;
+  const token = remainder.trim();
+  const match = token.match(/^0*(\d+)([a-z]*)$/i);
+  if (match == null) return `${setCode}-${token}`;
+  return `${setCode}-${Number(match[1])}${String(match[2] ?? '').toLowerCase()}`;
+}
+
+function buildCardLookupCandidates(value: string | null | undefined) {
+  const normalized = normalizeCardLookupId(value);
+  if (normalized === '') return [];
+  const result = [normalized];
+  const match = normalized.match(/^([a-z]+)-(\d+)([a-z]*)$/i);
+  if (match != null) {
+    result.push(`${match[1]}-${Number(match[2])}`);
+  }
+  return result.filter((item, index) => item !== '' && result.indexOf(item) === index);
+}
+
 export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; i18n: any }) {
   const navigate = useNavigate();
   const makeFavoriteCardOptionValue = (
@@ -229,15 +256,44 @@ export default function UserForm({ user, t, i18n }: { user: UserPublic; t: any; 
   );
 
   const userCardPoolRows = useMemo(
-    () =>
-      [...cardPoolSummary].sort((left: any, right: any) => {
+    () => {
+      const cardCatalogById = cardCatalog.reduce((result: Record<string, any>, card: any) => {
+        buildCardLookupCandidates(String(card?.card_id ?? '')).forEach((candidate) => {
+          if (candidate !== '' && result[candidate] == null) {
+            result[candidate] = card;
+          }
+        });
+        return result;
+      }, {});
+
+      const rows = [...cardPoolSummary].map((row: any) => {
+        const cardId = normalizeCardLookupId(String(row?.card_id ?? ''));
+        const cardMeta =
+          buildCardLookupCandidates(cardId)
+            .map((candidate) => cardCatalogById[candidate])
+            .find((entry) => entry != null) ?? null;
+        return {
+          ...row,
+          card_id: cardId,
+          name: String(row?.name ?? '').trim() || String(cardMeta?.name ?? '').trim() || null,
+          character_variant:
+            String(row?.character_variant ?? '').trim() ||
+            String(cardMeta?.character_variant ?? '').trim() ||
+            null,
+          set_code: String(row?.set_code ?? '').trim() || String(cardMeta?.set_code ?? '').trim() || null,
+          image_url: String(row?.image_url ?? '').trim() || String(cardMeta?.image_url ?? '').trim() || null,
+        };
+      });
+
+      return rows.sort((left: any, right: any) => {
         const qtyDiff = Number(right?.quantity ?? 0) - Number(left?.quantity ?? 0);
         if (qtyDiff !== 0) return qtyDiff;
         const leftName = String(left?.name ?? left?.card_id ?? '').toLowerCase();
         const rightName = String(right?.name ?? right?.card_id ?? '').toLowerCase();
         return leftName.localeCompare(rightName);
-      }),
-    [cardPoolSummary]
+      });
+    },
+    [cardCatalog, cardPoolSummary]
   );
 
   const favoriteMediaOptions = useMemo(

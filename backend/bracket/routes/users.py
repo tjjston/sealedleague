@@ -144,7 +144,7 @@ _STAR_WARS_MEDIA_FALLBACK: list[dict[str, str]] = [
 
 _CARD_CATALOG_CACHE_LOCK = Lock()
 _CARD_CATALOG_CACHE: tuple[float, list[dict]] | None = None
-_CARD_CATALOG_CACHE_TTL_S = 1800
+_CARD_CATALOG_CACHE_TTL_S = 21600
 _SWAPI_FILMS_CACHE_LOCK = asyncio.Lock()
 _SWAPI_FILMS_CACHE: tuple[float, list[MediaCatalogEntry]] | None = None
 _SWAPI_FILMS_CACHE_TTL_S = 21600
@@ -315,9 +315,10 @@ async def list_user_directory(_: UserPublic = Depends(user_authenticated)) -> Us
 
     leader_ids = sorted(
         {
-            entry.current_leader_card_id.lower()
+            normalized_id
             for entry in entries
-            if entry.current_leader_card_id is not None and entry.current_leader_card_id != ""
+            for normalized_id in [_normalize_card_lookup_id(entry.current_leader_card_id)]
+            if normalized_id != ""
         }
     )
     card_lookup: dict[str, dict] = {}
@@ -338,14 +339,18 @@ async def list_user_directory(_: UserPublic = Depends(user_authenticated)) -> Us
                     900,
                 )
                 cards = [normalize_card_for_deckbuilding(card) for card in raw_cards]
-                card_lookup = {str(card["card_id"]).lower(): card for card in cards}
+                for card in cards:
+                    card_id = _normalize_card_lookup_id(str(card.get("card_id") or ""))
+                    if card_id == "":
+                        continue
+                    previous = card_lookup.get(card_id)
+                    card_lookup[card_id] = _preferred_catalog_row(previous, card)
             except Exception:
                 card_lookup = {}
 
     result: list[UserDirectoryEntry] = []
     for entry in entries:
-        leader_id = None if entry.current_leader_card_id is None else entry.current_leader_card_id.lower()
-        leader_card = card_lookup.get(leader_id) if leader_id is not None else None
+        leader_card = _resolve_card_lookup_row(card_lookup, entry.current_leader_card_id)
         avatar_url = entry.avatar_url
         if (avatar_url is None or avatar_url == "") and leader_card is not None:
             avatar_url = leader_card.get("image_url")
@@ -390,7 +395,12 @@ async def get_card_catalog(
 
     owned_card_ids: set[str] | None = None
     if owned_only:
-        owned_card_ids = await get_owned_card_ids_for_user(user_public.id)
+        owned_card_ids = {
+            normalized_id
+            for card_id in await get_owned_card_ids_for_user(user_public.id)
+            for normalized_id in [_normalize_card_lookup_id(card_id)]
+            if normalized_id != ""
+        }
         if len(owned_card_ids) < 1:
             return CardCatalogResponse(data=[])
 
@@ -398,13 +408,16 @@ async def get_card_catalog(
         card
         for card in cards
         if (
-            (owned_card_ids is None or str(card.get("card_id", "")).strip().lower() in owned_card_ids)
+            (
+                owned_card_ids is None
+                or _normalize_card_lookup_id(str(card.get("card_id", ""))) in owned_card_ids
+            )
             and (
                 normalized_query == ""
                 or normalized_query in str(card.get("name", "")).lower()
                 or normalized_query in str(card.get("character_variant", "")).lower()
                 or normalized_query in str(card.get("variant_type", "")).lower()
-                or normalized_query in str(card.get("card_id", "")).lower()
+                or normalized_query in _normalize_card_lookup_id(str(card.get("card_id", "")))
             )
         )
     ]
@@ -412,7 +425,7 @@ async def get_card_catalog(
     grouped_cards: dict[tuple[str, str], dict] = {}
     fallback_image_by_card_id: dict[str, str] = {}
     for card in filtered:
-        card_id = str(card.get("card_id", "")).strip().lower()
+        card_id = _normalize_card_lookup_id(str(card.get("card_id", "")))
         if card_id == "":
             continue
         variant_type = _normalize_variant_type(card.get("variant_type"))
@@ -451,7 +464,7 @@ async def get_card_catalog(
                 image_url=(
                     card.get("image_url")
                     if str(card.get("image_url", "")).strip() != ""
-                    else fallback_image_by_card_id.get(str(card.get("card_id", "")).strip().lower())
+                    else fallback_image_by_card_id.get(_normalize_card_lookup_id(str(card.get("card_id", ""))))
                 ),
             )
             for card in deduped[:limit]
@@ -474,7 +487,7 @@ async def get_user_card_pool_summary(
     try:
         cards = await asyncio.to_thread(_get_cached_normalized_card_catalog)
         for card in cards:
-            card_id = str(card.get("card_id", "")).strip().lower()
+            card_id = _normalize_card_lookup_id(str(card.get("card_id", "")))
             if card_id == "":
                 continue
             previous = card_lookup.get(card_id)
@@ -484,11 +497,11 @@ async def get_user_card_pool_summary(
 
     entries: list[UserCardPoolSummaryEntry] = []
     for row in totals:
-        card_id = str(row.get("card_id", "")).strip().lower()
+        card_id = _normalize_card_lookup_id(str(row.get("card_id", "")))
         quantity = int(row.get("quantity", 0))
         if card_id == "" or quantity <= 0:
             continue
-        card = card_lookup.get(card_id, {})
+        card = _resolve_card_lookup_row(card_lookup, card_id) or {}
         name = str(card.get("name", "")).strip() or None
         character_variant = str(card.get("character_variant", "")).strip() or None
         haystack = " ".join(
