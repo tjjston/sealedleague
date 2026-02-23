@@ -50,7 +50,10 @@ async def get_teams_with_members(
     query = f"""
         SELECT
             teams.*,
-            to_json(array_agg(p.*)) AS players
+            COALESCE(
+                to_json(array_agg(DISTINCT p.*) FILTER (WHERE p.id IS NOT NULL)),
+                '[]'::json
+            ) AS players
         FROM teams
         LEFT JOIN players_x_teams pt on pt.team_id = teams.id
         LEFT JOIN players p on pt.player_id = p.id

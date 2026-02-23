@@ -22,6 +22,7 @@ from bracket.models.db.tournament import TournamentBody, TournamentUpdateBody
 from bracket.models.db.user import UserPublic
 from bracket.models.league import (
     LeagueAwardAccoladeBody,
+    LeagueStandingsRow,
     LeagueCommunicationUpdateBody,
     LeagueCommunicationUpsertBody,
     LeagueDashboardBackgroundSettingsUpdateBody,
@@ -143,6 +144,19 @@ async def user_is_league_admin_for_tournament(
 
 def can_manage_other_users(current_user: UserPublic, target_user_id: UserId | None) -> bool:
     return target_user_id is not None and target_user_id != current_user.id
+
+
+def sanitize_standings_for_non_admin(rows: list[LeagueStandingsRow]) -> list[LeagueStandingsRow]:
+    return [
+        row.model_copy(
+            update={
+                "role": None,
+                "can_manage_points": False,
+                "can_manage_tournaments": False,
+            }
+        )
+        for row in rows
+    ]
 
 
 def normalize_person_name(value: str | None) -> str:
@@ -401,11 +415,14 @@ async def resolve_season_for_tournament(
 )
 async def get_season_standings(
     tournament_id: TournamentId,
-    _: UserPublic = Depends(user_authenticated_for_tournament_member),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueSeasonStandingsResponse:
+    has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
     await ensure_tournament_records_fresh(tournament_id)
     season = await get_or_create_active_season(tournament_id)
     standings = await get_league_standings(tournament_id, season.id)
+    if not has_admin_access:
+        standings = sanitize_standings_for_non_admin(standings)
     return LeagueSeasonStandingsResponse(data=standings)
 
 
@@ -415,8 +432,9 @@ async def get_season_standings(
 )
 async def get_season_history(
     tournament_id: TournamentId,
-    _: UserPublic = Depends(user_authenticated_for_tournament_member),
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueSeasonHistoryResponse:
+    has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
     await ensure_tournament_records_fresh(tournament_id)
     await get_or_create_active_season(tournament_id)
     seasons = await get_seasons_for_tournament(tournament_id)
@@ -426,6 +444,11 @@ async def get_season_history(
     )
     standings_by_season = standings_results[:-1]
     cumulative = standings_results[-1]
+    if not has_admin_access:
+        standings_by_season = [
+            sanitize_standings_for_non_admin(season_rows) for season_rows in standings_by_season
+        ]
+        cumulative = sanitize_standings_for_non_admin(cumulative)
     season_views = []
     for season, season_standings in zip(seasons, standings_by_season, strict=False):
         season_views.append(

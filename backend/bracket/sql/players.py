@@ -289,7 +289,10 @@ async def recalculate_tournament_records(
                     COALESCE(SUM(t.losses), 0) AS losses,
                     COALESCE(SUM(t.swiss_score), 0) AS swiss_score
                 FROM players p
-                LEFT JOIN players_x_teams pxt ON pxt.player_id = p.id
+                LEFT JOIN (
+                    SELECT DISTINCT player_id, team_id
+                    FROM players_x_teams
+                ) pxt ON pxt.player_id = p.id
                 LEFT JOIN teams t
                     ON t.id = pxt.team_id
                    AND t.tournament_id = p.tournament_id

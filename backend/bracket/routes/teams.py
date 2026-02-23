@@ -65,7 +65,11 @@ async def update_team_members(
     for player_id in player_ids:
         if player_id not in team.player_ids:
             await database.execute(
-                query=players_x_teams.insert(),
+                """
+                INSERT INTO players_x_teams (team_id, player_id)
+                VALUES (:team_id, :player_id)
+                ON CONFLICT (team_id, player_id) DO NOTHING
+                """,
                 values={"team_id": team_id, "player_id": player_id},
             )
 

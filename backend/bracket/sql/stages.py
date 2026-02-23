@@ -33,7 +33,7 @@ async def get_full_tournament_details(
             SELECT
                 t.*,
                 COALESCE(
-                    to_json(array_agg(p.*) FILTER (WHERE p.id IS NOT NULL)),
+                    to_json(array_agg(DISTINCT p.*) FILTER (WHERE p.id IS NOT NULL)),
                     '[]'::json
                 ) AS players
             FROM teams t

@@ -409,6 +409,7 @@ players_x_teams = Table(
     Column("id", BigInteger, primary_key=True, index=True),
     Column("player_id", BigInteger, ForeignKey("players.id", ondelete="CASCADE"), nullable=False, index=True),
     Column("team_id", BigInteger, ForeignKey("teams.id", ondelete="CASCADE"), nullable=False, index=True),
+    UniqueConstraint("player_id", "team_id"),
 )
 
 courts = Table(

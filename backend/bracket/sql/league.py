@@ -3089,7 +3089,7 @@ async def ensure_user_registered_as_participant(
         """
         INSERT INTO players_x_teams (team_id, player_id)
         VALUES (:team_id, :player_id)
-        ON CONFLICT DO NOTHING
+        ON CONFLICT (team_id, player_id) DO NOTHING
         """,
         values={"team_id": team_id, "player_id": int(player.id)},
     )

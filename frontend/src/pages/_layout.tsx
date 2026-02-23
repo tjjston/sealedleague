@@ -400,8 +400,25 @@ export function HeaderAction({
   };
 
   const maxVisibleTopLinks = isXl ? 5 : isLg ? 4 : 3;
-  const visibleLinks = links.slice(0, maxVisibleTopLinks);
-  const overflowLinks = links.slice(maxVisibleTopLinks);
+  let visibleLinks = links.slice(0, maxVisibleTopLinks);
+  let overflowLinks = links.slice(maxVisibleTopLinks);
+  const leagueAdminLinkIndex = links.findIndex(
+    (link) =>
+      String(link.label).trim().toLowerCase() === 'league admin' &&
+      String(link.link ?? '').trim().endsWith('/admin')
+  );
+  if (maxVisibleTopLinks > 0 && leagueAdminLinkIndex >= 0) {
+    const leagueAdminLink = links[leagueAdminLinkIndex];
+    const leagueAdminLinkIsVisible = visibleLinks.some(
+      (candidate) => candidate.link === leagueAdminLink.link && candidate.label === leagueAdminLink.label
+    );
+    if (!leagueAdminLinkIsVisible) {
+      const linksWithoutLeagueAdmin = links.filter((_, index) => index !== leagueAdminLinkIndex);
+      const nonAdminVisibleCount = Math.max(0, maxVisibleTopLinks - 1);
+      visibleLinks = [...linksWithoutLeagueAdmin.slice(0, nonAdminVisibleCount), leagueAdminLink];
+      overflowLinks = linksWithoutLeagueAdmin.slice(nonAdminVisibleCount);
+    }
+  }
   const hasOverflowActive = overflowLinks.some(
     (link) =>
       pathName === link.link ||

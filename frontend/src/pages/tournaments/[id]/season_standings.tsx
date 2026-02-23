@@ -201,7 +201,7 @@ export default function SeasonStandingsPage({
             <Table.Th>Tournament Wins</Table.Th>
             <Table.Th>Placements</Table.Th>
             <Table.Th>Packs</Table.Th>
-            <Table.Th>Privileges</Table.Th>
+            {isAdmin ? <Table.Th>Privileges</Table.Th> : null}
             <Table.Th>Accolades</Table.Th>
           </Table.Tr>
         </Table.Thead>
@@ -259,13 +259,15 @@ export default function SeasonStandingsPage({
                 <Table.Td>{row.tournament_wins ?? 0}</Table.Td>
                 <Table.Td>{row.tournament_placements ?? 0}</Table.Td>
                 <Table.Td>{row.prize_packs ?? 0}</Table.Td>
-                <Table.Td>
-                  <Group gap={6}>
-                    {row.role != null && <Badge variant="light">{row.role}</Badge>}
-                    {row.can_manage_points && <Badge color="teal">Points</Badge>}
-                    {row.can_manage_tournaments && <Badge color="indigo">Tournaments</Badge>}
-                  </Group>
-                </Table.Td>
+                {isAdmin ? (
+                  <Table.Td>
+                    <Group gap={6}>
+                      {row.role != null && <Badge variant="light">{row.role}</Badge>}
+                      {row.can_manage_points && <Badge color="teal">Points</Badge>}
+                      {row.can_manage_tournaments && <Badge color="indigo">Tournaments</Badge>}
+                    </Group>
+                  </Table.Td>
+                ) : null}
                 <Table.Td>
                   <Group gap={6}>
                     {(row.accolades ?? []).map((accolade: string) => (
