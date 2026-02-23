@@ -34,6 +34,7 @@ from bracket.models.league import (
     LeagueSeasonUpdateBody,
     LeagueTournamentApplicationBody,
     LeagueDeckImportSwuDbBody,
+    LeagueDeckRenameBody,
     LeagueParticipantSubmissionBody,
     LeagueCardPoolUpdateBody,
     LeagueDeckUpsertBody,
@@ -103,6 +104,7 @@ from bracket.sql.league import (
     set_team_logo_for_user_in_tournament,
     set_season_tournaments,
     reset_season_draft_results,
+    rename_deck as rename_deck_by_id,
     upsert_tournament_application,
     update_season,
     update_league_communication,
@@ -990,6 +992,36 @@ async def remove_deck(
 
     await delete_deck(deck_id)
     return SuccessResponse()
+
+
+@router.put(
+    "/tournaments/{tournament_id}/league/decks/{deck_id}/name",
+    response_model=LeagueDeckResponse,
+)
+async def rename_saved_deck(
+    tournament_id: TournamentId,
+    deck_id: DeckId,
+    body: LeagueDeckRenameBody,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+) -> LeagueDeckResponse:
+    has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
+    deck = await get_deck_by_id(deck_id)
+    if deck is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Deck not found")
+    if deck.user_id != user_public.id and not has_admin_access:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Cannot rename this deck")
+
+    updated_name = str(body.name).strip()
+    if updated_name == "":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Deck name is required")
+
+    renamed_deck = await rename_deck_by_id(deck_id, updated_name)
+    if renamed_deck is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A deck with that name already exists for this user in this season",
+        )
+    return LeagueDeckResponse(data=renamed_deck)
 
 
 @router.get(

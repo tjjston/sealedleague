@@ -2782,6 +2782,39 @@ async def get_deck_by_id(deck_id: DeckId) -> LeagueDeckView | None:
     return LeagueDeckView.model_validate(dict(row._mapping)) if row is not None else None
 
 
+async def rename_deck(deck_id: DeckId, name: str) -> LeagueDeckView | None:
+    normalized_name = str(name).strip()
+    if normalized_name == "":
+        return None
+
+    row = await database.fetch_one(
+        """
+        UPDATE decks AS d
+        SET
+            name = :name,
+            updated = :updated
+        WHERE d.id = :deck_id
+          AND NOT EXISTS (
+              SELECT 1
+              FROM decks d2
+              WHERE d2.season_id = d.season_id
+                AND d2.user_id = d.user_id
+                AND d2.id <> d.id
+                AND d2.name = :name
+          )
+        RETURNING d.id
+        """,
+        values={
+            "deck_id": deck_id,
+            "name": normalized_name,
+            "updated": datetime_utc.now(),
+        },
+    )
+    if row is None:
+        return None
+    return await get_deck_by_id(int(row._mapping["id"]))
+
+
 async def set_team_logo_for_user_in_tournament(
     tournament_id: TournamentId,
     user_id: UserId,

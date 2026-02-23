@@ -5,6 +5,7 @@ import {
   Card,
   Grid,
   Group,
+  HoverCard,
   Image,
   Modal,
   MultiSelect,
@@ -51,6 +52,7 @@ import {
   deleteDeck,
   exportDeckSwuDb,
   importDeckSwuDb,
+  renameDeck,
   saveDeck,
   submitLeagueEntry,
   upsertCardPoolEntry,
@@ -99,6 +101,8 @@ type CardSortKey =
   | 'set'
   | 'pool';
 type SortDirection = 'asc' | 'desc';
+type AnalyticsSortBy = 'label' | 'value';
+type RandomBaseAspect = 'aggression' | 'command' | 'cunning' | 'vigilance';
 
 const HEROIC_ASPECT_VALUES = new Set(['heroic', 'heroism']);
 const VILLAINY_ASPECT_VALUES = new Set(['villainy']);
@@ -122,8 +126,40 @@ const TABLE_ROW_HEIGHT = 40;
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100];
 const CARD_LIST_ROWS_PER_PAGE_STORAGE_KEY = 'deckbuilder_card_list_rows_per_page';
 const CARD_LIST_VISIBLE_LINES_STORAGE_KEY = 'deckbuilder_card_list_visible_lines';
+const CARD_LIST_VISIBLE_LINES_MODE_STORAGE_KEY = 'deckbuilder_card_list_visible_lines_mode';
 const ALL_DECK_OWNERS_VALUE = '__ALL__';
 const ALL_SEASONS_VALUE = '__ALL_SEASONS__';
+type CardListVisibleLinesMode = 'manual' | 'fit';
+const RANDOM_BASE_OPTION_BY_ASPECT: Record<RandomBaseAspect, { value: string; label: string }> = {
+  aggression: {
+    value: '__RANDOM_BASE_AGGRESSION__',
+    label: 'Random 30 HP Aggressive Base',
+  },
+  command: {
+    value: '__RANDOM_BASE_COMMAND__',
+    label: 'Random 30 HP Command Base',
+  },
+  cunning: {
+    value: '__RANDOM_BASE_CUNNING__',
+    label: 'Random 30 HP Cunning Base',
+  },
+  vigilance: {
+    value: '__RANDOM_BASE_VIGILANCE__',
+    label: 'Random 30 HP Vigilance Base',
+  },
+};
+const RANDOM_BASE_OPTIONS = [
+  RANDOM_BASE_OPTION_BY_ASPECT.cunning,
+  RANDOM_BASE_OPTION_BY_ASPECT.aggression,
+  RANDOM_BASE_OPTION_BY_ASPECT.vigilance,
+  RANDOM_BASE_OPTION_BY_ASPECT.command,
+];
+const RANDOM_BASE_ASPECT_BY_VALUE: Record<string, RandomBaseAspect> = {
+  [RANDOM_BASE_OPTION_BY_ASPECT.aggression.value]: 'aggression',
+  [RANDOM_BASE_OPTION_BY_ASPECT.command.value]: 'command',
+  [RANDOM_BASE_OPTION_BY_ASPECT.cunning.value]: 'cunning',
+  [RANDOM_BASE_OPTION_BY_ASPECT.vigilance.value]: 'vigilance',
+};
 const ALIGNMENT_OPTIONS: Array<{ value: AlignmentFilter; label: string }> = [
   { value: 'heroic', label: 'Heroic' },
   { value: 'villainy', label: 'Villainy' },
@@ -190,8 +226,15 @@ function clampVisibleLines(value: number) {
   return Math.max(MIN_VISIBLE_LINES, Math.min(MAX_VISIBLE_LINES, Math.trunc(value)));
 }
 
-function getTableHeightFromVisibleLines(visibleLines: number) {
-  return TABLE_BASE_HEIGHT + clampVisibleLines(visibleLines) * TABLE_ROW_HEIGHT;
+function getTableHeightFromVisibleLines(
+  visibleLines: number,
+  options?: { clamp?: boolean }
+) {
+  const shouldClamp = options?.clamp !== false;
+  const normalizedLines = shouldClamp
+    ? clampVisibleLines(visibleLines)
+    : Math.max(0, Math.trunc(Number(visibleLines) || 0));
+  return TABLE_BASE_HEIGHT + normalizedLines * TABLE_ROW_HEIGHT;
 }
 
 function normalizePageSize(value: number) {
@@ -206,6 +249,12 @@ function getStoredNumber(key: string) {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) return null;
   return parsed;
+}
+
+function getStoredVisibleLinesMode(): CardListVisibleLinesMode {
+  if (typeof window === 'undefined') return 'manual';
+  const raw = String(window.localStorage.getItem(CARD_LIST_VISIBLE_LINES_MODE_STORAGE_KEY) ?? '').trim().toLowerCase();
+  return raw === 'fit' ? 'fit' : 'manual';
 }
 
 function normalizeCardIdLookupKey(value: string | null | undefined) {
@@ -313,10 +362,14 @@ function GraphBars({
   data,
   total,
   emptyMessage,
+  sortBy = 'value',
+  sortDirection = 'desc',
 }: {
   data: Array<{ label: string; value: number }>;
   total: number;
   emptyMessage?: string;
+  sortBy?: AnalyticsSortBy;
+  sortDirection?: SortDirection;
 }) {
   if (data.length < 1 || total <= 0) {
     return (
@@ -326,9 +379,23 @@ function GraphBars({
     );
   }
 
+  const sortedData = [...data].sort((left, right) => {
+    if (sortBy === 'label') {
+      const labelDiff = compareText(left.label, right.label);
+      if (labelDiff !== 0) return sortDirection === 'asc' ? labelDiff : -labelDiff;
+      const valueDiff = left.value - right.value;
+      return sortDirection === 'asc' ? valueDiff : -valueDiff;
+    }
+
+    const valueDiff = left.value - right.value;
+    if (valueDiff !== 0) return sortDirection === 'asc' ? valueDiff : -valueDiff;
+    const labelDiff = compareText(left.label, right.label);
+    return sortDirection === 'asc' ? labelDiff : -labelDiff;
+  });
+
   return (
     <Stack>
-      {data.map((row) => (
+      {sortedData.map((row) => (
         <Stack key={row.label} gap={4}>
           <Group justify="space-between" gap="xs">
             <Text size="sm">{row.label}</Text>
@@ -353,6 +420,35 @@ function triggerDownload(filename: string, content: string, type: string) {
   window.URL.revokeObjectURL(url);
 }
 
+async function copyTextToClipboard(text: string) {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText != null) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall back below for browsers with restricted clipboard API contexts.
+    }
+  }
+
+  if (typeof document === 'undefined') return false;
+  try {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-10000px';
+    textarea.style.left = '-10000px';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    const copied = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return copied;
+  } catch {
+    return false;
+  }
+}
+
 function sanitizeFilenamePart(value: string) {
   return value
     .trim()
@@ -360,6 +456,44 @@ function sanitizeFilenamePart(value: string) {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 80);
+}
+
+function toSwudbCardId(cardId: unknown) {
+  const normalized = String(cardId ?? '').trim().toLowerCase().replace(/_/g, '-');
+  if (normalized === '') return '';
+
+  const separatorIndex = normalized.indexOf('-');
+  if (separatorIndex < 1 || separatorIndex >= normalized.length - 1) {
+    return normalized.replace(/-/g, '_').toUpperCase();
+  }
+
+  const setCode = normalized.slice(0, separatorIndex);
+  const remainder = normalized.slice(separatorIndex + 1);
+  const firstToken = remainder.split('-', 1)[0].trim();
+  const parsed = firstToken.match(/^0*(\d+)([a-z]*)$/i);
+  if (parsed == null) {
+    return `${setCode}_${remainder}`.toUpperCase();
+  }
+
+  const number = Number(parsed[1]);
+  const rawSuffix = String(parsed[2] ?? '').toLowerCase();
+  const suffix = rawSuffix === 'f' ? '' : rawSuffix;
+  return `${setCode}_${String(number).padStart(3, '0')}${suffix}`.toUpperCase();
+}
+
+function buildSwudbCardPoolEntries(
+  rows: Array<{ card_id?: string | null; quantity?: number | null }>
+) {
+  const aggregated: Record<string, number> = {};
+  rows.forEach((row) => {
+    const normalizedId = toSwudbCardId(row.card_id);
+    const quantity = Math.max(0, Math.trunc(Number(row.quantity ?? 0)));
+    if (normalizedId === '' || quantity <= 0) return;
+    aggregated[normalizedId] = (aggregated[normalizedId] ?? 0) + quantity;
+  });
+  return Object.entries(aggregated)
+    .sort((left, right) => compareText(left[0], right[0]))
+    .map(([id, count]) => ({ id, count }));
 }
 
 export default function DeckbuilderPage({
@@ -618,7 +752,7 @@ export default function DeckbuilderPage({
   const [rulesQuery, setRulesQuery] = useState('');
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
   const [selectedTraits, setSelectedTraits] = useState<string[]>([]);
-  const [aspectFilter, setAspectFilter] = useState<string | null>(null);
+  const [selectedAspects, setSelectedAspects] = useState<string[]>([]);
   const [selectedAlignments, setSelectedAlignments] = useState<AlignmentFilter[]>([]);
   const [cardSortKey, setCardSortKey] = useState<CardSortKey>('set');
   const [cardSortDirection, setCardSortDirection] = useState<SortDirection>('desc');
@@ -641,6 +775,9 @@ export default function DeckbuilderPage({
   const [cardListVisibleLines, setCardListVisibleLines] = useState<number>(() =>
     clampVisibleLines(getStoredNumber(CARD_LIST_VISIBLE_LINES_STORAGE_KEY) ?? DEFAULT_VISIBLE_LINES)
   );
+  const [cardListVisibleLinesMode, setCardListVisibleLinesMode] = useState<CardListVisibleLinesMode>(() =>
+    getStoredVisibleLinesMode()
+  );
 
   const [deckName, setDeckName] = useState('League Deck');
   const [leaderCardId, setLeaderCardId] = useState<string | null>(null);
@@ -650,6 +787,8 @@ export default function DeckbuilderPage({
 
   const [graphView, setGraphView] = useState<DeckGraphView>('cost');
   const [analyticsScope, setAnalyticsScope] = useState<'deck' | 'pool'>('deck');
+  const [analyticsSortBy, setAnalyticsSortBy] = useState<AnalyticsSortBy>('value');
+  const [analyticsSortDirection, setAnalyticsSortDirection] = useState<SortDirection>('desc');
   const [swudbImportJson, setSwudbImportJson] = useState('');
 
   useEffect(() => {
@@ -665,7 +804,17 @@ export default function DeckbuilderPage({
 
   const typeOptions = useMemo(
     () =>
-      [...new Set(allCards.map((card: CardItem) => card.type).filter((value) => value != null && value !== ''))]
+      [
+        ...new Set(
+          allCards
+            .map((card: CardItem) => card.type)
+            .filter((value) => {
+              const normalized = String(value ?? '').trim().toLowerCase();
+              if (normalized === '') return false;
+              return normalized !== 'leader' && normalized !== 'base';
+            })
+        ),
+      ]
         .sort()
         .map((value) => ({ value, label: value })),
     [allCards]
@@ -788,6 +937,33 @@ export default function DeckbuilderPage({
         .sort((a, b) => a.label.localeCompare(b.label)),
     [allCards]
   );
+  const baseSelectOptions = useMemo(
+    () => [...RANDOM_BASE_OPTIONS, ...baseOptions],
+    [baseOptions]
+  );
+  const random30HpBasesByAspect = useMemo(() => {
+    const result: Record<RandomBaseAspect, CardItem[]> = {
+      aggression: [],
+      command: [],
+      cunning: [],
+      vigilance: [],
+    };
+
+    allCards
+      .filter((card: CardItem) => card.type.toLowerCase() === 'base')
+      .forEach((card: CardItem) => {
+        const hp = Number(card.hp ?? NaN);
+        if (!Number.isFinite(hp) || Math.trunc(hp) !== 30) return;
+        const aspectSet = new Set((card.aspects ?? []).map((aspect) => normalizeAspectKey(aspect)));
+        (Object.keys(result) as RandomBaseAspect[]).forEach((aspect) => {
+          if (aspectSet.has(aspect)) {
+            result[aspect].push(card);
+          }
+        });
+      });
+
+    return result;
+  }, [allCards]);
 
   const leaderCard = cardsById[leaderCardId ?? ''];
   const baseCard = cardsById[baseCardId ?? ''];
@@ -802,7 +978,7 @@ export default function DeckbuilderPage({
     const normalizedQuery = query.trim().toLowerCase();
     const normalizedName = nameQuery.trim().toLowerCase();
     const normalizedRules = rulesQuery.trim().toLowerCase();
-    const normalizedAspectFilter = (aspectFilter ?? '').trim().toLowerCase();
+    const selectedAspectSet = new Set(selectedAspects.map((value) => value.trim().toLowerCase()).filter((value) => value !== ''));
     const selectedTypeSet = new Set(selectedTypes);
     const selectedRaritySet = new Set(selectedRarities);
     const selectedSetSet = new Set(selectedSets);
@@ -849,12 +1025,11 @@ export default function DeckbuilderPage({
         if (selectedTraitSet.size > 0 && !traits.some((value) => selectedTraitSet.has(value))) {
           return false;
         }
-        if (normalizedAspectFilter !== '') {
-          if (normalizedAspectFilter === ASPECT_FILTER_NEUTRAL.toLowerCase()) {
-            if (hasHeroic || hasVillainy || nonAlignmentAspects.length > 0) {
-              return false;
-            }
-          } else if (!aspects.includes(normalizedAspectFilter)) {
+        if (selectedAspectSet.size > 0) {
+          const includeNeutral = selectedAspectSet.has(ASPECT_FILTER_NEUTRAL.toLowerCase());
+          const matchesNeutral = includeNeutral && !hasHeroic && !hasVillainy && nonAlignmentAspects.length < 1;
+          const matchesAspect = aspects.some((value) => selectedAspectSet.has(value));
+          if (!matchesNeutral && !matchesAspect) {
             return false;
           }
         }
@@ -892,7 +1067,7 @@ export default function DeckbuilderPage({
     rulesQuery,
     selectedKeywords,
     selectedTraits,
-    aspectFilter,
+    selectedAspects,
     selectedAlignments,
     selectedCosts,
     selectedTypes,
@@ -963,9 +1138,18 @@ export default function DeckbuilderPage({
     const start = (cardListPage - 1) * cardListRowsPerPage;
     return cappedFilteredCards.slice(start, start + cardListRowsPerPage);
   }, [cappedFilteredCards, cardListPage, cardListRowsPerPage]);
+  const effectiveCardListVisibleLines = useMemo(() => {
+    if (cardListVisibleLinesMode === 'fit') {
+      return Math.max(0, visibleFilteredCards.length);
+    }
+    return clampVisibleLines(cardListVisibleLines);
+  }, [cardListVisibleLinesMode, cardListVisibleLines, visibleFilteredCards.length]);
   const cardListTableHeight = useMemo(
-    () => getTableHeightFromVisibleLines(cardListVisibleLines),
-    [cardListVisibleLines]
+    () =>
+      getTableHeightFromVisibleLines(effectiveCardListVisibleLines, {
+        clamp: cardListVisibleLinesMode !== 'fit',
+      }),
+    [effectiveCardListVisibleLines, cardListVisibleLinesMode]
   );
   const cardListStart = cappedFilteredCards.length < 1 ? 0 : (cardListPage - 1) * cardListRowsPerPage + 1;
   const cardListEnd = Math.min(cardListPage * cardListRowsPerPage, cappedFilteredCards.length);
@@ -989,6 +1173,11 @@ export default function DeckbuilderPage({
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(CARD_LIST_VISIBLE_LINES_STORAGE_KEY, String(cardListVisibleLines));
   }, [cardListVisibleLines]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(CARD_LIST_VISIBLE_LINES_MODE_STORAGE_KEY, cardListVisibleLinesMode);
+  }, [cardListVisibleLinesMode]);
 
   const deckUsageByCard = useMemo(() => {
     const usage: Record<string, { main: number; side: number; total: number }> = {};
@@ -1208,14 +1397,75 @@ export default function DeckbuilderPage({
     if (!hasTournament) return;
     const response = await exportDeckSwuDb(activeTournamentId, deckId);
     // @ts-ignore
-    const payload = response?.data;
+    const payload = response?.data?.data ?? response?.data;
     if (payload == null) return;
     const json = JSON.stringify(payload, null, 2);
-    await navigator.clipboard.writeText(json);
+    const copied = await copyTextToClipboard(json);
+    if (!copied) {
+      showNotification({
+        color: 'red',
+        title: 'Copy failed',
+        message: 'Could not copy deck JSON to clipboard in this browser context.',
+      });
+      return;
+    }
     showNotification({
       color: 'green',
       title: 'Exported SWUDB JSON',
       message: 'Deck JSON copied to clipboard.',
+    });
+  }
+
+  async function onRenameSavedDeck(deck: any) {
+    if (!hasTournament) return;
+    const currentName = String(deck?.name ?? '').trim();
+    const nextNameInput = window.prompt('Enter a new deck name', currentName);
+    if (nextNameInput == null) return;
+    const nextName = nextNameInput.trim();
+    if (nextName === '') {
+      showNotification({
+        color: 'red',
+        title: 'Rename failed',
+        message: 'Deck name cannot be empty.',
+      });
+      return;
+    }
+    if (nextName === currentName) return;
+
+    const response = await renameDeck(activeTournamentId, Number(deck.id), nextName);
+    if (response == null) return;
+    await swrDecksResponse.mutate();
+    if (deckName.trim() === currentName) {
+      setDeckName(nextName);
+    }
+    showNotification({
+      color: 'green',
+      title: 'Deck renamed',
+      message: '',
+    });
+  }
+
+  function onClearCurrentDeck() {
+    const hasDeckState =
+      leaderCardId != null ||
+      baseCardId != null ||
+      Object.keys(mainboard).length > 0 ||
+      Object.keys(sideboard).length > 0;
+    if (!hasDeckState) return;
+
+    const proceed = window.confirm(
+      'Are you sure you want to clear the current deck? This removes leader, base, mainboard, and sideboard cards.'
+    );
+    if (!proceed) return;
+
+    setLeaderCardId(null);
+    setBaseCardId(null);
+    setMainboard({});
+    setSideboard({});
+    showNotification({
+      color: 'green',
+      title: 'Deck cleared',
+      message: 'Current deck has been reset.',
     });
   }
 
@@ -1583,49 +1833,25 @@ export default function DeckbuilderPage({
 
   let graphContent = null;
   if (graphView === 'cost') {
-    graphContent = <GraphBars data={activeMetrics.byCost} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+    graphContent = <GraphBars data={activeMetrics.byCost} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} sortBy={analyticsSortBy} sortDirection={analyticsSortDirection} />;
   } else if (graphView === 'power') {
-    graphContent = <GraphBars data={activeMetrics.byPower} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+    graphContent = <GraphBars data={activeMetrics.byPower} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} sortBy={analyticsSortBy} sortDirection={analyticsSortDirection} />;
   } else if (graphView === 'hp') {
-    graphContent = <GraphBars data={activeMetrics.byHp} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+    graphContent = <GraphBars data={activeMetrics.byHp} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} sortBy={analyticsSortBy} sortDirection={analyticsSortDirection} />;
   } else if (graphView === 'type') {
-    graphContent = <GraphBars data={activeMetrics.byType} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+    graphContent = <GraphBars data={activeMetrics.byType} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} sortBy={analyticsSortBy} sortDirection={analyticsSortDirection} />;
   } else if (graphView === 'rarity') {
-    graphContent = <GraphBars data={activeMetrics.byRarity} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+    graphContent = <GraphBars data={activeMetrics.byRarity} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} sortBy={analyticsSortBy} sortDirection={analyticsSortDirection} />;
   } else if (graphView === 'aspect') {
-    graphContent = <GraphBars data={activeMetrics.byAspect} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+    graphContent = <GraphBars data={activeMetrics.byAspect} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} sortBy={analyticsSortBy} sortDirection={analyticsSortDirection} />;
   } else if (graphView === 'alignment') {
-    graphContent = <GraphBars data={activeMetrics.byAlignment} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+    graphContent = <GraphBars data={activeMetrics.byAlignment} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} sortBy={analyticsSortBy} sortDirection={analyticsSortDirection} />;
   } else if (graphView === 'out_aspect') {
-    graphContent = <GraphBars data={activeMetrics.outAspectRows} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+    graphContent = <GraphBars data={activeMetrics.outAspectRows} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} sortBy={analyticsSortBy} sortDirection={analyticsSortDirection} />;
   } else if (graphView === 'synergy') {
-    graphContent = <GraphBars data={activeMetrics.bySynergy} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+    graphContent = <GraphBars data={activeMetrics.bySynergy} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} sortBy={analyticsSortBy} sortDirection={analyticsSortDirection} />;
   } else {
-    graphContent = <GraphBars data={activeMetrics.byArena} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
-  }
-
-  async function onExportAnalyticsJson() {
-    const payload = {
-      scope: analyticsScope,
-      deck_name: deckName,
-      leader: leaderCard?.card_id ?? null,
-      base: baseCard?.card_id ?? null,
-      active_metrics: activeMetrics,
-      deck_metrics: deckMetrics,
-      pool_metrics: poolMetrics,
-      meta_snapshot:
-        metaAnalysis == null
-          ? null
-          : {
-              season_name: metaAnalysis.season_name ?? null,
-              total_decks: metaAnalysis.total_decks ?? 0,
-              top_leaders: metaTopLeaders,
-              top_combos: metaTopAspectCombos,
-              takeaways: metaTakeaways,
-            },
-    };
-    await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
-    showNotification({ color: 'green', title: 'Analytics JSON copied', message: '' });
+    graphContent = <GraphBars data={activeMetrics.byArena} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} sortBy={analyticsSortBy} sortDirection={analyticsSortDirection} />;
   }
 
   async function onExportCardPoolJson() {
@@ -1639,8 +1865,17 @@ export default function DeckbuilderPage({
     }
     const nowIso = new Date().toISOString();
     const filenameBase = `card-pool-${sanitizeFilenamePart(selectedOwnerLabel)}-${sanitizeFilenamePart(selectedSeasonLabel)}`;
+    const swudbEntries = buildSwudbCardPoolEntries(
+      cardPoolExportRows.map((row) => ({
+        card_id: row.card_id,
+        quantity: row.quantity,
+      }))
+    );
+    const exportName = `${selectedOwnerLabel} Full Deck Pool`;
     const payload = {
       metadata: {
+        name: exportName,
+        author: selectedOwnerLabel,
         exported_at: nowIso,
         tournament_id: activeTournamentId,
         owner: selectedOwnerLabel,
@@ -1652,11 +1887,14 @@ export default function DeckbuilderPage({
               ? 'single_user_admin_view'
               : 'current_user',
       },
+      name: exportName,
+      deck: swudbEntries,
+      sideboard: [],
+      cards: swudbEntries,
       totals: {
         unique_cards: cardPoolExportRows.length,
         total_copies: poolMetrics.totalQty,
       },
-      cards: cardPoolExportRows,
     };
     triggerDownload(
       `${filenameBase}.json`,
@@ -1666,7 +1904,7 @@ export default function DeckbuilderPage({
     showNotification({
       color: 'green',
       title: 'Card pool exported',
-      message: 'Downloaded JSON card pool export.',
+      message: 'Downloaded SWUDB-style card pool JSON export.',
     });
   }
 
@@ -1712,6 +1950,51 @@ export default function DeckbuilderPage({
     });
   }
 
+  async function onCopyCurrentDeckJson() {
+    if (leaderCardId == null || baseCardId == null) {
+      showNotification({
+        color: 'red',
+        title: 'Deck not ready',
+        message: 'Select a leader and base before exporting deck JSON.',
+      });
+      return;
+    }
+
+    const normalizedDeckName = deckName.trim() === '' ? 'League Deck' : deckName.trim();
+    const authorName = String(swrCurrentUserResponse.data?.data?.name ?? '').trim();
+    const deckEntries = buildSwudbCardPoolEntries(
+      Object.entries(mainboard).map(([card_id, quantity]) => ({ card_id, quantity }))
+    );
+    const sideboardEntries = buildSwudbCardPoolEntries(
+      Object.entries(sideboard).map(([card_id, quantity]) => ({ card_id, quantity }))
+    );
+    const payload: Record<string, unknown> = {
+      metadata: {
+        name: normalizedDeckName,
+        ...(authorName === '' ? {} : { author: authorName }),
+      },
+      name: normalizedDeckName,
+      leader: { id: toSwudbCardId(leaderCardId), count: 1 },
+      base: { id: toSwudbCardId(baseCardId), count: 1 },
+      deck: deckEntries,
+      sideboard: sideboardEntries,
+    };
+    const copied = await copyTextToClipboard(JSON.stringify(payload, null, 2));
+    if (!copied) {
+      showNotification({
+        color: 'red',
+        title: 'Copy failed',
+        message: 'Could not copy deck JSON to clipboard in this browser context.',
+      });
+      return;
+    }
+    showNotification({
+      color: 'green',
+      title: 'Deck JSON copied',
+      message: 'Current deck JSON copied to clipboard.',
+    });
+  }
+
   async function onSubmitEntry() {
     if (!hasTournament || leaderCard == null || baseCard == null) return;
     await submitLeagueEntry(activeTournamentId, {
@@ -1744,6 +2027,38 @@ export default function DeckbuilderPage({
     if (cardSortKey !== key) return <IconSelector size={14} stroke={1.8} />;
     if (cardSortDirection === 'asc') return <IconChevronUp size={14} stroke={1.8} />;
     return <IconChevronDown size={14} stroke={1.8} />;
+  }
+
+  function onSelectBase(value: string | null) {
+    if (value == null || value.trim() === '') {
+      setBaseCardId(null);
+      return;
+    }
+
+    const randomAspect = RANDOM_BASE_ASPECT_BY_VALUE[value];
+    if (randomAspect == null) {
+      setBaseCardId(value);
+      return;
+    }
+
+    const candidates = random30HpBasesByAspect[randomAspect] ?? [];
+    if (candidates.length < 1) {
+      showNotification({
+        color: 'red',
+        title: 'No matching base found',
+        message: `No 30 HP ${randomAspect} base is currently available in the card catalog.`,
+      });
+      return;
+    }
+
+    const selectedBase = candidates[Math.floor(Math.random() * candidates.length)];
+    if (selectedBase == null) return;
+    setBaseCardId(selectedBase.card_id);
+    showNotification({
+      color: 'green',
+      title: 'Random base selected',
+      message: `${selectedBase.name}${selectedBase.character_variant ? ` - ${selectedBase.character_variant}` : ''}`,
+    });
   }
 
   const renderDeckSection = (
@@ -1828,14 +2143,52 @@ export default function DeckbuilderPage({
                     </Group>
                   </Table.Td>
                   <Table.Td>
-                    <Stack gap={0}>
-                      <Text size="sm">{card?.name ?? resolveCardDisplayName(row.card_id)}</Text>
-                      {card?.character_variant != null && card.character_variant !== '' ? (
-                        <Text size="xs" c="dimmed">
-                          {card.character_variant}
-                        </Text>
-                      ) : null}
-                    </Stack>
+                    {(() => {
+                      const cardName = card?.name ?? resolveCardDisplayName(row.card_id);
+                      const variant = String(card?.character_variant ?? '').trim();
+                      const previewLabel = variant === '' ? cardName : `${cardName} - ${variant}`;
+                      const imageUrl = String(card?.image_url ?? '').trim();
+
+                      const nameStack = (
+                        <Stack
+                          gap={0}
+                          style={imageUrl !== '' ? { cursor: 'zoom-in' } : undefined}
+                          onClick={
+                            imageUrl === ''
+                              ? undefined
+                              : () => {
+                                  setPreviewImageLabel(previewLabel);
+                                  setPreviewImageUrl(imageUrl);
+                                }
+                          }
+                        >
+                          <Text size="sm">{cardName}</Text>
+                          {variant !== '' ? (
+                            <Text size="xs" c="dimmed">
+                              {variant}
+                            </Text>
+                          ) : null}
+                        </Stack>
+                      );
+
+                      if (imageUrl === '') return nameStack;
+
+                      return (
+                        <HoverCard width={280} shadow="md" openDelay={120} closeDelay={80} withinPortal>
+                          <HoverCard.Target>
+                            <div>{nameStack}</div>
+                          </HoverCard.Target>
+                          <HoverCard.Dropdown>
+                            <Stack gap={6}>
+                              <Image src={imageUrl} h={260} fit="contain" radius="sm" />
+                              <Text size="xs" c="dimmed">
+                                {previewLabel}
+                              </Text>
+                            </Stack>
+                          </HoverCard.Dropdown>
+                        </HoverCard>
+                      );
+                    })()}
                   </Table.Td>
                   <Table.Td>{card?.type ?? '-'}</Table.Td>
                   <Table.Td>{card?.cost ?? '-'}</Table.Td>
@@ -2001,14 +2354,33 @@ export default function DeckbuilderPage({
                       </Button>
                     </Group>
                   </Stack>
-                  <Select
-                    label="Aspect"
-                    data={aspectOptions}
-                    value={aspectFilter}
-                    onChange={setAspectFilter}
-                    clearable
-                    searchable
-                  />
+                  <Stack gap={4}>
+                    <MultiSelect
+                      label="Aspects"
+                      data={aspectOptions}
+                      value={selectedAspects}
+                      onChange={setSelectedAspects}
+                      searchable
+                      clearable
+                      maxDropdownHeight={220}
+                    />
+                    <Group gap={6}>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={() => setSelectedAspects(aspectOptions.map((option) => option.value))}
+                      >
+                        Select all
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={() => setSelectedAspects([])}
+                      >
+                        Clear
+                      </Button>
+                    </Group>
+                  </Stack>
                   <Stack gap={4}>
                     <MultiSelect
                       label="Alignment"
@@ -2354,17 +2726,37 @@ export default function DeckbuilderPage({
                     }}
                     data={PAGE_SIZE_OPTIONS.map((value) => ({ value: String(value), label: String(value) }))}
                   />
-                  <NumberInput
-                    label="Card table visible lines"
-                    value={cardListVisibleLines}
-                    min={MIN_VISIBLE_LINES}
-                    max={MAX_VISIBLE_LINES}
-                    onChange={(value) => {
-                      const numeric = Number(value ?? DEFAULT_VISIBLE_LINES);
-                      if (!Number.isFinite(numeric)) return;
-                      setCardListVisibleLines(clampVisibleLines(numeric));
-                    }}
-                  />
+                  <Stack gap={4}>
+                    <Select
+                      label="Card visible lines mode"
+                      value={cardListVisibleLinesMode}
+                      onChange={(value) =>
+                        setCardListVisibleLinesMode(value === 'fit' ? 'fit' : 'manual')
+                      }
+                      allowDeselect={false}
+                      data={[
+                        { value: 'manual', label: 'Manual' },
+                        { value: 'fit', label: 'Fit to results' },
+                      ]}
+                    />
+                    <NumberInput
+                      label="Card table visible lines"
+                      value={cardListVisibleLines}
+                      min={MIN_VISIBLE_LINES}
+                      max={MAX_VISIBLE_LINES}
+                      disabled={cardListVisibleLinesMode === 'fit'}
+                      description={
+                        cardListVisibleLinesMode === 'fit'
+                          ? `Auto-sized to ${visibleFilteredCards.length} row${visibleFilteredCards.length === 1 ? '' : 's'} on this page`
+                          : undefined
+                      }
+                      onChange={(value) => {
+                        const numeric = Number(value ?? DEFAULT_VISIBLE_LINES);
+                        if (!Number.isFinite(numeric)) return;
+                        setCardListVisibleLines(clampVisibleLines(numeric));
+                      }}
+                    />
+                  </Stack>
                 </Group>
               </Stack>
             </Card>
@@ -2397,7 +2789,13 @@ export default function DeckbuilderPage({
                     }}
                   />
                 )}
-                <Select searchable label="Base" value={baseCardId} onChange={setBaseCardId} data={baseOptions} />
+                <Select
+                  searchable
+                  label="Base"
+                  value={baseCardId}
+                  onChange={onSelectBase}
+                  data={baseSelectOptions}
+                />
                 {baseCard?.image_url != null && (
                   <Image
                     src={baseCard.image_url}
@@ -2449,7 +2847,7 @@ export default function DeckbuilderPage({
                     onClick={onExportCardPoolJson}
                     disabled={cardPoolExportRows.length < 1}
                   >
-                    Export Card Pool JSON
+                    Export Card Pool SWUDB JSON
                   </Button>
                   <Button
                     variant="outline"
@@ -2462,6 +2860,26 @@ export default function DeckbuilderPage({
 
                 <Button onClick={onSaveDeck} disabled={leaderCardId == null || baseCardId == null}>
                   Save Deck
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={onCopyCurrentDeckJson}
+                  disabled={leaderCardId == null || baseCardId == null}
+                >
+                  Copy Deck JSON
+                </Button>
+                <Button
+                  variant="light"
+                  color="red"
+                  onClick={onClearCurrentDeck}
+                  disabled={
+                    leaderCardId == null &&
+                    baseCardId == null &&
+                    Object.keys(mainboard).length < 1 &&
+                    Object.keys(sideboard).length < 1
+                  }
+                >
+                  Clear Deck
                 </Button>
                 {poolViolations.length > 0 && (
                   <Text size="sm" c="yellow">
@@ -2570,8 +2988,15 @@ export default function DeckbuilderPage({
                             >
                               Load
                             </Button>
+                            <Button
+                              size="xs"
+                              variant="subtle"
+                              onClick={() => onRenameSavedDeck(deck)}
+                            >
+                              Rename
+                            </Button>
                             <Button size="xs" variant="subtle" onClick={() => onExportSwuDb(deck.id)}>
-                              Export JSON
+                              Copy JSON
                             </Button>
                             <ActionIcon
                               variant="subtle"
@@ -2612,9 +3037,6 @@ export default function DeckbuilderPage({
                 </Text>
               </Stack>
               <Group>
-                <Button variant="outline" size="xs" onClick={onExportAnalyticsJson}>
-                  Export Analytics JSON
-                </Button>
                 <SegmentedControl
                   value={analyticsScope}
                   onChange={(value) => setAnalyticsScope(value as 'deck' | 'pool')}
@@ -2637,6 +3059,24 @@ export default function DeckbuilderPage({
                     { value: 'out_aspect', label: 'Aspect Fit' },
                     { value: 'synergy', label: 'Synergy' },
                     { value: 'arena', label: 'By Arena' },
+                  ]}
+                />
+                <Select
+                  label="Sort"
+                  value={analyticsSortBy}
+                  onChange={(value) => setAnalyticsSortBy(value === 'label' ? 'label' : 'value')}
+                  allowDeselect={false}
+                  data={[
+                    { value: 'label', label: 'Category' },
+                    { value: 'value', label: 'Card count' },
+                  ]}
+                />
+                <SegmentedControl
+                  value={analyticsSortDirection}
+                  onChange={(value) => setAnalyticsSortDirection(value === 'asc' ? 'asc' : 'desc')}
+                  data={[
+                    { value: 'asc', label: 'Asc' },
+                    { value: 'desc', label: 'Desc' },
                   ]}
                 />
               </Group>
@@ -2668,6 +3108,8 @@ export default function DeckbuilderPage({
                         data={poolMetrics.byAspect}
                         total={poolMetrics.totalQty}
                         emptyMessage="No card pool data for aspects yet."
+                        sortBy={analyticsSortBy}
+                        sortDirection={analyticsSortDirection}
                       />
                     </Stack>
                   </Card>
@@ -2680,6 +3122,8 @@ export default function DeckbuilderPage({
                         data={poolMetrics.byAlignment}
                         total={poolMetrics.totalQty}
                         emptyMessage="No card pool alignment data yet."
+                        sortBy={analyticsSortBy}
+                        sortDirection={analyticsSortDirection}
                       />
                     </Stack>
                   </Card>
@@ -2692,6 +3136,8 @@ export default function DeckbuilderPage({
                         data={poolMetrics.bySynergy.slice(0, 12)}
                         total={poolMetrics.totalQty}
                         emptyMessage="No trait/keyword synergy data yet."
+                        sortBy={analyticsSortBy}
+                        sortDirection={analyticsSortDirection}
                       />
                     </Stack>
                   </Card>

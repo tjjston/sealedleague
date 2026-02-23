@@ -44,6 +44,7 @@ type CardItem = {
   hp?: number | null;
   image_url?: string | null;
 };
+type RandomBaseAspect = 'aggression' | 'command' | 'cunning' | 'vigilance';
 
 const ASPECT_ICON_BY_KEY: Record<string, string> = {
   aggression: '/icons/aspects/aggression.png',
@@ -53,6 +54,36 @@ const ASPECT_ICON_BY_KEY: Record<string, string> = {
   villainy: '/icons/aspects/villainy.png',
   heroic: '/icons/aspects/heroism.png',
   heroism: '/icons/aspects/heroism.png',
+};
+const RANDOM_BASE_OPTION_BY_ASPECT: Record<RandomBaseAspect, { value: string; label: string }> = {
+  aggression: {
+    value: '__RANDOM_BASE_AGGRESSION__',
+    label: 'Random 30 HP Aggressive Base',
+  },
+  command: {
+    value: '__RANDOM_BASE_COMMAND__',
+    label: 'Random 30 HP Command Base',
+  },
+  cunning: {
+    value: '__RANDOM_BASE_CUNNING__',
+    label: 'Random 30 HP Cunning Base',
+  },
+  vigilance: {
+    value: '__RANDOM_BASE_VIGILANCE__',
+    label: 'Random 30 HP Vigilance Base',
+  },
+};
+const RANDOM_BASE_OPTIONS = [
+  RANDOM_BASE_OPTION_BY_ASPECT.cunning,
+  RANDOM_BASE_OPTION_BY_ASPECT.aggression,
+  RANDOM_BASE_OPTION_BY_ASPECT.vigilance,
+  RANDOM_BASE_OPTION_BY_ASPECT.command,
+];
+const RANDOM_BASE_ASPECT_BY_VALUE: Record<string, RandomBaseAspect> = {
+  [RANDOM_BASE_OPTION_BY_ASPECT.aggression.value]: 'aggression',
+  [RANDOM_BASE_OPTION_BY_ASPECT.command.value]: 'command',
+  [RANDOM_BASE_OPTION_BY_ASPECT.cunning.value]: 'cunning',
+  [RANDOM_BASE_OPTION_BY_ASPECT.vigilance.value]: 'vigilance',
 };
 
 function countCards(deck: Record<string, number>) {
@@ -196,14 +227,43 @@ export default function SealedDraftSimulationPage() {
       })),
     [leaders]
   );
+  const uniqueBases = useMemo(
+    () => [...new Map(bases.map((card) => [card.card_id, card])).values()],
+    [bases]
+  );
   const uniqueBaseOptions = useMemo(
     () =>
-      [...new Map(bases.map((card) => [card.card_id, card])).values()].map((card) => ({
+      uniqueBases.map((card) => ({
         value: card.card_id,
         label: `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''} (${card.set_code.toUpperCase()})`,
       })),
-    [bases]
+    [uniqueBases]
   );
+  const baseSelectOptions = useMemo(
+    () => [...RANDOM_BASE_OPTIONS, ...uniqueBaseOptions],
+    [uniqueBaseOptions]
+  );
+  const random30HpBasesByAspect = useMemo(() => {
+    const result: Record<RandomBaseAspect, CardItem[]> = {
+      aggression: [],
+      command: [],
+      cunning: [],
+      vigilance: [],
+    };
+
+    uniqueBases.forEach((card) => {
+      const hp = Number(card.hp ?? NaN);
+      if (!Number.isFinite(hp) || Math.trunc(hp) !== 30) return;
+      const aspectSet = new Set((card.aspects ?? []).map((aspect) => normalizeAspectKey(aspect)));
+      (Object.keys(result) as RandomBaseAspect[]).forEach((aspect) => {
+        if (aspectSet.has(aspect)) {
+          result[aspect].push(card);
+        }
+      });
+    });
+
+    return result;
+  }, [uniqueBases]);
 
   const typeOptions = useMemo(
     () =>
@@ -373,6 +433,38 @@ export default function SealedDraftSimulationPage() {
     };
     if (side === 'main') setMainboard(update);
     else setSideboard(update);
+  }
+
+  function onSelectBase(value: string | null) {
+    if (value == null || value.trim() === '') {
+      setBaseCardId(null);
+      return;
+    }
+
+    const randomAspect = RANDOM_BASE_ASPECT_BY_VALUE[value];
+    if (randomAspect == null) {
+      setBaseCardId(value);
+      return;
+    }
+
+    const candidates = random30HpBasesByAspect[randomAspect] ?? [];
+    if (candidates.length < 1) {
+      showNotification({
+        color: 'red',
+        title: 'No matching base found',
+        message: `No 30 HP ${randomAspect} base is available in this sealed pool.`,
+      });
+      return;
+    }
+
+    const selectedBase = candidates[Math.floor(Math.random() * candidates.length)];
+    if (selectedBase == null) return;
+    setBaseCardId(selectedBase.card_id);
+    showNotification({
+      color: 'green',
+      title: 'Random base selected',
+      message: `${selectedBase.name}${selectedBase.character_variant ? ` - ${selectedBase.character_variant}` : ''}`,
+    });
   }
 
   async function saveSealedDeck() {
@@ -608,7 +700,13 @@ export default function SealedDraftSimulationPage() {
                 </Text>
                 <Select searchable label="Leader" data={uniqueLeaderOptions} value={leaderCardId} onChange={setLeaderCardId} />
                 {leaderCard?.image_url != null && <Image src={leaderCard.image_url} h={130} fit="contain" radius="sm" />}
-                <Select searchable label="Base" data={uniqueBaseOptions} value={baseCardId} onChange={setBaseCardId} />
+                <Select
+                  searchable
+                  label="Base"
+                  data={baseSelectOptions}
+                  value={baseCardId}
+                  onChange={onSelectBase}
+                />
                 {baseCard?.image_url != null && <Image src={baseCard.image_url} h={130} fit="contain" radius="sm" />}
                 <Group>
                   <Badge>Mainboard: {countCards(mainboard)}</Badge>

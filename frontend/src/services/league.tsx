@@ -65,6 +65,12 @@ export async function deleteDeck(tournament_id: number, deck_id: number) {
     .catch((response: any) => handleRequestError(response));
 }
 
+export async function renameDeck(tournament_id: number, deck_id: number, name: string) {
+  return createAxios()
+    .put(`tournaments/${tournament_id}/league/decks/${deck_id}/name`, { name })
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function submitLeagueEntry(
   tournament_id: number,
   body: {
