@@ -11,6 +11,7 @@ import {
   TextInput,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
+import { showNotification } from '@mantine/notifications';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SWRResponse } from 'swr';
@@ -99,9 +100,23 @@ function MatchModalForm({
   const [customMarginEnabled, setCustomMarginEnabled] = useState(
     match.custom_margin_minutes != null
   );
-  const [karabastGameNameInput, setKarabastGameNameInput] = useState(
+  const [karabastLobbyUrlInput, setKarabastLobbyUrlInput] = useState(
     String((match as any)?.karabast_game_name ?? '')
   );
+  const normalizeKarabastLobbyUrl = (rawValue: string | null | undefined) => {
+    const normalized = String(rawValue ?? '').trim();
+    if (normalized === '') return null;
+    try {
+      const parsed = new URL(normalized);
+      if (!['http:', 'https:'].includes(parsed.protocol)) return null;
+      const hostname = parsed.hostname.toLowerCase();
+      if (hostname !== 'karabast.net' && hostname !== 'www.karabast.net') return null;
+      return parsed.toString();
+    } catch (_error) {
+      return null;
+    }
+  };
+  const normalizedKarabastLobbyUrl = normalizeKarabastLobbyUrl(karabastLobbyUrlInput);
 
   const stageItemsLookup = getStageItemLookup(swrStagesResponse);
   const matchesLookup = getMatchLookup(swrStagesResponse);
@@ -145,31 +160,50 @@ function MatchModalForm({
           <>
             <Divider mt="lg" />
             <Text size="sm" mt="lg">
-              Karabast Lobby URL or Game Name
+              Karabast Lobby Invite URL
             </Text>
             <Text size="xs" c="dimmed" mb="xs">
-              Paste a full lobby URL like https://karabast.net/lobby?lobbyId=... or a shared game name.
+              Paste a full URL like https://karabast.net/lobby?lobbyId=...
             </Text>
             <Group grow align="end">
               <TextInput
-                value={karabastGameNameInput}
-                onChange={(event) => setKarabastGameNameInput(event.currentTarget.value)}
+                value={karabastLobbyUrlInput}
+                onChange={(event) => setKarabastLobbyUrlInput(event.currentTarget.value)}
                 placeholder="https://karabast.net/lobby?lobbyId=..."
               />
               <Button
                 type="button"
                 variant="light"
                 onClick={async () => {
+                  if (karabastLobbyUrlInput.trim() !== '' && normalizedKarabastLobbyUrl == null) {
+                    showNotification({
+                      color: 'red',
+                      title: 'Invalid Karabast link',
+                      message: 'Use a full https://karabast.net/... invite URL.',
+                    });
+                    return;
+                  }
                   await updateKarabastGameName(
                     tournamentData.id,
                     match.id,
-                    karabastGameNameInput.trim() === '' ? null : karabastGameNameInput.trim()
+                    normalizedKarabastLobbyUrl
                   );
+                  setKarabastLobbyUrlInput(normalizedKarabastLobbyUrl ?? '');
                   await swrStagesResponse.mutate();
                   if (swrUpcomingMatchesResponse != null) await swrUpcomingMatchesResponse.mutate();
                 }}
               >
-                Save Lobby Details
+                Save Lobby Link
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                component="a"
+                href={normalizedKarabastLobbyUrl ?? 'https://karabast.net/'}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open Lobby
               </Button>
             </Group>
           </>
@@ -258,7 +292,7 @@ export default function MatchModal({
   round,
   allowAdvancedSettings = true,
   allowDelete = true,
-  karabastEnabled = false,
+  karabastEnabled = true,
 }: {
   tournamentData: TournamentMinimal;
   match: MatchWithDetails | null;

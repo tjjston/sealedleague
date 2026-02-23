@@ -445,6 +445,14 @@ export default function DeckbuilderPage({
       setSelectedTargetUserId(String(fallback.user_id));
       return;
     }
+    if (!Number.isFinite(currentUserId) || currentUserId <= 0) return;
+    const selectedAdminSelf = adminUsers.find(
+      (row: any) => Number(row.user_id) === Number(currentUserId)
+    );
+    if (selectedAdminSelf != null) {
+      setSelectedTargetUserId(String(selectedAdminSelf.user_id));
+      return;
+    }
     const firstPlayer = adminUsers.find(
       (row: any) => String(row.account_type ?? '').toUpperCase() !== 'ADMIN'
     );
@@ -455,6 +463,7 @@ export default function DeckbuilderPage({
     setSelectedTargetUserId(String(adminUsers[0].user_id));
   }, [
     adminUsers,
+    currentUserId,
     hasTournament,
     isAdmin,
     selectedTargetUserId,

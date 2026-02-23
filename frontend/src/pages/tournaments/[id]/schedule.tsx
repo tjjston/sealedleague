@@ -286,6 +286,7 @@ export default function SchedulePage() {
           opened={modalOpened}
           setOpened={modalSetOpened}
           round={null}
+          karabastEnabled
         />
       ) : null}
       <Grid grow>

@@ -40,7 +40,6 @@ import {
   getBaseApiUrl,
   getLeagueCardsGlobal,
   getStages,
-  getTournamentById,
   getTournamentApplications,
   getUser,
   getUserDirectory,
@@ -297,12 +296,10 @@ function ScheduleRow({
   winnerByStageItemId,
   resolveDeckPreviewForTeam,
   baseTrackerHref,
-  karabastGameName,
   karabastLobbyUrl,
-  onCopyKarabastGameName,
+  onCopyKarabastLobbyUrl,
   onCopyKarabastDeckSlot,
   onEditKarabastLobbyUrl,
-  karabastEnabled,
 }: {
   data: any;
   openMatchModal: any;
@@ -313,12 +310,10 @@ function ScheduleRow({
   winnerByStageItemId: Record<number, string>;
   resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
   baseTrackerHref: string;
-  karabastGameName: string;
   karabastLobbyUrl: string | null;
-  onCopyKarabastGameName: () => Promise<void>;
+  onCopyKarabastLobbyUrl: () => Promise<void>;
   onCopyKarabastDeckSlot: (slot: number) => Promise<void>;
   onEditKarabastLobbyUrl: () => Promise<void>;
-  karabastEnabled: boolean;
 }) {
   const { t } = useTranslation();
   const winColor = '#2a8f37';
@@ -392,7 +387,7 @@ function ScheduleRow({
       <Group justify="space-between" mt="md" mb={4}>
         <Group gap={8}>
           <Text size="sm" c="dimmed">
-            Lobby: {karabastLobbyUrl ?? karabastGameName}
+            Lobby: {karabastLobbyUrl ?? 'Not set'}
           </Text>
           <Button
             size="xs"
@@ -412,12 +407,12 @@ function ScheduleRow({
             onClick={async (event) => {
               event.preventDefault();
               event.stopPropagation();
-              await onCopyKarabastGameName();
+              await onCopyKarabastLobbyUrl();
             }}
           >
-            {karabastLobbyUrl != null ? 'Copy Lobby URL' : 'Copy Lobby Name'}
+            Copy Lobby URL
           </Button>
-          {karabastEnabled && editable ? (
+          {editable ? (
             <Button
               size="xs"
               variant="light"
@@ -599,12 +594,10 @@ function Schedule({
   winnerByStageItemId,
   resolveDeckPreviewForTeam,
   buildBaseTrackerHref,
-  getKarabastGameName,
   getKarabastLobbyUrl,
-  copyKarabastGameName,
+  copyKarabastLobbyUrl,
   copyKarabastDeckForSlot,
   editKarabastLobbyUrl,
-  karabastEnabled,
 }: {
   t: Translator;
   stageItemsLookup: any;
@@ -615,12 +608,10 @@ function Schedule({
   winnerByStageItemId: Record<number, string>;
   resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
   buildBaseTrackerHref: (match: any) => string;
-  getKarabastGameName: (match: any) => string;
   getKarabastLobbyUrl: (match: any) => string | null;
-  copyKarabastGameName: (match: any) => Promise<void>;
+  copyKarabastLobbyUrl: (match: any) => Promise<void>;
   copyKarabastDeckForSlot: (match: any, slot: number) => Promise<void>;
   editKarabastLobbyUrl: (match: any) => Promise<void>;
-  karabastEnabled: boolean;
 }) {
   const matches: any[] = Object.values(matchesLookup ?? {}).filter(
     (value: any) => value != null && value.match != null && value.stageItem != null
@@ -667,12 +658,10 @@ function Schedule({
         winnerByStageItemId={winnerByStageItemId}
         resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
         baseTrackerHref={buildBaseTrackerHref(data.match)}
-        karabastGameName={getKarabastGameName(data.match)}
         karabastLobbyUrl={getKarabastLobbyUrl(data.match)}
-        onCopyKarabastGameName={async () => copyKarabastGameName(data.match)}
+        onCopyKarabastLobbyUrl={async () => copyKarabastLobbyUrl(data.match)}
         onCopyKarabastDeckSlot={async (slot) => copyKarabastDeckForSlot(data.match, slot)}
         onEditKarabastLobbyUrl={async () => editKarabastLobbyUrl(data.match)}
-        karabastEnabled={karabastEnabled}
       />
     );
   }
@@ -725,14 +714,10 @@ export default function ResultsPage() {
   const includeTeamPlayers = currentUser == null ? false : !isAdmin;
   const swrStagesResponse = getStages(tournamentData.id, true, includeTeamPlayers);
   const swrCourtsResponse = getCourts(tournamentData.id);
-  const swrTournamentResponse = getTournamentById(tournamentData.id);
   const swrApplicationsResponse = getTournamentApplications(tournamentData.id, 'all');
   const swrUserDirectoryResponse = getUserDirectory();
   const swrCardsResponse = getLeagueCardsGlobal({ limit: 5000, offset: 0 });
-  const karabastEnabled =
-    String(swrTournamentResponse.data?.data?.club_name ?? '')
-      .trim()
-      .toLowerCase() === 'karabast';
+  const karabastEnabled = true;
 
   const stageItemsLookup = responseIsValid(swrStagesResponse)
     ? getStageItemLookup(swrStagesResponse)
@@ -1506,16 +1491,8 @@ export default function ResultsPage() {
     return `/league/base-health?tournament_id=${tournamentId}&match_id=${matchId}`;
   };
 
-  const getKarabastGameName = (matchToTrack: any) => {
-    const customName = String((matchToTrack as any)?.karabast_game_name ?? '').trim();
-    if (customName !== '') return customName;
-    const matchId = Number(matchToTrack?.id ?? 0);
-    if (!Number.isFinite(matchId) || matchId <= 0) return `SL-${tournamentData.id}-M0`;
-    return `SL-${tournamentData.id}-M${matchId}`;
-  };
-
-  const getKarabastLobbyUrl = (matchToTrack: any) => {
-    const customValue = String((matchToTrack as any)?.karabast_game_name ?? '').trim();
+  const normalizeKarabastLobbyUrl = (rawValue: string | null | undefined) => {
+    const customValue = String(rawValue ?? '').trim();
     if (customValue === '') return null;
     try {
       const parsed = new URL(customValue);
@@ -1526,6 +1503,10 @@ export default function ResultsPage() {
     } catch (_error) {
       return null;
     }
+  };
+
+  const getKarabastLobbyUrl = (matchToTrack: any) => {
+    return normalizeKarabastLobbyUrl((matchToTrack as any)?.karabast_game_name);
   };
 
   const copyText = async (value: string, title: string) => {
@@ -1546,27 +1527,41 @@ export default function ResultsPage() {
     }
   };
 
-  const copyKarabastGameName = async (matchToTrack: any) => {
+  const copyKarabastLobbyUrl = async (matchToTrack: any) => {
     const lobbyUrl = getKarabastLobbyUrl(matchToTrack);
-    await copyText(
-      lobbyUrl ?? getKarabastGameName(matchToTrack),
-      lobbyUrl != null ? 'Karabast lobby URL copied' : 'Karabast lobby name copied'
-    );
+    if (lobbyUrl == null) {
+      showNotification({
+        color: 'red',
+        title: 'No Karabast lobby link set',
+        message: 'Add a Karabast lobby invite URL first.',
+      });
+      return;
+    }
+    await copyText(lobbyUrl, 'Karabast lobby URL copied');
   };
 
   const editKarabastLobbyUrl = async (matchToTrack: any) => {
     const matchId = Number(matchToTrack?.id ?? 0);
     if (!Number.isFinite(matchId) || matchId <= 0) return;
-    const currentValue = String((matchToTrack as any)?.karabast_game_name ?? '').trim();
+    const currentValue = normalizeKarabastLobbyUrl((matchToTrack as any)?.karabast_game_name) ?? '';
     const nextValue = window.prompt(
-      'Paste the private Karabast invite link (or shared game name). Leave blank to clear.',
+      'Paste the private Karabast invite link (https://karabast.net/...). Leave blank to clear.',
       currentValue
     );
     if (nextValue == null) return;
+    const normalizedLobbyUrl = normalizeKarabastLobbyUrl(nextValue);
+    if (nextValue.trim() !== '' && normalizedLobbyUrl == null) {
+      showNotification({
+        color: 'red',
+        title: 'Invalid Karabast link',
+        message: 'Use a full https://karabast.net/... invite URL.',
+      });
+      return;
+    }
     await updateKarabastGameName(
       tournamentData.id,
       matchId,
-      nextValue.trim() === '' ? null : nextValue.trim()
+      normalizedLobbyUrl
     );
     await swrStagesResponse.mutate();
   };
@@ -1958,12 +1953,10 @@ export default function ResultsPage() {
             winnerByStageItemId={winnerByStageItemId}
             resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
             buildBaseTrackerHref={buildBaseTrackerHref}
-            getKarabastGameName={getKarabastGameName}
             getKarabastLobbyUrl={getKarabastLobbyUrl}
-            copyKarabastGameName={copyKarabastGameName}
+            copyKarabastLobbyUrl={copyKarabastLobbyUrl}
             copyKarabastDeckForSlot={copyKarabastDeckForSlot}
             editKarabastLobbyUrl={editKarabastLobbyUrl}
-            karabastEnabled={karabastEnabled}
           />
         </SectionErrorBoundary>
       </Center>

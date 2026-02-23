@@ -22,7 +22,7 @@ import { useLocation } from 'react-router';
 import { Brand } from '@components/navbar/_brand';
 import { getBaseLinks, getBaseLinksDict } from '@components/navbar/_main_links';
 import PreloadLink from '@components/utils/link';
-import { getUser } from '@services/adapter';
+import { getUser, getUserCardCatalog } from '@services/adapter';
 import classes from './_layout.module.css';
 
 interface HeaderActionLink {
@@ -87,6 +87,35 @@ function formatCardIdForDisplay(value: string | null | undefined) {
   const match = normalized.match(/^([a-z]+)-0*(\d+)([a-z]*)$/i);
   if (match == null) return normalized;
   return `${match[1]}-${Number(match[2])}${String(match[3] ?? '').toLowerCase()}`;
+}
+
+function normalizeCardIdLookupKey(value: string | null | undefined) {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, '-')
+    .replace(/--+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function removeNumericPaddingFromCardId(value: string | null | undefined) {
+  const normalized = normalizeCardIdLookupKey(value);
+  const match = normalized.match(/^([a-z]+)-(\d+)([a-z]*)$/i);
+  if (match == null) return normalized;
+  const [, setCode, number, suffix] = match;
+  const trimmedNumber = String(Number(number));
+  return `${setCode}-${trimmedNumber}${suffix}`;
+}
+
+function buildCardLookupKeys(value: string | null | undefined) {
+  const raw = String(value ?? '').trim().toLowerCase();
+  const normalized = normalizeCardIdLookupKey(value);
+  const noPadding = removeNumericPaddingFromCardId(value);
+  return [raw, normalized, noPadding].filter((item, index, all) => item !== '' && all.indexOf(item) === index);
+}
+
+function looksLikeCardId(value: string | null | undefined) {
+  return /^[a-z]{2,5}-\d+[a-z]*$/i.test(normalizeCardIdLookupKey(value));
 }
 
 function getMenuItemsForLink(link: HeaderActionLink, _classes: any, pathName: string) {
@@ -240,19 +269,56 @@ function BackgroundMenu({
 function HeaderUserSummary() {
   const swrUserResponse = getUser();
   const user = swrUserResponse.data?.data as any;
-  if (user == null) return null;
+  const leaderCardId = String(user?.current_leader_card_id ?? '').trim();
+  const leaderNameRaw = String(user?.current_leader_name ?? '').trim();
+  const leaderLookupId = leaderCardId !== '' ? leaderCardId : leaderNameRaw;
+  const swrLeaderCardCatalogResponse = getUserCardCatalog(leaderLookupId, 120);
+  const leaderCards = swrLeaderCardCatalogResponse.data?.data ?? [];
+  const leaderCardByLookupKey = useMemo(() => {
+    return (leaderCards as any[]).reduce((result: Record<string, any>, card: any) => {
+      buildCardLookupKeys(card?.card_id).forEach((key) => {
+        if (result[key] == null) result[key] = card;
+      });
+      return result;
+    }, {});
+  }, [leaderCards]);
+  const leaderCardFromCatalog = useMemo(() => {
+    const lookupTarget = leaderCardId !== '' ? leaderCardId : leaderLookupId;
+    const lookupKey = buildCardLookupKeys(lookupTarget).find(
+      (candidate) => leaderCardByLookupKey[candidate] != null
+    );
+    return lookupKey == null ? null : leaderCardByLookupKey[lookupKey];
+  }, [leaderCardId, leaderCardByLookupKey, leaderLookupId]);
+  const leaderCardIdKeys = buildCardLookupKeys(leaderCardId);
+  const leaderNameLooksLikeCardId =
+    leaderNameRaw !== '' &&
+    (
+      looksLikeCardId(leaderNameRaw) ||
+      leaderCardIdKeys.includes(normalizeCardIdLookupKey(leaderNameRaw)) ||
+      leaderCardIdKeys.includes(removeNumericPaddingFromCardId(leaderNameRaw))
+    );
 
   const leaderLabel =
-    String(user.current_leader_name ?? '').trim() !== ''
-      ? String(user.current_leader_name)
-      : formatCardIdForDisplay(String(user.current_leader_card_id ?? '')) || 'No leader selected';
+    leaderNameRaw !== '' && !leaderNameLooksLikeCardId
+      ? leaderNameRaw
+      : String(leaderCardFromCatalog?.name ?? '').trim() !== ''
+        ? String(leaderCardFromCatalog?.name)
+        : formatCardIdForDisplay(leaderCardId !== '' ? leaderCardId : leaderLookupId) || 'No leader selected';
   const leaderImageUrl =
-    String(user.current_leader_image_url ?? '').trim() !== ''
-      ? String(user.current_leader_image_url)
-      : null;
-  const aspects = Array.isArray(user.current_leader_aspects)
+    String(user?.current_leader_image_url ?? '').trim() !== ''
+      ? String(user?.current_leader_image_url)
+      : String(leaderCardFromCatalog?.image_url ?? '').trim() !== ''
+        ? String(leaderCardFromCatalog?.image_url)
+        : null;
+  const aspectsFromUser = Array.isArray(user?.current_leader_aspects)
     ? user.current_leader_aspects.filter((value: any) => String(value).trim() !== '')
     : [];
+  const aspects = aspectsFromUser.length > 0
+    ? aspectsFromUser
+    : Array.isArray(leaderCardFromCatalog?.aspects)
+      ? leaderCardFromCatalog.aspects.filter((value: any) => String(value).trim() !== '')
+      : [];
+  if (user == null) return null;
 
   return (
     <Group gap={8} wrap="nowrap" style={{ maxWidth: 'min(44vw, 38rem)', minWidth: 0, flex: '0 1 auto' }}>

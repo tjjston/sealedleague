@@ -252,9 +252,6 @@ export default function SeasonStandingsPage({
                         <Text fw={600}>{row.user_name}</Text>
                       )
                     )}
-                    <Text size="xs" c="dimmed">
-                      {row.user_email}
-                    </Text>
                   </Stack>
                 </Table.Td>
                 <Table.Td>{row.points}</Table.Td>
@@ -458,7 +455,6 @@ export default function SeasonStandingsPage({
               <Table.Thead>
                 <Table.Tr>
                   <Table.Th>Player</Table.Th>
-                  <Table.Th>Email</Table.Th>
                   <Table.Th>Hide From Standings</Table.Th>
                 </Table.Tr>
               </Table.Thead>
@@ -466,7 +462,6 @@ export default function SeasonStandingsPage({
                 {adminUsers.map((user: any) => (
                   <Table.Tr key={String(user.user_id)}>
                     <Table.Td>{String(user.user_name ?? '')}</Table.Td>
-                    <Table.Td>{String(user.user_email ?? '')}</Table.Td>
                     <Table.Td>
                       <Checkbox
                         checked={Boolean(user.hide_from_standings)}

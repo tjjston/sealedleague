@@ -133,10 +133,6 @@ def normalize_karabast_game_name(value: str | None) -> str | None:
     return normalized if normalized != "" else None
 
 
-def is_karabast_tournament(tournament: Tournament) -> bool:
-    return normalize_person_name(tournament.club_name) == "karabast"
-
-
 def default_karabast_game_name(tournament_id: TournamentId, match_id: MatchId) -> str:
     return f"SL-{int(tournament_id)}-M{int(match_id)}"
 
@@ -354,11 +350,7 @@ async def put_karabast_game_name(
     user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
     tournament: Tournament = Depends(disallow_archived_tournament),
 ) -> SuccessResponse:
-    if not is_karabast_tournament(tournament):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Karabast game name is only available for Karabast tournaments",
-        )
+    _ = tournament
 
     match = await get_match_with_details_for_tournament(tournament_id, match_id)
     if not is_admin_user(user_public):
@@ -385,11 +377,7 @@ async def get_karabast_bundle(
     user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
     tournament: Tournament = Depends(disallow_archived_tournament),
 ) -> MatchKarabastBundleResponse:
-    if not is_karabast_tournament(tournament):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Karabast deck export is only available for Karabast tournaments",
-        )
+    _ = tournament
 
     match = await get_match_with_details_for_tournament(tournament_id, match_id)
     if not is_admin_user(user_public):
