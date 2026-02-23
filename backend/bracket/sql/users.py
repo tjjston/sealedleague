@@ -105,13 +105,115 @@ async def add_user_to_club(
 
 
 async def update_user(user_id: UserId, user: UserToUpdate) -> None:
-    query = """
-        UPDATE users
-        SET name = :name, email = :email
-        WHERE id = :user_id
-        """
+    next_name = str(user.name).strip()
+    next_email = str(user.email).strip()
+
+    async with database.transaction():
+        existing = await database.fetch_one(
+            """
+            SELECT name
+            FROM users
+            WHERE id = :user_id
+            """,
+            values={"user_id": user_id},
+        )
+        previous_name = str(existing._mapping["name"]) if existing is not None else ""
+
+        query = """
+            UPDATE users
+            SET name = :name, email = :email
+            WHERE id = :user_id
+            """
+        await database.execute(
+            query=query,
+            values={"user_id": user_id, "name": next_name, "email": next_email},
+        )
+
+        await sync_user_name_references(user_id, previous_name, next_name)
+
+
+async def sync_user_name_references(
+    user_id: UserId,
+    previous_name: str | None,
+    next_name: str | None,
+) -> None:
+    old_name = str(previous_name or "").strip()
+    new_name = str(next_name or "").strip()
+    if old_name == "" or new_name == "":
+        return
+    if old_name.lower() == new_name.lower():
+        return
+
+    values = {"user_id": int(user_id), "old_name": old_name, "new_name": new_name}
     await database.execute(
-        query=query, values={"user_id": user_id, "name": user.name, "email": user.email}
+        """
+        WITH scoped_tournaments AS (
+            SELECT DISTINCT t.id AS tournament_id
+            FROM tournaments t
+            WHERE t.club_id IN (
+                SELECT uxc.club_id
+                FROM users_x_clubs uxc
+                WHERE uxc.user_id = :user_id
+            )
+            UNION
+            SELECT DISTINCT ta.tournament_id
+            FROM tournament_applications ta
+            WHERE ta.user_id = :user_id
+            UNION
+            SELECT DISTINCT d.tournament_id
+            FROM decks d
+            WHERE d.user_id = :user_id
+              AND d.tournament_id IS NOT NULL
+        ),
+        safe_player_tournaments AS (
+            SELECT p.tournament_id
+            FROM players p
+            WHERE p.tournament_id IN (SELECT tournament_id FROM scoped_tournaments)
+              AND lower(trim(p.name)) = lower(trim(:old_name))
+            GROUP BY p.tournament_id
+            HAVING COUNT(*) = 1
+        )
+        UPDATE players p
+        SET name = :new_name
+        WHERE p.tournament_id IN (SELECT tournament_id FROM safe_player_tournaments)
+          AND lower(trim(p.name)) = lower(trim(:old_name))
+        """,
+        values=values,
+    )
+    await database.execute(
+        """
+        WITH scoped_tournaments AS (
+            SELECT DISTINCT t.id AS tournament_id
+            FROM tournaments t
+            WHERE t.club_id IN (
+                SELECT uxc.club_id
+                FROM users_x_clubs uxc
+                WHERE uxc.user_id = :user_id
+            )
+            UNION
+            SELECT DISTINCT ta.tournament_id
+            FROM tournament_applications ta
+            WHERE ta.user_id = :user_id
+            UNION
+            SELECT DISTINCT d.tournament_id
+            FROM decks d
+            WHERE d.user_id = :user_id
+              AND d.tournament_id IS NOT NULL
+        ),
+        safe_team_tournaments AS (
+            SELECT t.tournament_id
+            FROM teams t
+            WHERE t.tournament_id IN (SELECT tournament_id FROM scoped_tournaments)
+              AND lower(trim(t.name)) = lower(trim(:old_name))
+            GROUP BY t.tournament_id
+            HAVING COUNT(*) = 1
+        )
+        UPDATE teams t
+        SET name = :new_name
+        WHERE t.tournament_id IN (SELECT tournament_id FROM safe_team_tournaments)
+          AND lower(trim(t.name)) = lower(trim(:old_name))
+        """,
+        values=values,
     )
 
 
