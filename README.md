@@ -99,6 +99,21 @@ docker compose down -v
 
 ### Database Backups (Recommended Before Every Update)
 
+Automatic daily snapshots are enabled by default through the `postgres-backup` service in `docker-compose.yml`.
+
+- Default schedule: `03:00 UTC` daily
+- Default retention: `30 days`
+- Output directory: `backups/postgres/`
+
+You can change these in `.env`:
+
+```env
+BACKUP_KEEP_DAYS=30
+BACKUP_HOUR_UTC=03
+BACKUP_MINUTE_UTC=00
+BACKUP_RUN_ON_START=true
+```
+
 Create a snapshot:
 
 ```bash
@@ -123,9 +138,15 @@ Run daily snapshots with cron (example: 03:00 UTC, keep 30 days):
 0 3 * * * cd /path/to/sealedleague && KEEP_DAYS=30 ./scripts/db-backup.sh >> /var/log/sealedleague-db-backup.log 2>&1
 ```
 
+View backup service logs:
+
+```bash
+docker compose logs -f postgres-backup
+```
+
 Notes:
 
-- Backups are written to `backups/postgres/` by default.
+- Backups are written to `backups/postgres/` by default (both automated service and manual script).
 - `db-restore.sh` stops the app container, replaces DB contents, then starts the app again.
 - Avoid `docker compose down -v` unless you explicitly want to delete DB data.
 

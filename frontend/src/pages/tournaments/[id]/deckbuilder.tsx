@@ -1,5 +1,6 @@
 import {
   ActionIcon,
+  Badge,
   Button,
   Card,
   Grid,
@@ -41,6 +42,7 @@ import {
   getLeagueCards,
   getLeagueAdminUsers,
   getLeagueDecks,
+  getLeagueMetaAnalysis,
   getLeagueSeasons,
   getTournaments,
   getUser,
@@ -77,6 +79,8 @@ type DeckGraphView =
   | 'cost'
   | 'type'
   | 'rarity'
+  | 'aspect'
+  | 'alignment'
   | 'out_aspect'
   | 'synergy'
   | 'arena'
@@ -98,7 +102,8 @@ type SortDirection = 'asc' | 'desc';
 
 const HEROIC_ASPECT_VALUES = new Set(['heroic', 'heroism']);
 const VILLAINY_ASPECT_VALUES = new Set(['villainy']);
-const DEFAULT_ASPECT_OPTIONS = ['Aggression', 'Cunning', 'Command', 'Vigilance'];
+const ASPECT_FILTER_NEUTRAL = 'Neutral';
+const DEFAULT_ASPECT_OPTIONS = ['Aggression', 'Cunning', 'Command', 'Vigilance', ASPECT_FILTER_NEUTRAL];
 const ASPECT_ICON_BY_KEY: Record<string, string> = {
   aggression: '/icons/aspects/aggression.png',
   command: '/icons/aspects/command.png',
@@ -119,6 +124,11 @@ const CARD_LIST_ROWS_PER_PAGE_STORAGE_KEY = 'deckbuilder_card_list_rows_per_page
 const CARD_LIST_VISIBLE_LINES_STORAGE_KEY = 'deckbuilder_card_list_visible_lines';
 const ALL_DECK_OWNERS_VALUE = '__ALL__';
 const ALL_SEASONS_VALUE = '__ALL_SEASONS__';
+const ALIGNMENT_OPTIONS: Array<{ value: AlignmentFilter; label: string }> = [
+  { value: 'heroic', label: 'Heroic' },
+  { value: 'villainy', label: 'Villainy' },
+  { value: 'neither', label: 'Neither' },
+];
 
 function countCards(deck: Record<string, number>) {
   return Object.values(deck).reduce((sum, count) => sum + count, 0);
@@ -260,6 +270,19 @@ function normalizeAspectKey(value: string) {
   return value.trim().toLowerCase();
 }
 
+function isAlignmentFilter(value: string): value is AlignmentFilter {
+  return value === 'heroic' || value === 'villainy' || value === 'neither';
+}
+
+function resolveAlignmentForAspects(aspects: string[] | null | undefined): AlignmentFilter {
+  const normalizedAspects = (aspects ?? []).map((value) => String(value).trim().toLowerCase());
+  const hasHeroic = normalizedAspects.some((value) => HEROIC_ASPECT_VALUES.has(value));
+  const hasVillainy = normalizedAspects.some((value) => VILLAINY_ASPECT_VALUES.has(value));
+  if (hasVillainy) return 'villainy';
+  if (hasHeroic) return 'heroic';
+  return 'neither';
+}
+
 function AspectIcons({ aspects }: { aspects: string[] }) {
   if (aspects.length < 1) return <Text size="sm">-</Text>;
   return (
@@ -289,14 +312,16 @@ function AspectIcons({ aspects }: { aspects: string[] }) {
 function GraphBars({
   data,
   total,
+  emptyMessage,
 }: {
   data: Array<{ label: string; value: number }>;
   total: number;
+  emptyMessage?: string;
 }) {
   if (data.length < 1 || total <= 0) {
     return (
       <Text size="sm" c="dimmed">
-        Add cards to your deck to see analytics.
+        {emptyMessage ?? 'Add cards to your deck to see analytics.'}
       </Text>
     );
   }
@@ -316,6 +341,25 @@ function GraphBars({
       ))}
     </Stack>
   );
+}
+
+function triggerDownload(filename: string, content: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  window.URL.revokeObjectURL(url);
+}
+
+function sanitizeFilenamePart(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
 }
 
 export default function DeckbuilderPage({
@@ -423,6 +467,9 @@ export default function DeckbuilderPage({
     selectedSeasonId !== ALL_SEASONS_VALUE
       ? Number(selectedSeasonId)
       : null;
+  const activeSeasonNumber =
+    seasonOptions.find((season: any) => Boolean(season?.is_active))?.season_id ?? null;
+  const seasonForMetaAnalysis = selectedSeasonNumber ?? activeSeasonNumber;
 
   useEffect(() => {
     if (!isAdmin || !hasTournament || adminUsers.length < 1) return;
@@ -490,10 +537,15 @@ export default function DeckbuilderPage({
     targetUserId,
     selectedSeasonNumber
   );
+  const swrMetaAnalysisResponse = getLeagueMetaAnalysis(
+    hasTournament ? activeTournamentId : null,
+    seasonForMetaAnalysis != null ? Number(seasonForMetaAnalysis) : null
+  );
 
   const allCards: CardItem[] = swrCatalogResponse.data?.data?.cards ?? [];
   const decks = swrDecksResponse.data?.data ?? [];
   const cardPoolEntries = swrCardPoolResponse.data?.data ?? [];
+  const metaAnalysis = swrMetaAnalysisResponse.data?.data ?? null;
 
   const cardsById = useMemo(() => {
     return (allCards as CardItem[]).reduce((result: Record<string, CardItem>, card: CardItem) => {
@@ -567,7 +619,7 @@ export default function DeckbuilderPage({
   const [selectedKeywords, setSelectedKeywords] = useState<string[]>([]);
   const [selectedTraits, setSelectedTraits] = useState<string[]>([]);
   const [aspectFilter, setAspectFilter] = useState<string | null>(null);
-  const [alignmentFilter, setAlignmentFilter] = useState<AlignmentFilter | null>(null);
+  const [selectedAlignments, setSelectedAlignments] = useState<AlignmentFilter[]>([]);
   const [cardSortKey, setCardSortKey] = useState<CardSortKey>('set');
   const [cardSortDirection, setCardSortDirection] = useState<SortDirection>('desc');
   const [selectedCosts, setSelectedCosts] = useState<string[]>([]);
@@ -597,6 +649,7 @@ export default function DeckbuilderPage({
   const [sideboard, setSideboard] = useState<Record<string, number>>({});
 
   const [graphView, setGraphView] = useState<DeckGraphView>('cost');
+  const [analyticsScope, setAnalyticsScope] = useState<'deck' | 'pool'>('deck');
   const [swudbImportJson, setSwudbImportJson] = useState('');
 
   useEffect(() => {
@@ -756,6 +809,7 @@ export default function DeckbuilderPage({
     const selectedCostSet = new Set(selectedCosts.map((value) => Number(value)));
     const selectedTraitSet = new Set(selectedTraits.map((value) => value.toLowerCase()));
     const selectedKeywordSet = new Set(selectedKeywords.map((value) => value.toLowerCase()));
+    const selectedAlignmentSet = new Set(selectedAlignments);
 
     return allCards
       .filter((card: CardItem) => {
@@ -764,6 +818,11 @@ export default function DeckbuilderPage({
         const rules = (card.rules_text ?? '').toLowerCase();
         const type = card.type.toLowerCase();
         const aspects = (card.aspects ?? []).map((value) => value.toLowerCase());
+        const hasHeroic = aspects.some((value) => HEROIC_ASPECT_VALUES.has(value));
+        const hasVillainy = aspects.some((value) => VILLAINY_ASPECT_VALUES.has(value));
+        const nonAlignmentAspects = aspects.filter(
+          (value) => !HEROIC_ASPECT_VALUES.has(value) && !VILLAINY_ASPECT_VALUES.has(value)
+        );
         const traits = (card.traits ?? []).map((value) => value.toLowerCase());
         const keywords = (card.keywords ?? []).map((value) => value.toLowerCase());
         const arenas = (card.arenas ?? []).map((value) => value.toLowerCase());
@@ -790,18 +849,22 @@ export default function DeckbuilderPage({
         if (selectedTraitSet.size > 0 && !traits.some((value) => selectedTraitSet.has(value))) {
           return false;
         }
-        if (normalizedAspectFilter !== '' && !aspects.includes(normalizedAspectFilter)) {
-          return false;
+        if (normalizedAspectFilter !== '') {
+          if (normalizedAspectFilter === ASPECT_FILTER_NEUTRAL.toLowerCase()) {
+            if (hasHeroic || hasVillainy || nonAlignmentAspects.length > 0) {
+              return false;
+            }
+          } else if (!aspects.includes(normalizedAspectFilter)) {
+            return false;
+          }
         }
-        if (alignmentFilter != null) {
-          const hasHeroic = aspects.some((value) => HEROIC_ASPECT_VALUES.has(value));
-          const hasVillainy = aspects.some((value) => VILLAINY_ASPECT_VALUES.has(value));
+        if (selectedAlignmentSet.size > 0) {
           const alignment: AlignmentFilter = hasVillainy
             ? 'villainy'
             : hasHeroic
               ? 'heroic'
               : 'neither';
-          if (alignment !== alignmentFilter) {
+          if (!selectedAlignmentSet.has(alignment)) {
             return false;
           }
         }
@@ -830,7 +893,7 @@ export default function DeckbuilderPage({
     selectedKeywords,
     selectedTraits,
     aspectFilter,
-    alignmentFilter,
+    selectedAlignments,
     selectedCosts,
     selectedTypes,
     selectedRarities,
@@ -1272,105 +1335,381 @@ export default function DeckbuilderPage({
     [deckRows]
   );
 
-  const deckMetrics = useMemo(() => {
-    const deckEntries = deckRows
-      .map((row) => {
-        const resolvedCardId = resolveCatalogCardId(row.card_id);
-        const effectiveCardId = resolvedCardId !== '' ? resolvedCardId : row.card_id;
-        return { row, card: cardsById[effectiveCardId] };
+  const buildCompositionMetrics = (
+    entries: Array<{ card_id: string; qty: number; card: CardItem }>,
+    aspectFitReference?: Set<string>
+  ) => {
+    const totalQty = entries.reduce((sum, entry) => sum + Math.max(0, Number(entry.qty ?? 0)), 0);
+    const uniqueCardCount = new Set(entries.map((entry) => String(entry.card_id))).size;
+    const byCost = aggregateCountMap(entries.map((entry) => [String(entry.card.cost ?? '-'), entry.qty]));
+    const byPower = aggregateCountMap(entries.map((entry) => [String(entry.card.power ?? '-'), entry.qty]));
+    const byHp = aggregateCountMap(entries.map((entry) => [String(entry.card.hp ?? '-'), entry.qty]));
+    const byType = aggregateCountMap(entries.map((entry) => [entry.card.type ?? 'Unknown', entry.qty]));
+    const byRarity = aggregateCountMap(entries.map((entry) => [entry.card.rarity ?? 'Unknown', entry.qty]));
+    const byAspect = aggregateCountMap(
+      entries.flatMap((entry) => {
+        const aspects = entry.card.aspects ?? [];
+        if (aspects.length < 1) return [['None', entry.qty] as [string, number]];
+        return aspects.map((aspect) => [aspect, entry.qty] as [string, number]);
       })
-      .filter((x) => x.card != null);
-    const totalQty = deckEntries.reduce((sum, x) => sum + x.row.qty, 0);
-
-    const byCost = aggregateCountMap(
-      deckEntries.map((x) => [String(x.card?.cost ?? '-'), x.row.qty])
     );
-    const byPower = aggregateCountMap(
-      deckEntries.map((x) => [String(x.card?.power ?? '-'), x.row.qty])
+    const byAlignment = aggregateCountMap(
+      entries.map((entry) => {
+        const alignment = resolveAlignmentForAspects(entry.card.aspects ?? []);
+        const label = alignment === 'heroic' ? 'Heroic' : alignment === 'villainy' ? 'Villainy' : 'Neither';
+        return [label, entry.qty] as [string, number];
+      })
     );
-    const byHp = aggregateCountMap(deckEntries.map((x) => [String(x.card?.hp ?? '-'), x.row.qty]));
-    const byType = aggregateCountMap(deckEntries.map((x) => [x.card?.type ?? 'Unknown', x.row.qty]));
-    const byRarity = aggregateCountMap(deckEntries.map((x) => [x.card?.rarity ?? 'Unknown', x.row.qty]));
     const byArena = aggregateCountMap(
-      deckEntries.flatMap((x) => {
-        const arenas = x.card?.arenas ?? [];
-        if (arenas.length < 1) return [['None', x.row.qty] as [string, number]];
-        return arenas.map((arena) => [arena, x.row.qty] as [string, number]);
+      entries.flatMap((entry) => {
+        const arenas = entry.card.arenas ?? [];
+        if (arenas.length < 1) return [['None', entry.qty] as [string, number]];
+        return arenas.map((arena) => [arena, entry.qty] as [string, number]);
       })
     );
-
-    const keywordTrait = aggregateCountMap(
-      deckEntries.flatMap((x) => [
-        ...(x.card?.keywords ?? []).map((value) => [`Keyword: ${value}`, x.row.qty] as [string, number]),
-        ...(x.card?.traits ?? []).map((value) => [`Trait: ${value}`, x.row.qty] as [string, number]),
+    const bySynergy = aggregateCountMap(
+      entries.flatMap((entry) => [
+        ...(entry.card.keywords ?? []).map((value) => [`Keyword: ${value}`, entry.qty] as [string, number]),
+        ...(entry.card.traits ?? []).map((value) => [`Trait: ${value}`, entry.qty] as [string, number]),
       ])
     );
+    const bySet = aggregateCountMap(entries.map((entry) => [String(entry.card.set_code ?? '').toUpperCase(), entry.qty]));
 
-    const outOfAspect = deckEntries.reduce((sum, x) => {
-      const cardAspects = (x.card?.aspects ?? []).map((a) => a.toLowerCase());
-      const invalid = cardAspects.some((aspect) => !allowedAspects.has(aspect));
-      return invalid ? sum + x.row.qty : sum;
+    const outOfAspect = entries.reduce((sum, entry) => {
+      if (aspectFitReference == null) return sum;
+      const cardAspects = (entry.card.aspects ?? []).map((value) => value.toLowerCase());
+      const invalid = cardAspects.some((aspect) => !aspectFitReference.has(aspect));
+      return invalid ? sum + entry.qty : sum;
     }, 0);
-
     const inAspect = totalQty - outOfAspect;
 
     const toSortedRows = (mapping: Record<string, number>) =>
       Object.entries(mapping)
         .map(([label, value]) => ({ label, value }))
-        .sort((a, b) => b.value - a.value);
+        .sort((left, right) => right.value - left.value || compareText(left.label, right.label));
 
     return {
       totalQty,
+      uniqueCardCount,
       byCost: toSortedRows(byCost),
       byPower: toSortedRows(byPower),
       byHp: toSortedRows(byHp),
       byType: toSortedRows(byType),
       byRarity: toSortedRows(byRarity),
+      byAspect: toSortedRows(byAspect),
+      byAlignment: toSortedRows(byAlignment),
       byArena: toSortedRows(byArena),
-      bySynergy: toSortedRows(keywordTrait).slice(0, 20),
+      bySynergy: toSortedRows(bySynergy).slice(0, 25),
+      bySet: toSortedRows(bySet),
       outAspectRows: [
         { label: 'In Aspect', value: inAspect < 0 ? 0 : inAspect },
         { label: 'Out of Aspect', value: outOfAspect },
       ],
     };
-  }, [deckRows, cardsById, allowedAspects, cardIdByLookupKey]);
+  };
+
+  const deckMetricEntries = useMemo(
+    () =>
+      deckRows
+        .map((row) => {
+          const resolvedCardId = resolveCatalogCardId(row.card_id);
+          const effectiveCardId = resolvedCardId !== '' ? resolvedCardId : row.card_id;
+          const card = cardsById[effectiveCardId];
+          if (card == null) return null;
+          return { card_id: effectiveCardId, qty: row.qty, card };
+        })
+        .filter((entry): entry is { card_id: string; qty: number; card: CardItem } => entry != null),
+    [deckRows, cardsById, cardIdByLookupKey]
+  );
+  const poolMetricEntries = useMemo(
+    () =>
+      Object.entries(cardPoolMap)
+        .map(([rawCardId, rawQty]) => {
+          const resolvedCardId = resolveCatalogCardId(rawCardId);
+          const effectiveCardId = resolvedCardId !== '' ? resolvedCardId : rawCardId;
+          const qty = Math.max(0, Math.trunc(Number(rawQty ?? 0)));
+          if (qty <= 0) return null;
+          const card = cardsById[effectiveCardId];
+          if (card == null) return null;
+          return { card_id: effectiveCardId, qty, card };
+        })
+        .filter((entry): entry is { card_id: string; qty: number; card: CardItem } => entry != null),
+    [cardPoolMap, cardsById, cardIdByLookupKey]
+  );
+  const cardPoolExportRows = useMemo(
+    () =>
+      poolMetricEntries
+        .map((entry) => ({
+          card_id: entry.card_id,
+          quantity: entry.qty,
+          name: String(entry.card.name ?? '').trim() || entry.card_id,
+          character_variant: entry.card.character_variant ?? null,
+          set_code: String(entry.card.set_code ?? '').toUpperCase(),
+          type: entry.card.type ?? null,
+          rarity: entry.card.rarity ?? null,
+          cost: entry.card.cost ?? null,
+          power: entry.card.power ?? null,
+          hp: entry.card.hp ?? null,
+          alignment: resolveAlignmentForAspects(entry.card.aspects ?? []),
+          aspects: entry.card.aspects ?? [],
+          traits: entry.card.traits ?? [],
+          keywords: entry.card.keywords ?? [],
+          arenas: entry.card.arenas ?? [],
+        }))
+        .sort(
+          (left, right) =>
+            Number(right.quantity ?? 0) - Number(left.quantity ?? 0) ||
+            compareText(String(left.name ?? left.card_id), String(right.name ?? right.card_id))
+        ),
+    [poolMetricEntries]
+  );
+  const selectedOwnerLabel = useMemo(() => {
+    if (isAdmin && isAdminAllOwnersView) return 'All Users';
+    if (isAdmin && targetUserId != null) {
+      const owner = adminUsers.find((row: any) => Number(row.user_id) === Number(targetUserId));
+      if (owner != null) return String(owner.user_name ?? '').trim() || `User ${targetUserId}`;
+    }
+    return String(swrCurrentUserResponse.data?.data?.name ?? 'Current User').trim() || 'Current User';
+  }, [adminUsers, isAdmin, isAdminAllOwnersView, swrCurrentUserResponse.data?.data?.name, targetUserId]);
+  const selectedSeasonLabel = useMemo(() => {
+    if (selectedSeasonNumber != null) {
+      const season = seasonOptions.find((row: any) => Number(row?.season_id) === Number(selectedSeasonNumber));
+      return season != null ? String(season.name ?? `Season ${selectedSeasonNumber}`) : `Season ${selectedSeasonNumber}`;
+    }
+    if (selectedSeasonId === ALL_SEASONS_VALUE) return 'All Seasons';
+    if (activeSeasonNumber != null) {
+      const season = seasonOptions.find((row: any) => Number(row?.season_id) === Number(activeSeasonNumber));
+      if (season != null) return `${String(season.name ?? `Season ${activeSeasonNumber}`)} (Active)`;
+      return `Season ${activeSeasonNumber} (Active)`;
+    }
+    return 'Current Season';
+  }, [activeSeasonNumber, selectedSeasonId, selectedSeasonNumber, seasonOptions]);
+  const deckMetrics = useMemo(
+    () => buildCompositionMetrics(deckMetricEntries, allowedAspects),
+    [deckMetricEntries, allowedAspects]
+  );
+  const poolMetrics = useMemo(
+    () => buildCompositionMetrics(poolMetricEntries, allowedAspects),
+    [poolMetricEntries, allowedAspects]
+  );
+  const activeMetrics = analyticsScope === 'deck' ? deckMetrics : poolMetrics;
+  const analyticsEmptyMessage =
+    analyticsScope === 'deck'
+      ? 'Add cards to your current deck to see analytics.'
+      : 'No cards in this card pool yet for the selected owner/season.';
+
+  const metaTakeaways = useMemo(
+    () => (metaAnalysis?.meta_takeaways ?? []).slice(0, 6),
+    [metaAnalysis]
+  );
+  const metaTopLeaders = useMemo(
+    () =>
+      [...(metaAnalysis?.top_leaders ?? [])]
+        .sort((left: any, right: any) => Number(right?.win_rate ?? 0) - Number(left?.win_rate ?? 0))
+        .slice(0, 6),
+    [metaAnalysis]
+  );
+  const metaTopAspectCombos = useMemo(
+    () =>
+      [...(metaAnalysis?.aspect_combo_breakdown ?? [])]
+        .sort((left: any, right: any) => Number(right?.avg_win_rate ?? 0) - Number(left?.avg_win_rate ?? 0))
+        .slice(0, 6),
+    [metaAnalysis]
+  );
+  const metaKeywordImpact = useMemo(
+    () =>
+      [...(metaAnalysis?.keyword_win_impact ?? [])]
+        .filter((row: any) => Number(row?.win_impact_score ?? 0) > 0)
+        .sort((left: any, right: any) => Number(right?.win_impact_score ?? 0) - Number(left?.win_impact_score ?? 0))
+        .slice(0, 8),
+    [metaAnalysis]
+  );
+  const normalizedPoolLookupKeys = useMemo(() => {
+    const keys = new Set<string>();
+    Object.keys(cardPoolMap).forEach((cardId) => {
+      buildCardLookupKeys(cardId).forEach((lookupKey) => keys.add(lookupKey));
+    });
+    return keys;
+  }, [cardPoolMap]);
+  const poolMetaOverlap = useMemo(() => {
+    const topCards = (metaAnalysis?.top_cards ?? []).slice(0, 30);
+    let considered = 0;
+    let owned = 0;
+    topCards.forEach((row: any) => {
+      const rawCardId = String(row?.card_id ?? '').trim();
+      if (rawCardId === '') return;
+      considered += 1;
+      const hasCard = buildCardLookupKeys(rawCardId).some((lookupKey) =>
+        normalizedPoolLookupKeys.has(lookupKey)
+      );
+      if (hasCard) owned += 1;
+    });
+    return {
+      owned,
+      considered,
+      pct: considered > 0 ? (owned / considered) * 100 : 0,
+    };
+  }, [metaAnalysis, normalizedPoolLookupKeys]);
+  const poolBuildGuidance = useMemo(() => {
+    const lines: string[] = [];
+    const topPoolAspects = poolMetrics.byAspect.slice(0, 3).map((row) => row.label);
+    if (topPoolAspects.length > 0) {
+      lines.push(`Your pool is deepest in: ${topPoolAspects.join(', ')}.`);
+    }
+    const topPoolAlignments = poolMetrics.byAlignment
+      .filter((row) => row.value > 0)
+      .slice(0, 2)
+      .map((row) => row.label);
+    if (topPoolAlignments.length > 0) {
+      lines.push(`Alignment depth favors: ${topPoolAlignments.join(' + ')}.`);
+    }
+    const topPoolSynergy = poolMetrics.bySynergy[0];
+    if (topPoolSynergy != null) {
+      lines.push(`Most supported synergy in your pool: ${topPoolSynergy.label}.`);
+    }
+    const bestMetaCombo = metaTopAspectCombos[0];
+    if (bestMetaCombo != null) {
+      lines.push(
+        `Strong current meta combo: ${bestMetaCombo.label} (${Number(bestMetaCombo.avg_win_rate ?? 0).toFixed(2)}% win).`
+      );
+    }
+    if (poolMetaOverlap.considered > 0) {
+      lines.push(
+        `You currently own ${poolMetaOverlap.owned}/${poolMetaOverlap.considered} of the top 30 meta cards (${poolMetaOverlap.pct.toFixed(1)}%).`
+      );
+    }
+    return lines;
+  }, [poolMetrics, metaTopAspectCombos, poolMetaOverlap]);
 
   let graphContent = null;
   if (graphView === 'cost') {
-    graphContent = <GraphBars data={deckMetrics.byCost} total={deckMetrics.totalQty} />;
+    graphContent = <GraphBars data={activeMetrics.byCost} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
   } else if (graphView === 'power') {
-    graphContent = <GraphBars data={deckMetrics.byPower} total={deckMetrics.totalQty} />;
+    graphContent = <GraphBars data={activeMetrics.byPower} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
   } else if (graphView === 'hp') {
-    graphContent = <GraphBars data={deckMetrics.byHp} total={deckMetrics.totalQty} />;
+    graphContent = <GraphBars data={activeMetrics.byHp} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
   } else if (graphView === 'type') {
-    graphContent = <GraphBars data={deckMetrics.byType} total={deckMetrics.totalQty} />;
+    graphContent = <GraphBars data={activeMetrics.byType} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
   } else if (graphView === 'rarity') {
-    graphContent = <GraphBars data={deckMetrics.byRarity} total={deckMetrics.totalQty} />;
+    graphContent = <GraphBars data={activeMetrics.byRarity} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+  } else if (graphView === 'aspect') {
+    graphContent = <GraphBars data={activeMetrics.byAspect} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
+  } else if (graphView === 'alignment') {
+    graphContent = <GraphBars data={activeMetrics.byAlignment} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
   } else if (graphView === 'out_aspect') {
-    graphContent = <GraphBars data={deckMetrics.outAspectRows} total={deckMetrics.totalQty} />;
+    graphContent = <GraphBars data={activeMetrics.outAspectRows} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
   } else if (graphView === 'synergy') {
-    graphContent = <GraphBars data={deckMetrics.bySynergy} total={deckMetrics.totalQty} />;
+    graphContent = <GraphBars data={activeMetrics.bySynergy} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
   } else {
-    graphContent = <GraphBars data={deckMetrics.byArena} total={deckMetrics.totalQty} />;
+    graphContent = <GraphBars data={activeMetrics.byArena} total={activeMetrics.totalQty} emptyMessage={analyticsEmptyMessage} />;
   }
 
   async function onExportAnalyticsJson() {
     const payload = {
+      scope: analyticsScope,
       deck_name: deckName,
       leader: leaderCard?.card_id ?? null,
       base: baseCard?.card_id ?? null,
-      total_cards: deckMetrics.totalQty,
-      by_cost: deckMetrics.byCost,
-      by_power: deckMetrics.byPower,
-      by_hp: deckMetrics.byHp,
-      by_type: deckMetrics.byType,
-      by_rarity: deckMetrics.byRarity,
-      aspect_fit: deckMetrics.outAspectRows,
-      synergy: deckMetrics.bySynergy,
-      by_arena: deckMetrics.byArena,
+      active_metrics: activeMetrics,
+      deck_metrics: deckMetrics,
+      pool_metrics: poolMetrics,
+      meta_snapshot:
+        metaAnalysis == null
+          ? null
+          : {
+              season_name: metaAnalysis.season_name ?? null,
+              total_decks: metaAnalysis.total_decks ?? 0,
+              top_leaders: metaTopLeaders,
+              top_combos: metaTopAspectCombos,
+              takeaways: metaTakeaways,
+            },
     };
     await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
     showNotification({ color: 'green', title: 'Analytics JSON copied', message: '' });
+  }
+
+  async function onExportCardPoolJson() {
+    if (cardPoolExportRows.length < 1) {
+      showNotification({
+        color: 'red',
+        title: 'No card pool data',
+        message: 'No cards found in the selected card pool scope.',
+      });
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const filenameBase = `card-pool-${sanitizeFilenamePart(selectedOwnerLabel)}-${sanitizeFilenamePart(selectedSeasonLabel)}`;
+    const payload = {
+      metadata: {
+        exported_at: nowIso,
+        tournament_id: activeTournamentId,
+        owner: selectedOwnerLabel,
+        season: selectedSeasonLabel,
+        scope:
+          isAdmin && isAdminAllOwnersView
+            ? 'all_users'
+            : isAdmin
+              ? 'single_user_admin_view'
+              : 'current_user',
+      },
+      totals: {
+        unique_cards: cardPoolExportRows.length,
+        total_copies: poolMetrics.totalQty,
+      },
+      cards: cardPoolExportRows,
+    };
+    triggerDownload(
+      `${filenameBase}.json`,
+      JSON.stringify(payload, null, 2),
+      'application/json;charset=utf-8'
+    );
+    showNotification({
+      color: 'green',
+      title: 'Card pool exported',
+      message: 'Downloaded JSON card pool export.',
+    });
+  }
+
+  async function onExportCardPoolTxt() {
+    if (cardPoolExportRows.length < 1) {
+      showNotification({
+        color: 'red',
+        title: 'No card pool data',
+        message: 'No cards found in the selected card pool scope.',
+      });
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    const filenameBase = `card-pool-${sanitizeFilenamePart(selectedOwnerLabel)}-${sanitizeFilenamePart(selectedSeasonLabel)}`;
+    const lines: string[] = [
+      '# Sealed League Card Pool Export',
+      `Exported At (UTC): ${nowIso}`,
+      `Tournament ID: ${activeTournamentId}`,
+      `Owner: ${selectedOwnerLabel}`,
+      `Season: ${selectedSeasonLabel}`,
+      `Unique Cards: ${cardPoolExportRows.length}`,
+      `Total Copies: ${poolMetrics.totalQty}`,
+      '',
+      'Cards',
+      '-----',
+    ];
+    cardPoolExportRows.forEach((row) => {
+      const variant = String(row.character_variant ?? '').trim();
+      const displayName = variant === '' ? row.name : `${row.name} - ${variant}`;
+      lines.push(
+        `${row.quantity}x ${displayName} [${row.set_code}] (${row.card_id}) | ${row.type ?? '-'} | Alignment: ${row.alignment}`
+      );
+    });
+    triggerDownload(
+      `${filenameBase}.txt`,
+      lines.join('\n'),
+      'text/plain;charset=utf-8'
+    );
+    showNotification({
+      color: 'green',
+      title: 'Card pool exported',
+      message: 'Downloaded TXT card pool export.',
+    });
   }
 
   async function onSubmitEntry() {
@@ -1670,17 +2009,29 @@ export default function DeckbuilderPage({
                     clearable
                     searchable
                   />
-                  <Select
-                    label="Alignment"
-                    value={alignmentFilter}
-                    onChange={(value) => setAlignmentFilter((value as AlignmentFilter | null) ?? null)}
-                    data={[
-                      { value: 'heroic', label: 'Heroic' },
-                      { value: 'villainy', label: 'Villainy' },
-                      { value: 'neither', label: 'Neither' },
-                    ]}
-                    clearable
-                  />
+                  <Stack gap={4}>
+                    <MultiSelect
+                      label="Alignment"
+                      data={ALIGNMENT_OPTIONS}
+                      value={selectedAlignments}
+                      onChange={(values) =>
+                        setSelectedAlignments(values.filter((value): value is AlignmentFilter => isAlignmentFilter(value)))
+                      }
+                      clearable
+                    />
+                    <Group gap={6}>
+                      <Button
+                        size="xs"
+                        variant="subtle"
+                        onClick={() => setSelectedAlignments(ALIGNMENT_OPTIONS.map((option) => option.value))}
+                      >
+                        Select all
+                      </Button>
+                      <Button size="xs" variant="subtle" onClick={() => setSelectedAlignments([])}>
+                        Clear
+                      </Button>
+                    </Group>
+                  </Stack>
                 </Group>
                 <Group grow>
                   <Select label="Arena" data={arenaOptions} value={arenaFilter} onChange={setArenaFilter} clearable />
@@ -2092,6 +2443,22 @@ export default function DeckbuilderPage({
                 >
                   Add Current Deck to Card Pool
                 </Button>
+                <Group grow>
+                  <Button
+                    variant="outline"
+                    onClick={onExportCardPoolJson}
+                    disabled={cardPoolExportRows.length < 1}
+                  >
+                    Export Card Pool JSON
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={onExportCardPoolTxt}
+                    disabled={cardPoolExportRows.length < 1}
+                  >
+                    Export Card Pool TXT
+                  </Button>
+                </Group>
 
                 <Button onClick={onSaveDeck} disabled={leaderCardId == null || baseCardId == null}>
                   Save Deck
@@ -2237,12 +2604,25 @@ export default function DeckbuilderPage({
 
         <Card withBorder>
           <Stack>
-            <Group justify="space-between">
-              <Title order={4}>Deck Composition Analytics</Title>
+            <Group justify="space-between" align="start">
+              <Stack gap={2}>
+                <Title order={4}>Composition Analytics</Title>
+                <Text size="xs" c="dimmed">
+                  Toggle between your current deck and full card pool to plan builds against the current season meta.
+                </Text>
+              </Stack>
               <Group>
                 <Button variant="outline" size="xs" onClick={onExportAnalyticsJson}>
                   Export Analytics JSON
                 </Button>
+                <SegmentedControl
+                  value={analyticsScope}
+                  onChange={(value) => setAnalyticsScope(value as 'deck' | 'pool')}
+                  data={[
+                    { value: 'deck', label: 'Current Deck' },
+                    { value: 'pool', label: 'Total Card Pool' },
+                  ]}
+                />
                 <SegmentedControl
                   value={graphView}
                   onChange={(value) => setGraphView(value as DeckGraphView)}
@@ -2252,6 +2632,8 @@ export default function DeckbuilderPage({
                     { value: 'hp', label: 'By HP' },
                     { value: 'type', label: 'By Type' },
                     { value: 'rarity', label: 'By Rarity' },
+                    { value: 'aspect', label: 'By Aspect' },
+                    { value: 'alignment', label: 'By Alignment' },
                     { value: 'out_aspect', label: 'Aspect Fit' },
                     { value: 'synergy', label: 'Synergy' },
                     { value: 'arena', label: 'By Arena' },
@@ -2259,7 +2641,175 @@ export default function DeckbuilderPage({
                 />
               </Group>
             </Group>
+            <Group gap={8}>
+              <Badge color={analyticsScope === 'deck' ? 'blue' : 'teal'} variant="light">
+                {analyticsScope === 'deck' ? 'Deck Scope' : 'Pool Scope'}
+              </Badge>
+              <Badge variant="light">
+                {activeMetrics.totalQty} total copies
+              </Badge>
+              <Badge variant="light">
+                {activeMetrics.uniqueCardCount} unique cards
+              </Badge>
+              {analyticsScope === 'pool' ? (
+                <Badge color="indigo" variant="light">
+                  Top-30 Meta Card Coverage: {poolMetaOverlap.owned}/{poolMetaOverlap.considered}
+                </Badge>
+              ) : null}
+            </Group>
             {graphContent}
+            {analyticsScope === 'pool' ? (
+              <Grid>
+                <Grid.Col span={{ base: 12, md: 4 }}>
+                  <Card withBorder>
+                    <Stack>
+                      <Text fw={600}>Pool by Aspect</Text>
+                      <GraphBars
+                        data={poolMetrics.byAspect}
+                        total={poolMetrics.totalQty}
+                        emptyMessage="No card pool data for aspects yet."
+                      />
+                    </Stack>
+                  </Card>
+                </Grid.Col>
+                <Grid.Col span={{ base: 12, md: 4 }}>
+                  <Card withBorder>
+                    <Stack>
+                      <Text fw={600}>Pool by Alignment</Text>
+                      <GraphBars
+                        data={poolMetrics.byAlignment}
+                        total={poolMetrics.totalQty}
+                        emptyMessage="No card pool alignment data yet."
+                      />
+                    </Stack>
+                  </Card>
+                </Grid.Col>
+                <Grid.Col span={{ base: 12, md: 4 }}>
+                  <Card withBorder>
+                    <Stack>
+                      <Text fw={600}>Pool Synergy Depth</Text>
+                      <GraphBars
+                        data={poolMetrics.bySynergy.slice(0, 12)}
+                        total={poolMetrics.totalQty}
+                        emptyMessage="No trait/keyword synergy data yet."
+                      />
+                    </Stack>
+                  </Card>
+                </Grid.Col>
+              </Grid>
+            ) : null}
+          </Stack>
+        </Card>
+        <Card withBorder>
+          <Stack>
+            <Group justify="space-between" align="start">
+              <Title order={4}>Current Season Meta Build Guidance</Title>
+              {metaAnalysis != null ? (
+                <Group gap={8}>
+                  <Badge variant="light">{String(metaAnalysis.season_name ?? 'Season')}</Badge>
+                  <Badge color="grape" variant="light">
+                    {Number(metaAnalysis.total_decks ?? 0)} decks analyzed
+                  </Badge>
+                </Group>
+              ) : null}
+            </Group>
+            {swrMetaAnalysisResponse.isLoading ? (
+              <Text size="sm" c="dimmed">
+                Loading current season meta insights...
+              </Text>
+            ) : null}
+            {!swrMetaAnalysisResponse.isLoading && metaAnalysis == null ? (
+              <Text size="sm" c="dimmed">
+                Meta analysis is not available yet for this season.
+              </Text>
+            ) : null}
+            {metaAnalysis != null ? (
+              <>
+                {poolMetaOverlap.considered > 0 ? (
+                  <Stack gap={4}>
+                    <Group justify="space-between">
+                      <Text size="sm" fw={600}>
+                        Pool Coverage of Top 30 Meta Cards
+                      </Text>
+                      <Text size="xs" c="dimmed">
+                        {poolMetaOverlap.owned}/{poolMetaOverlap.considered} ({poolMetaOverlap.pct.toFixed(1)}%)
+                      </Text>
+                    </Group>
+                    <Progress value={poolMetaOverlap.pct} />
+                  </Stack>
+                ) : null}
+                <Stack gap={4}>
+                  <Text fw={600} size="sm">
+                    Helpful Build Notes
+                  </Text>
+                  {poolBuildGuidance.length > 0 ? (
+                    poolBuildGuidance.map((line, index) => (
+                      <Text size="sm" key={`pool-guidance-${index}`}>
+                        {line}
+                      </Text>
+                    ))
+                  ) : (
+                    <Text size="sm" c="dimmed">
+                      Build guidance will appear once your card pool and season meta data are available.
+                    </Text>
+                  )}
+                </Stack>
+                <Grid>
+                  <Grid.Col span={{ base: 12, md: 6 }}>
+                    <Stack gap={6}>
+                      <Text fw={600} size="sm">
+                        Strong Leaders In Current Meta
+                      </Text>
+                      <Group gap={6}>
+                        {metaTopLeaders.length > 0 ? (
+                          metaTopLeaders.map((row: any) => (
+                            <Badge key={`meta-leader-${String(row?.card_id ?? row?.card_name ?? '')}`} color="blue" variant="light">
+                              {String(row?.card_name ?? 'Unknown')}: {Number(row?.win_rate ?? 0).toFixed(2)}%
+                            </Badge>
+                          ))
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            No leader meta rows yet.
+                          </Text>
+                        )}
+                      </Group>
+                    </Stack>
+                  </Grid.Col>
+                  <Grid.Col span={{ base: 12, md: 6 }}>
+                    <Stack gap={6}>
+                      <Text fw={600} size="sm">
+                        Positive Meta Keywords
+                      </Text>
+                      <Group gap={6}>
+                        {metaKeywordImpact.length > 0 ? (
+                          metaKeywordImpact.map((row: any) => (
+                            <Badge key={`meta-keyword-${String(row?.keyword ?? '')}`} color="teal" variant="light">
+                              {String(row?.keyword ?? 'Keyword')}: +{Number(row?.win_impact_score ?? 0).toFixed(2)}
+                            </Badge>
+                          ))
+                        ) : (
+                          <Text size="sm" c="dimmed">
+                            No keyword impact rows yet.
+                          </Text>
+                        )}
+                      </Group>
+                    </Stack>
+                  </Grid.Col>
+                </Grid>
+                {metaTakeaways.length > 0 ? (
+                  <Stack gap={4}>
+                    <Text fw={600} size="sm">
+                      Meta Takeaways
+                    </Text>
+                    {metaTakeaways.map((line: string, index: number) => (
+                      <Text size="sm" key={`meta-takeaway-${index}`}>
+                        {line}
+                      </Text>
+                    ))}
+                  </Stack>
+                ) : null}
+              </>
+            ) : null}
           </Stack>
         </Card>
     </Stack>

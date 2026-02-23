@@ -128,6 +128,7 @@ class UserDirectoryEntry(BaseModelORM):
     avatar_url: str | None = None
     tournaments_won: int = 0
     tournaments_placed: int = 0
+    total_saved_decks: int = 0
     total_cards_active_season: int = 0
     total_cards_career_pool: int = 0
     favorite_media: str | None = None

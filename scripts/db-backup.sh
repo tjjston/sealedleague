@@ -6,7 +6,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
 BACKUP_DIR="${1:-${BACKUP_DIR:-${REPO_ROOT}/backups/postgres}}"
-KEEP_DAYS="${KEEP_DAYS:-14}"
+KEEP_DAYS="${KEEP_DAYS:-30}"
 
 mkdir -p "${BACKUP_DIR}"
 

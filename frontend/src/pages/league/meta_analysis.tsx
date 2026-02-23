@@ -12,9 +12,15 @@ import {
 } from '@mantine/core';
 import { useEffect, useMemo, useState } from 'react';
 
+import { buildCardLookupByKey, resolveCardLabel } from '@components/utils/card_id';
 import RequestErrorAlert from '@components/utils/error_alert';
 import Layout from '@pages/_layout';
-import { getLeagueMetaAnalysis, getLeagueSeasons, getTournaments } from '@services/adapter';
+import {
+  getLeagueCardsGlobal,
+  getLeagueMetaAnalysis,
+  getLeagueSeasons,
+  getTournaments,
+} from '@services/adapter';
 
 const ASPECT_ICON_BY_KEY: Record<string, string> = {
   aggression: '/icons/aspects/aggression.png',
@@ -447,18 +453,28 @@ export default function LeagueMetaAnalysisPage() {
     selectedSeasonNumber
   );
   const meta = swrMetaResponse.data?.data;
+  const swrCardCatalogResponse = getLeagueCardsGlobal({ limit: 5000, offset: 0 });
+  const cardCatalogRows = swrCardCatalogResponse.data?.data?.cards ?? [];
+  const cardLookupById = useMemo(() => buildCardLookupByKey(cardCatalogRows as any[]), [cardCatalogRows]);
+  const resolveMetaCardName = (row: any, emptyLabel: string) =>
+    resolveCardLabel({
+      explicitName: row?.card_name,
+      cardId: row?.card_id,
+      lookup: cardLookupById,
+      emptyLabel,
+    });
 
   const topCards = useMemo(() => {
     const rows = meta?.top_cards ?? [];
     const dedupedByName: Record<string, any> = {};
     rows.forEach((row: any) => {
-      const cardName = String(row?.card_name ?? '').trim();
+      const cardName = resolveMetaCardName(row, '');
       const fallbackId = String(row?.card_id ?? '').trim();
       const key = (cardName !== '' ? cardName : fallbackId).toLowerCase();
       if (key === '') return;
       const previous = dedupedByName[key];
       if (previous == null) {
-        dedupedByName[key] = { ...row };
+        dedupedByName[key] = { ...row, card_name: cardName !== '' ? cardName : row?.card_name };
         return;
       }
       previous.deck_count = Number(previous.deck_count ?? 0) + Number(row?.deck_count ?? 0);
@@ -472,7 +488,7 @@ export default function LeagueMetaAnalysisPage() {
       if (copiesDiff !== 0) return copiesDiff;
       return Number(right?.deck_count ?? 0) - Number(left?.deck_count ?? 0);
     });
-  }, [meta]);
+  }, [meta, cardLookupById]);
   const topLeaders = useMemo(
     () =>
       [...(meta?.top_leaders ?? [])].sort((left: any, right: any) => {
@@ -874,7 +890,7 @@ export default function LeagueMetaAnalysisPage() {
                       </Text>
                     )}
                   </Table.Td>
-                  <Table.Td>{row.card_name ?? 'Unknown leader'}</Table.Td>
+                  <Table.Td>{resolveMetaCardName(row, 'Unknown leader')}</Table.Td>
                   <Table.Td>{row.count ?? 0}</Table.Td>
                   <Table.Td>{row.win_rate ?? 0}</Table.Td>
                 </Table.Tr>
@@ -953,7 +969,7 @@ export default function LeagueMetaAnalysisPage() {
                     )}
                   </Table.Td>
                   <Table.Td>
-                    <Text fw={600}>{row.card_name ?? 'Unknown card'}</Text>
+                    <Text fw={600}>{resolveMetaCardName(row, 'Unknown card')}</Text>
                   </Table.Td>
                   <Table.Td>{row.card_type ?? '-'}</Table.Td>
                   <Table.Td>{row.deck_count ?? 0}</Table.Td>
@@ -1024,7 +1040,7 @@ export default function LeagueMetaAnalysisPage() {
                       </Text>
                     )}
                   </Table.Td>
-                  <Table.Td>{row.card_name ?? row.card_id}</Table.Td>
+                  <Table.Td>{resolveMetaCardName(row, String(row?.card_id ?? '-'))}</Table.Td>
                   <Table.Td>{Number(row.usage_delta ?? 0) >= 0 ? `+${row.usage_delta}` : row.usage_delta}</Table.Td>
                   <Table.Td>
                     {Number(row.win_rate_delta ?? 0) >= 0

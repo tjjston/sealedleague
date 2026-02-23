@@ -21,6 +21,7 @@ import { IconPlus, IconTrash } from '@tabler/icons-react';
 import { useEffect, useMemo, useState } from 'react';
 import { showNotification } from '@mantine/notifications';
 
+import { buildCardLookupByKey, resolveCardLabel, resolveCardFromLookup } from '@components/utils/card_id';
 import Layout from '@pages/_layout';
 import { getTournaments } from '@services/adapter';
 import { saveDeck, simulateSealedDraft } from '@services/league';
@@ -180,6 +181,7 @@ export default function SealedDraftSimulationPage() {
     });
     return result;
   }, [poolCards, leaders, bases]);
+  const cardLookupByKey = useMemo(() => buildCardLookupByKey(Object.values(cardsById) as any[]), [cardsById]);
 
   const uniquePoolCards = useMemo(
     () => Object.keys(poolCountMap).map((cardId) => cardsById[cardId]).filter((card) => card != null),
@@ -742,7 +744,14 @@ export default function SealedDraftSimulationPage() {
                       <Table.Tr key={`${row.side}-${row.card_id}`}>
                         <Table.Td>{row.side}</Table.Td>
                         <Table.Td>{row.qty}</Table.Td>
-                        <Table.Td>{cardsById[row.card_id]?.name ?? row.card_id}</Table.Td>
+                        <Table.Td>
+                          {resolveCardLabel({
+                            explicitName: resolveCardFromLookup(cardLookupByKey, row.card_id)?.name,
+                            cardId: row.card_id,
+                            lookup: cardLookupByKey,
+                            emptyLabel: String(row.card_id),
+                          })}
+                        </Table.Td>
                         <Table.Td>
                           <ActionIcon
                             color="red"

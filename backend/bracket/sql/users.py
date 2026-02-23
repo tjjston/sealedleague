@@ -312,6 +312,7 @@ async def get_user_directory() -> list[UserDirectoryEntry]:
                 ),
                 0
             ) AS tournaments_placed,
+            COALESCE(deck_counts.total_saved_decks, 0) AS total_saved_decks,
             COALESCE(active_pool.total_cards_active_season, 0) AS total_cards_active_season,
             COALESCE(career_pool.total_cards_career_pool, 0) AS total_cards_career_pool,
             d.leader AS current_leader_card_id
@@ -335,12 +336,18 @@ async def get_user_directory() -> list[UserDirectoryEntry]:
             FROM card_pool_entries cpe
             WHERE cpe.user_id = u.id
         ) career_pool ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT COUNT(*) AS total_saved_decks
+            FROM decks d_count
+            WHERE d_count.user_id = u.id
+        ) deck_counts ON TRUE
         LEFT JOIN season_points_ledger spl ON spl.user_id = u.id
         GROUP BY
             u.id,
             u.name,
             u.avatar_url,
             d.leader,
+            deck_counts.total_saved_decks,
             active_pool.total_cards_active_season,
             career_pool.total_cards_career_pool
             {favorite_media_group_by}

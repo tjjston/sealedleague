@@ -19,10 +19,16 @@ import { showNotification } from '@mantine/notifications';
 
 import RequestErrorAlert from '@components/utils/error_alert';
 import PreloadLink from '@components/utils/link';
+import {
+  buildCardLookupByKey,
+  resolveCardFromLookup,
+  resolveCardLabel,
+} from '@components/utils/card_id';
 import { getTournamentIdFromRouter } from '@components/utils/util';
 import Layout from '@pages/_layout';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
 import {
+  getLeagueCardsGlobal,
   getUser,
   getLeagueAdminSeasons,
   getLeagueAdminUsers,
@@ -133,6 +139,9 @@ export default function SeasonStandingsPage({
       .sort((left, right) => left.season_id - right.season_id)
       .map((row) => ({ season_id: row.season_id, season_name: row.season_name }));
   }, [adminSeasons, seasonHistoryRows]);
+  const swrCardCatalogResponse = getLeagueCardsGlobal({ limit: 5000, offset: 0 });
+  const cardCatalogRows = swrCardCatalogResponse.data?.data?.cards ?? [];
+  const cardLookupById = useMemo(() => buildCardLookupByKey(cardCatalogRows as any[]), [cardCatalogRows]);
   const swrAdminUsersResponse = getLeagueAdminUsers(
     isAdmin ? activeTournamentId : null,
     isAdmin ? seasonVisibilitySeasonId : null
@@ -181,13 +190,24 @@ export default function SeasonStandingsPage({
     return rows.reduce((result: Record<string, any>, row: any) => {
       const key = String(row?.user_name ?? '').trim().toLowerCase();
       if (key === '' || result[key] != null) return result;
+      const card = resolveCardFromLookup(cardLookupById, row?.favorite_card_id ?? row?.favorite_card_name);
       result[key] = {
-        cardName: row?.favorite_card_name ?? row?.favorite_card_id ?? null,
-        imageUrl: row?.favorite_card_image_url ?? null,
+        cardName: resolveCardLabel({
+          explicitName: row?.favorite_card_name,
+          cardId: row?.favorite_card_id,
+          lookup: cardLookupById,
+          emptyLabel: 'No showcase card selected',
+        }),
+        imageUrl:
+          String(row?.favorite_card_image_url ?? '').trim() !== ''
+            ? String(row.favorite_card_image_url)
+            : String(card?.image_url ?? '').trim() !== ''
+              ? String(card?.image_url)
+              : null,
       };
       return result;
     }, {});
-  }, [swrUserDirectoryResponse.data?.data]);
+  }, [cardLookupById, swrUserDirectoryResponse.data?.data]);
 
   function StandingsTable({ rows }: { rows: any[] }) {
     return (
