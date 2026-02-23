@@ -80,6 +80,30 @@ async def get_user_access_to_club(club_id: ClubId, user_id: UserId) -> bool:
     return club_id in await get_which_clubs_has_user_access_to(user_id)
 
 
+async def add_user_to_club(
+    user_id: UserId,
+    club_id: ClubId,
+    relation: str = "COLLABORATOR",
+) -> None:
+    await database.execute(
+        """
+        INSERT INTO users_x_clubs (club_id, user_id, relation)
+        SELECT :club_id, :user_id, :relation
+        WHERE NOT EXISTS (
+            SELECT 1
+            FROM users_x_clubs
+            WHERE club_id = :club_id
+              AND user_id = :user_id
+        )
+        """,
+        values={
+            "club_id": int(club_id),
+            "user_id": int(user_id),
+            "relation": relation,
+        },
+    )
+
+
 async def update_user(user_id: UserId, user: UserToUpdate) -> None:
     query = """
         UPDATE users

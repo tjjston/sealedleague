@@ -54,6 +54,7 @@ from bracket.routes.models import (
 )
 from bracket.sql.league import get_user_career_profile
 from bracket.sql.users import (
+    add_user_to_club,
     check_whether_email_is_in_use,
     create_user,
     delete_user_and_owned_clubs,
@@ -62,6 +63,7 @@ from bracket.sql.users import (
     get_user_directory,
     get_users,
     get_user_by_id,
+    get_which_clubs_has_user_access_to,
     get_latest_leader_card_id_for_user,
     update_user_account_type,
     update_user_preferences,
@@ -799,6 +801,9 @@ async def create_user_as_admin(
             account_type=body.account_type,
         )
     )
+    creator_club_ids = await get_which_clubs_has_user_access_to(user_public.id)
+    for club_id in creator_club_ids:
+        await add_user_to_club(created.id, club_id)
     created_public = await get_user_by_id(created.id)
     return UserPublicResponse(data=assert_some(created_public))
 

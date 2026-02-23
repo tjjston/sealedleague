@@ -1014,13 +1014,14 @@ async def list_league_seasons(
 async def list_league_admin_users(
     tournament_id: TournamentId,
     season_id: int | None = Query(default=None),
+    include_all: bool = Query(default=False),
     user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueAdminUsersResponse:
     if not await user_is_league_admin_for_tournament(tournament_id, user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
     season = await resolve_season_for_tournament(tournament_id, season_id)
-    users = await get_league_admin_users(tournament_id, season.id)
+    users = await get_league_admin_users(tournament_id, season.id, include_all_users=include_all)
     return LeagueAdminUsersResponse(data=users)
 
 

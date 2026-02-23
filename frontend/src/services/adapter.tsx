@@ -416,12 +416,16 @@ export function getLeagueMetaAnalysis(
 
 export function getLeagueAdminUsers(
   tournament_id: number | null,
-  season_id?: number | null
+  season_id?: number | null,
+  include_all?: boolean
 ): SWRResponse<any> {
   if (tournament_id == null || tournament_id <= 0) {
     return useSWR(null, fetcher);
   }
-  const suffix = season_id == null ? '' : `?season_id=${season_id}`;
+  const params = new URLSearchParams();
+  if (season_id != null) params.set('season_id', String(season_id));
+  if (include_all === true) params.set('include_all', 'true');
+  const suffix = params.toString() === '' ? '' : `?${params.toString()}`;
   return useSWR(`tournaments/${tournament_id}/league/admin/users${suffix}`, fetcher);
 }
 

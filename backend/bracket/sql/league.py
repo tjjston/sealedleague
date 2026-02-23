@@ -598,7 +598,11 @@ async def get_league_standings(
     ]
 
 
-async def get_league_admin_users(tournament_id: TournamentId, season_id: int) -> list[LeagueAdminUserView]:
+async def get_league_admin_users(
+    tournament_id: TournamentId,
+    season_id: int,
+    include_all_users: bool = False,
+) -> list[LeagueAdminUserView]:
     query = f"""
         WITH relevant_user_ids AS (
             SELECT DISTINCT uxc.user_id AS user_id
@@ -650,6 +654,13 @@ async def get_league_admin_users(tournament_id: TournamentId, season_id: int) ->
             SELECT DISTINCT cpe.user_id
             FROM card_pool_entries cpe
             WHERE cpe.season_id IN ({season_ids_subquery()})
+
+            UNION
+
+            SELECT DISTINCT u.id AS user_id
+            FROM users u
+            WHERE :include_all_users = TRUE
+              AND COALESCE(u.account_type, 'REGULAR') <> 'DEMO'
         ),
         tournament_users AS (
             SELECT u.id, u.name, u.email, u.account_type
@@ -673,7 +684,11 @@ async def get_league_admin_users(tournament_id: TournamentId, season_id: int) ->
     """
     rows = await database.fetch_all(
         query=query,
-        values={"tournament_id": tournament_id, "season_id": season_id},
+        values={
+            "tournament_id": tournament_id,
+            "season_id": season_id,
+            "include_all_users": include_all_users,
+        },
     )
     return [LeagueAdminUserView.model_validate(dict(row._mapping)) for row in rows]
 

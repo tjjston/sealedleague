@@ -351,7 +351,9 @@ export default function DeckbuilderPage({
   const swrCurrentUserResponse = getUser();
   const isAdmin = String(swrCurrentUserResponse.data?.data?.account_type ?? 'REGULAR') === 'ADMIN';
   const swrAdminUsersResponse = getLeagueAdminUsers(
-    isAdmin && hasTournament ? activeTournamentId : null
+    isAdmin && hasTournament ? activeTournamentId : null,
+    null,
+    true
   );
   const adminUsers = swrAdminUsersResponse.data?.data ?? [];
   const targetUserId =

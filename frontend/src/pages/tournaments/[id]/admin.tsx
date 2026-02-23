@@ -39,7 +39,8 @@ export default function LeagueAdminPage() {
   const [seasonForPoints, setSeasonForPoints] = useState<string | null>(null);
   const swrUsersResponse = getLeagueAdminUsers(
     tournamentData.id,
-    seasonForPoints != null ? Number(seasonForPoints) : null
+    seasonForPoints != null ? Number(seasonForPoints) : null,
+    true
   );
   const swrSeasonsResponse = getLeagueAdminSeasons(tournamentData.id);
   const swrTournamentsResponse = getTournaments('OPEN');
