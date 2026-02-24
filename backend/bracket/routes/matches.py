@@ -98,6 +98,29 @@ async def user_is_participant_in_match(
             return True
 
     if len(team_ids) < 1:
+        input_ids = [
+            int(input_id)
+            for input_id in [match.stage_item_input1_id, match.stage_item_input2_id]
+            if input_id is not None
+        ]
+        if len(input_ids) > 0:
+            input_rows = await database.fetch_all(
+                """
+                SELECT team_id
+                FROM stage_item_inputs
+                WHERE id = ANY(:input_ids)
+                  AND tournament_id = :tournament_id
+                  AND team_id IS NOT NULL
+                """,
+                values={"input_ids": input_ids, "tournament_id": int(tournament_id)},
+            )
+            team_ids.extend(
+                int(row._mapping["team_id"])
+                for row in input_rows
+                if row is not None and row._mapping["team_id"] is not None
+            )
+
+    if len(team_ids) < 1:
         return False
 
     first_team_id = team_ids[0]
@@ -472,34 +495,35 @@ async def update_match_by_id(
     match_body: MatchBody,
     user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
     __: Tournament = Depends(disallow_archived_tournament),
-    match: Match = Depends(match_dependency),
 ) -> SuccessResponse:
+    match_with_details = await get_match_with_details_for_tournament(tournament_id, match_id)
+
     if not is_admin_user(user_public):
-        if not await user_is_participant_in_match(tournament_id, user_public, match):
+        if not await user_is_participant_in_match(tournament_id, user_public, match_with_details):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="You can only submit scores for matches you are playing in",
             )
         match_body = MatchBody(
-            round_id=match.round_id,
+            round_id=match_with_details.round_id,
             stage_item_input1_score=match_body.stage_item_input1_score,
             stage_item_input2_score=match_body.stage_item_input2_score,
-            court_id=match.court_id,
-            custom_duration_minutes=match.custom_duration_minutes,
-            custom_margin_minutes=match.custom_margin_minutes,
+            court_id=match_with_details.court_id,
+            custom_duration_minutes=match_with_details.custom_duration_minutes,
+            custom_margin_minutes=match_with_details.custom_margin_minutes,
         )
 
     await check_foreign_keys_belong_to_tournament(match_body, tournament_id)
     tournament = await sql_get_tournament(tournament_id)
-    round_ = await get_round_by_id(tournament_id, match.round_id)
+    round_ = await get_round_by_id(tournament_id, match_with_details.round_id)
     stage_item = await get_stage_item(tournament_id, round_.stage_item_id)
 
     if stage_item.type == StageType.REGULAR_SEASON_MATCHUP:
-        await ensure_regular_season_match_has_submitted_decks(tournament_id, match)
+        await ensure_regular_season_match_has_submitted_decks(tournament_id, match_with_details)
 
     scores_changed = (
-        int(match_body.stage_item_input1_score) != int(match.stage_item_input1_score)
-        or int(match_body.stage_item_input2_score) != int(match.stage_item_input2_score)
+        int(match_body.stage_item_input1_score) != int(match_with_details.stage_item_input1_score)
+        or int(match_body.stage_item_input2_score) != int(match_with_details.stage_item_input2_score)
     )
 
     await sql_update_match(match_id, match_body, tournament)
@@ -508,12 +532,14 @@ async def update_match_by_id(
         await sql_clear_stage_item_winner_confirmation(stage_item.id)
 
     if (
-        match_body.custom_duration_minutes != match.custom_duration_minutes
-        or match_body.custom_margin_minutes != match.custom_margin_minutes
+        match_body.custom_duration_minutes != match_with_details.custom_duration_minutes
+        or match_body.custom_margin_minutes != match_with_details.custom_margin_minutes
     ):
         tournament = await sql_get_tournament(tournament_id)
         scheduled_matches = get_scheduled_matches(await get_full_tournament_details(tournament_id))
-        await reorder_matches_for_court(tournament, scheduled_matches, assert_some(match.court_id))
+        await reorder_matches_for_court(
+            tournament, scheduled_matches, assert_some(match_with_details.court_id)
+        )
 
     if stage_item.type in {StageType.SINGLE_ELIMINATION, StageType.DOUBLE_ELIMINATION}:
         refreshed_stage_item = await get_stage_item(tournament_id, round_.stage_item_id)
