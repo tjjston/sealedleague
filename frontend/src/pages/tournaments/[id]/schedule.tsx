@@ -14,6 +14,7 @@ import {
 } from '@mantine/core';
 import { AiFillWarning } from '@react-icons/all-files/ai/AiFillWarning';
 import { IconAlertCircle, IconCalendarPlus, IconDots, IconTrash } from '@tabler/icons-react';
+import { useMediaQuery } from '@mantine/hooks';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SWRResponse } from 'swr';
@@ -112,6 +113,7 @@ function ScheduleColumn({
   stageItemsLookup,
   swrCourtsResponse,
   matchesLookup,
+  isMobile,
 }: {
   tournamentId: number;
   court: Court;
@@ -120,6 +122,7 @@ function ScheduleColumn({
   stageItemsLookup: any;
   swrCourtsResponse: SWRResponse<CourtsResponse>;
   matchesLookup: any;
+  isMobile: boolean;
 }) {
   const { t } = useTranslation();
   const rows = matches.map((match: MatchWithDetails, index: number) => (
@@ -150,7 +153,7 @@ function ScheduleColumn({
     <Droppable droppableId={`${court.id}`} direction="vertical">
       {(provided) => (
         <div {...provided.droppableProps} ref={provided.innerRef}>
-          <div style={{ width: '25rem' }}>
+          <div style={{ width: isMobile ? '100%' : '25rem', maxWidth: '100%' }}>
             <Group justify="space-between">
               <Group>
                 <h4 style={{ marginTop: '0', margin: 'auto' }}>{court.name}</h4>
@@ -203,12 +206,14 @@ function Schedule({
   schedule: { court: Court; matches: MatchWithDetails[] }[];
   openMatchModal: CallableFunction;
 }) {
+  const isMobile = useMediaQuery('(max-width: 48em)');
   const columns = schedule.map((item) => (
     <ScheduleColumn
       tournamentId={tournament.id}
       swrCourtsResponse={swrCourtsResponse}
       stageItemsLookup={stageItemsLookup}
       matchesLookup={matchesLookup}
+      isMobile={isMobile}
       key={item.court.id}
       court={item.court}
       matches={item.matches}
@@ -217,7 +222,7 @@ function Schedule({
   ));
 
   columns.push(
-    <div style={{ width: '25rem' }}>
+    <div style={{ width: isMobile ? '100%' : '25rem', maxWidth: '100%' }}>
       <CourtModal
         swrCourtsResponse={swrCourtsResponse}
         tournamentId={tournament.id}
@@ -239,9 +244,15 @@ function Schedule({
   }
 
   return (
-    <Group wrap="nowrap" align="top">
-      {columns}
-    </Group>
+    <div style={{ width: '100%', overflowX: isMobile ? 'hidden' : 'auto' }}>
+      <Group
+        wrap={isMobile ? 'wrap' : 'nowrap'}
+        align="top"
+        style={{ width: isMobile ? '100%' : 'max-content', minWidth: '100%' }}
+      >
+        {columns}
+      </Group>
+    </div>
   );
 }
 
@@ -290,10 +301,10 @@ export default function SchedulePage() {
         />
       ) : null}
       <Grid grow>
-        <Grid.Col span={6}>
+        <Grid.Col span={{ base: 12, sm: 6 }}>
           <Title>{t('planning_title')}</Title>
         </Grid.Col>
-        <Grid.Col span={6}>
+        <Grid.Col span={{ base: 12, sm: 6 }}>
           {data.length < 1 ? null : (
             <Group justify="right">
               <Button

@@ -9,6 +9,7 @@ import {
   Group,
   HoverCard,
   Image,
+  MultiSelect,
   Select,
   Table,
   Stack,
@@ -286,6 +287,34 @@ function getSingleEliminationRoundLabel(roundIndex: number, totalRounds: number)
   return `Round of ${participants}`;
 }
 
+function normalizePersonLookupKey(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function getMatchParticipantNames(match: any): string[] {
+  const byKey = new Map<string, string>();
+  [match?.stage_item_input1, match?.stage_item_input2].forEach((input: any) => {
+    const teamName = String(input?.team?.name ?? '').trim();
+    const teamKey = normalizePersonLookupKey(teamName);
+    if (teamKey !== '' && !byKey.has(teamKey)) {
+      byKey.set(teamKey, teamName);
+    }
+
+    const players = Array.isArray(input?.team?.players) ? input.team.players : [];
+    players.forEach((player: any) => {
+      const playerName = String(player?.name ?? '').trim();
+      const playerKey = normalizePersonLookupKey(playerName);
+      if (playerKey !== '' && !byKey.has(playerKey)) {
+        byKey.set(playerKey, playerName);
+      }
+    });
+  });
+  return [...byKey.values()];
+}
+
 function ScheduleRow({
   data,
   openMatchModal,
@@ -315,6 +344,7 @@ function ScheduleRow({
   onCopyKarabastDeckSlot: (slot: number) => Promise<void>;
   onEditKarabastLobbyUrl: () => Promise<void>;
 }) {
+  const isMobile = useMediaQuery('(max-width: 48em)');
   const { t } = useTranslation();
   const winColor = '#2a8f37';
   const drawColor = '#656565';
@@ -383,9 +413,9 @@ function ScheduleRow({
   };
 
   return (
-    <div style={{ width: '48rem' }}>
-      <Group justify="space-between" mt="md" mb={4}>
-        <Group gap={8}>
+    <div style={{ width: '100%', maxWidth: '48rem' }}>
+      <Group justify="space-between" mt="md" mb={4} align={isMobile ? 'stretch' : 'center'} wrap="wrap">
+        <Group gap={8} wrap="wrap" style={{ minWidth: 0, flex: '1 1 auto' }}>
           <Text size="sm" c="dimmed">
             Lobby: {karabastLobbyUrl ?? 'Not set'}
           </Text>
@@ -449,7 +479,13 @@ function ScheduleRow({
             Copy {team2Label} Deck
           </Button>
         </Group>
-        <Button component={PreloadLink} href={baseTrackerHref} size="xs" variant="light">
+        <Button
+          component={PreloadLink}
+          href={baseTrackerHref}
+          size="xs"
+          variant="light"
+          style={isMobile ? { width: '100%' } : undefined}
+        >
           Open Base Tracker
         </Button>
       </Group>
@@ -613,10 +649,11 @@ function Schedule({
   copyKarabastDeckForSlot: (match: any, slot: number) => Promise<void>;
   editKarabastLobbyUrl: (match: any) => Promise<void>;
 }) {
+  const [selectedParticipantFilters, setSelectedParticipantFilters] = useState<string[]>([]);
   const matches: any[] = Object.values(matchesLookup ?? {}).filter(
     (value: any) => value != null && value.match != null && value.stageItem != null
   );
-  const sortedMatches = matches
+  const scheduledMatches = matches
     .filter((entry: any) => entry?.match?.start_time != null)
     .sort((left: any, right: any) => {
       const leftCourt = String(left?.match?.court?.name ?? '');
@@ -626,16 +663,51 @@ function Schedule({
       const rightTime = String(right?.match?.start_time ?? '');
       return leftTime.localeCompare(rightTime);
     });
+  const participantFilterOptions = useMemo(() => {
+    const byKey = new Map<string, string>();
+    scheduledMatches.forEach((entry: any) => {
+      getMatchParticipantNames(entry?.match).forEach((name) => {
+        const key = normalizePersonLookupKey(name);
+        if (key !== '' && !byKey.has(key)) {
+          byKey.set(key, name);
+        }
+      });
+    });
+    return [...byKey.entries()]
+      .sort((left, right) =>
+        left[1].localeCompare(right[1], undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        })
+      )
+      .map(([value, label]) => ({ value, label }));
+  }, [scheduledMatches]);
+  useEffect(() => {
+    setSelectedParticipantFilters((current) => {
+      const allowed = new Set(participantFilterOptions.map((option) => option.value));
+      return current.filter((value) => allowed.has(value));
+    });
+  }, [participantFilterOptions]);
+  const filteredMatches = useMemo(() => {
+    if (selectedParticipantFilters.length < 1) return scheduledMatches;
+    const selected = new Set(selectedParticipantFilters);
+    return scheduledMatches.filter((entry: any) => {
+      const participants = getMatchParticipantNames(entry?.match)
+        .map((name) => normalizePersonLookupKey(name))
+        .filter((value) => value !== '');
+      return participants.some((participant) => selected.has(participant));
+    });
+  }, [scheduledMatches, selectedParticipantFilters]);
 
   const rows: React.JSX.Element[] = [];
 
-  for (let c = 0; c < sortedMatches.length; c += 1) {
-    const data = sortedMatches[c];
+  for (let c = 0; c < filteredMatches.length; c += 1) {
+    const data = filteredMatches[c];
 
-    if (c < 1 || sortedMatches[c - 1]?.match?.start_time) {
+    if (c < 1 || filteredMatches[c - 1]?.match?.start_time) {
       const startTime = formatTime(data.match.start_time);
 
-      if (c < 1 || startTime !== formatTime(sortedMatches[c - 1].match.start_time)) {
+      if (c < 1 || startTime !== formatTime(filteredMatches[c - 1].match.start_time)) {
         rows.push(
           <Center mt="md" key={`time-${c}`}>
             <Text size="xl" fw={800}>
@@ -668,16 +740,31 @@ function Schedule({
 
   if (rows.length < 1) {
     return (
-      <NoContent
-        title={t('no_matches_title')}
-        description={t('no_matches_description')}
-        icon={<AiOutlineHourglass />}
-      />
+      <Stack style={{ width: '100%', maxWidth: '48rem' }}>
+        <MultiSelect
+          label="Filter Players"
+          placeholder="Show all players"
+          searchable
+          clearable
+          data={participantFilterOptions}
+          value={selectedParticipantFilters}
+          onChange={setSelectedParticipantFilters}
+        />
+        <NoContent
+          title={selectedParticipantFilters.length > 0 ? 'No matches for selected players' : t('no_matches_title')}
+          description={
+            selectedParticipantFilters.length > 0
+              ? 'Try removing or changing the player filter.'
+              : t('no_matches_description')
+          }
+          icon={<AiOutlineHourglass />}
+        />
+      </Stack>
     );
   }
 
   const noItemsAlert =
-    sortedMatches.length < 1 ? (
+    filteredMatches.length < 1 ? (
       <Alert
         icon={<IconAlertCircle size={16} />}
         title={t('no_matches_title')}
@@ -689,8 +776,17 @@ function Schedule({
     ) : null;
 
   return (
-    <Group wrap="nowrap" align="top">
-      <div style={{ width: '48rem' }}>
+    <Group wrap="wrap" align="top" style={{ width: '100%' }}>
+      <div style={{ width: '100%', maxWidth: '48rem' }}>
+        <MultiSelect
+          label="Filter Players"
+          placeholder="Show all players"
+          searchable
+          clearable
+          data={participantFilterOptions}
+          value={selectedParticipantFilters}
+          onChange={setSelectedParticipantFilters}
+        />
         {rows}
         {noItemsAlert}
       </div>
@@ -1877,7 +1973,7 @@ export default function ResultsPage() {
                     onChange={(value) => setSelectedStageId(value)}
                     variant="outline"
                   >
-                    <Tabs.List>
+                    <Tabs.List style={{ flexWrap: 'wrap', rowGap: 6 }}>
                       {stages.map((stage: any) => (
                         <Tabs.Tab key={stage.id} value={String(stage.id)}>
                           {stage.name}

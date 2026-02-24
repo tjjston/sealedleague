@@ -468,7 +468,7 @@ export function HeaderAction({
 
 function NavBar({ links }: any) {
   return (
-    <AppShell.Navbar p="md">
+    <AppShell.Navbar p="md" style={{ overflowY: 'auto' }}>
       {links == null ? (
         <AppShell.Section grow>
           <div />
@@ -483,6 +483,7 @@ function NavBar({ links }: any) {
 export default function Layout({ children, additionalNavbarLinks, breadcrumbs }: any) {
   const navbarState = useDisclosure();
   const [opened] = navbarState;
+  const isMobileViewport = useMediaQuery('(max-width: 48em)');
   const swrUserResponse = getUser();
   const userId = swrUserResponse.data?.data?.id;
   const storagePrefix = useMemo(() => `background:${String(userId ?? 'guest')}`, [userId]);
@@ -617,7 +618,7 @@ export default function Layout({ children, additionalNavbarLinks, breadcrumbs }:
               backgroundImage: `url(${activeBackgroundImage})`,
               backgroundSize: 'cover',
               backgroundPosition: 'center',
-              backgroundAttachment: 'fixed',
+              backgroundAttachment: isMobileViewport ? 'scroll' : 'fixed',
               opacity: imageOpacity,
             }}
           />

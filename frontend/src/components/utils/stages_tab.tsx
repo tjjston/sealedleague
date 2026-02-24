@@ -25,7 +25,7 @@ export default function StagesTab({ swrStagesResponse, selectedStageId, setSelec
       mb="1rem"
       value={selectedStageId}
     >
-      <Tabs.List>{items}</Tabs.List>
+      <Tabs.List style={{ flexWrap: 'wrap', rowGap: 6 }}>{items}</Tabs.List>
     </Tabs>
   );
 }

@@ -425,7 +425,7 @@ export default function BaseHealthPage() {
   const isCompactDuelLayout = isMobile && players.length === 2;
 
   const playerGridCols = useMemo(() => {
-    if (isCompactDuelLayout) return { base: 2 };
+    if (isCompactDuelLayout) return { base: 1 };
     if (playerCount <= 2) return { base: 1, sm: 2 };
     if (playerCount <= 4) return { base: 1, sm: 2, lg: 2 };
     return { base: 1, sm: 2, lg: 4 };
