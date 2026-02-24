@@ -9,7 +9,6 @@ import {
   Group,
   HoverCard,
   Image,
-  MultiSelect,
   Select,
   Table,
   Stack,
@@ -287,34 +286,6 @@ function getSingleEliminationRoundLabel(roundIndex: number, totalRounds: number)
   return `Round of ${participants}`;
 }
 
-function normalizePersonLookupKey(value: unknown): string {
-  return String(value ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, ' ');
-}
-
-function getMatchParticipantNames(match: any): string[] {
-  const byKey = new Map<string, string>();
-  [match?.stage_item_input1, match?.stage_item_input2].forEach((input: any) => {
-    const teamName = String(input?.team?.name ?? '').trim();
-    const teamKey = normalizePersonLookupKey(teamName);
-    if (teamKey !== '' && !byKey.has(teamKey)) {
-      byKey.set(teamKey, teamName);
-    }
-
-    const players = Array.isArray(input?.team?.players) ? input.team.players : [];
-    players.forEach((player: any) => {
-      const playerName = String(player?.name ?? '').trim();
-      const playerKey = normalizePersonLookupKey(playerName);
-      if (playerKey !== '' && !byKey.has(playerKey)) {
-        byKey.set(playerKey, playerName);
-      }
-    });
-  });
-  return [...byKey.values()];
-}
-
 function ScheduleRow({
   data,
   openMatchModal,
@@ -346,11 +317,15 @@ function ScheduleRow({
 }) {
   const isMobile = useMediaQuery('(max-width: 48em)');
   const { t } = useTranslation();
+  const match = data?.match;
+  if (match == null) return null;
+  const stageItemId = Number(data?.stageItem?.id ?? 0);
+  const stageItemName = String(data?.stageItem?.name ?? 'Event');
   const winColor = '#2a8f37';
   const drawColor = '#656565';
   const loseColor = '#af4034';
-  const team1Score = Number(data?.match?.stage_item_input1_score ?? 0);
-  const team2Score = Number(data?.match?.stage_item_input2_score ?? 0);
+  const team1Score = Number(match?.stage_item_input1_score ?? 0);
+  const team2Score = Number(match?.stage_item_input2_score ?? 0);
   const team1_color =
     team1Score > team2Score
       ? winColor
@@ -363,12 +338,12 @@ function ScheduleRow({
       : team1Score === team2Score
         ? drawColor
         : loseColor;
-  const team1Name = String(data?.match?.stage_item_input1?.team?.name ?? '').trim();
-  const team2Name = String(data?.match?.stage_item_input2?.team?.name ?? '').trim();
+  const team1Name = String(match?.stage_item_input1?.team?.name ?? '').trim();
+  const team2Name = String(match?.stage_item_input2?.team?.name ?? '').trim();
   const team1Label =
-    team1Name !== '' ? team1Name : formatMatchInput1(t, stageItemsLookup, matchesLookup, data.match);
+    team1Name !== '' ? team1Name : formatMatchInput1(t, stageItemsLookup, matchesLookup, match);
   const team2Label =
-    team2Name !== '' ? team2Name : formatMatchInput2(t, stageItemsLookup, matchesLookup, data.match);
+    team2Name !== '' ? team2Name : formatMatchInput2(t, stageItemsLookup, matchesLookup, match);
   const karabastHref = karabastLobbyUrl ?? 'https://karabast.net/';
 
   const renderTeamLabel = (teamLabel: string, teamNameForLookup: string) => {
@@ -515,30 +490,30 @@ function ScheduleRow({
             <Grid pt="0.75rem" pb="0.5rem">
               <Grid.Col mb="0rem" span={4}>
                 <Text pl="sm" mt="sm" fw={800}>
-                  {data.match.court?.name ?? 'TBD Court'}
+                  {match.court?.name ?? 'TBD Court'}
                 </Text>
               </Grid.Col>
               <Grid.Col mb="0rem" span={4}>
                 <Center>
                   <Text mt="sm" fw={800}>
-                    {data.match.start_time != null ? <Time datetime={data.match.start_time} /> : null}
+                    {match.start_time != null ? <Time datetime={match.start_time} /> : null}
                   </Text>
                 </Center>
               </Grid.Col>
               <Grid.Col mb="0rem" span={4}>
                 <Flex justify="right">
                   <Badge
-                    color={stringToColour(`${data.stageItem.id}`)}
+                    color={stringToColour(`${stageItemId}`)}
                     variant="outline"
                     mr="md"
                     mt="0.8rem"
                     size="md"
                   >
-                    {data.stageItem.name}
+                    {stageItemName}
                   </Badge>
-                  {winnerByStageItemId[data.stageItem.id] != null ? (
+                  {winnerByStageItemId[stageItemId] != null ? (
                     <Badge color="yellow" variant="light" mt="0.8rem" size="md">
-                      Winner: {winnerByStageItemId[data.stageItem.id]}
+                      Winner: {winnerByStageItemId[stageItemId]}
                     </Badge>
                   ) : null}
                 </Flex>
@@ -561,7 +536,7 @@ function ScheduleRow({
                     fontWeight: 800,
                   }}
                 >
-                  {data.match.stage_item_input1_score}
+                  {match.stage_item_input1_score}
                 </div>
               </Grid.Col>
             </Grid>
@@ -580,7 +555,7 @@ function ScheduleRow({
                     fontWeight: 800,
                   }}
                 >
-                  {data.match.stage_item_input2_score}
+                  {match.stage_item_input2_score}
                 </div>
               </Grid.Col>
             </Grid>
@@ -649,11 +624,10 @@ function Schedule({
   copyKarabastDeckForSlot: (match: any, slot: number) => Promise<void>;
   editKarabastLobbyUrl: (match: any) => Promise<void>;
 }) {
-  const [selectedParticipantFilters, setSelectedParticipantFilters] = useState<string[]>([]);
   const matches: any[] = Object.values(matchesLookup ?? {}).filter(
     (value: any) => value != null && value.match != null && value.stageItem != null
   );
-  const scheduledMatches = matches
+  const sortedMatches = matches
     .filter((entry: any) => entry?.match?.start_time != null)
     .sort((left: any, right: any) => {
       const leftCourt = String(left?.match?.court?.name ?? '');
@@ -663,51 +637,17 @@ function Schedule({
       const rightTime = String(right?.match?.start_time ?? '');
       return leftTime.localeCompare(rightTime);
     });
-  const participantFilterOptions = useMemo(() => {
-    const byKey = new Map<string, string>();
-    scheduledMatches.forEach((entry: any) => {
-      getMatchParticipantNames(entry?.match).forEach((name) => {
-        const key = normalizePersonLookupKey(name);
-        if (key !== '' && !byKey.has(key)) {
-          byKey.set(key, name);
-        }
-      });
-    });
-    return [...byKey.entries()]
-      .sort((left, right) =>
-        left[1].localeCompare(right[1], undefined, {
-          numeric: true,
-          sensitivity: 'base',
-        })
-      )
-      .map(([value, label]) => ({ value, label }));
-  }, [scheduledMatches]);
-  useEffect(() => {
-    setSelectedParticipantFilters((current) => {
-      const allowed = new Set(participantFilterOptions.map((option) => option.value));
-      return current.filter((value) => allowed.has(value));
-    });
-  }, [participantFilterOptions]);
-  const filteredMatches = useMemo(() => {
-    if (selectedParticipantFilters.length < 1) return scheduledMatches;
-    const selected = new Set(selectedParticipantFilters);
-    return scheduledMatches.filter((entry: any) => {
-      const participants = getMatchParticipantNames(entry?.match)
-        .map((name) => normalizePersonLookupKey(name))
-        .filter((value) => value !== '');
-      return participants.some((participant) => selected.has(participant));
-    });
-  }, [scheduledMatches, selectedParticipantFilters]);
 
   const rows: React.JSX.Element[] = [];
 
-  for (let c = 0; c < filteredMatches.length; c += 1) {
-    const data = filteredMatches[c];
+  for (let c = 0; c < sortedMatches.length; c += 1) {
+    const data = sortedMatches[c];
+    if (data?.match == null) continue;
 
-    if (c < 1 || filteredMatches[c - 1]?.match?.start_time) {
+    if (c < 1 || sortedMatches[c - 1]?.match?.start_time) {
       const startTime = formatTime(data.match.start_time);
 
-      if (c < 1 || startTime !== formatTime(filteredMatches[c - 1].match.start_time)) {
+      if (c < 1 || startTime !== formatTime(sortedMatches[c - 1].match.start_time)) {
         rows.push(
           <Center mt="md" key={`time-${c}`}>
             <Text size="xl" fw={800}>
@@ -741,22 +681,9 @@ function Schedule({
   if (rows.length < 1) {
     return (
       <Stack style={{ width: '100%', maxWidth: '48rem' }}>
-        <MultiSelect
-          label="Filter Players"
-          placeholder="Show all players"
-          searchable
-          clearable
-          data={participantFilterOptions}
-          value={selectedParticipantFilters}
-          onChange={setSelectedParticipantFilters}
-        />
         <NoContent
-          title={selectedParticipantFilters.length > 0 ? 'No matches for selected players' : t('no_matches_title')}
-          description={
-            selectedParticipantFilters.length > 0
-              ? 'Try removing or changing the player filter.'
-              : t('no_matches_description')
-          }
+          title={t('no_matches_title')}
+          description={t('no_matches_description')}
           icon={<AiOutlineHourglass />}
         />
       </Stack>
@@ -764,7 +691,7 @@ function Schedule({
   }
 
   const noItemsAlert =
-    filteredMatches.length < 1 ? (
+    sortedMatches.length < 1 ? (
       <Alert
         icon={<IconAlertCircle size={16} />}
         title={t('no_matches_title')}
@@ -778,15 +705,6 @@ function Schedule({
   return (
     <Group wrap="wrap" align="top" style={{ width: '100%' }}>
       <div style={{ width: '100%', maxWidth: '48rem' }}>
-        <MultiSelect
-          label="Filter Players"
-          placeholder="Show all players"
-          searchable
-          clearable
-          data={participantFilterOptions}
-          value={selectedParticipantFilters}
-          onChange={setSelectedParticipantFilters}
-        />
         {rows}
         {noItemsAlert}
       </div>
