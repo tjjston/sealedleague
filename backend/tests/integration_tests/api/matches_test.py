@@ -3,6 +3,7 @@ from decimal import Decimal
 import pytest
 
 from bracket.database import database
+from bracket.models.db.league import DeckInsertable, SeasonInsertable
 from bracket.models.db.match import Match
 from bracket.models.db.stage_item import StageType
 from bracket.models.db.stage_item_inputs import (
@@ -13,6 +14,7 @@ from bracket.utils.db import fetch_one_parsed_certain
 from bracket.utils.dummy_records import (
     DUMMY_COURT1,
     DUMMY_MATCH1,
+    DUMMY_MOCK_TIME,
     DUMMY_PLAYER1,
     DUMMY_PLAYER2,
     DUMMY_PLAYER3,
@@ -30,6 +32,8 @@ from tests.integration_tests.sql import (
     assert_row_count_and_clear,
     inserted_court,
     inserted_match,
+    inserted_deck,
+    inserted_season,
     inserted_player_in_team,
     inserted_round,
     inserted_stage,
@@ -228,6 +232,121 @@ async def test_update_match(
         assert updated_match.stage_item_input1_score == body["stage_item_input1_score"]
         assert updated_match.stage_item_input2_score == body["stage_item_input2_score"]
         assert updated_match.court_id == body["court_id"]
+
+        await assert_row_count_and_clear(matches, 1)
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_update_match_decks_for_participant_side_only(
+    startup_and_shutdown_uvicorn_server: None, auth_context: AuthContext
+) -> None:
+    async with (
+        inserted_stage(
+            DUMMY_STAGE1.model_copy(update={"tournament_id": auth_context.tournament.id})
+        ) as stage_inserted,
+        inserted_stage_item(
+            DUMMY_STAGE_ITEM1.model_copy(
+                update={"stage_id": stage_inserted.id, "ranking_id": auth_context.ranking.id}
+            )
+        ) as stage_item_inserted,
+        inserted_round(
+            DUMMY_ROUND1.model_copy(update={"stage_item_id": stage_item_inserted.id})
+        ) as round_inserted,
+        inserted_team(
+            DUMMY_TEAM1.model_copy(update={"tournament_id": auth_context.tournament.id})
+        ) as team1_inserted,
+        inserted_team(
+            DUMMY_TEAM2.model_copy(update={"tournament_id": auth_context.tournament.id})
+        ) as team2_inserted,
+        inserted_player_in_team(
+            DUMMY_PLAYER1.model_copy(
+                update={"name": auth_context.user.name, "tournament_id": auth_context.tournament.id}
+            ),
+            team1_inserted.id,
+        ),
+        inserted_player_in_team(
+            DUMMY_PLAYER2.model_copy(update={"tournament_id": auth_context.tournament.id}),
+            team2_inserted.id,
+        ),
+        inserted_stage_item_input(
+            StageItemInputInsertable(
+                slot=0,
+                team_id=team1_inserted.id,
+                tournament_id=auth_context.tournament.id,
+                stage_item_id=stage_item_inserted.id,
+            )
+        ) as stage_item_input1_inserted,
+        inserted_stage_item_input(
+            StageItemInputInsertable(
+                slot=1,
+                team_id=team2_inserted.id,
+                tournament_id=auth_context.tournament.id,
+                stage_item_id=stage_item_inserted.id,
+            )
+        ) as stage_item_input2_inserted,
+        inserted_match(
+            DUMMY_MATCH1.model_copy(
+                update={
+                    "round_id": round_inserted.id,
+                    "stage_item_input1_id": stage_item_input1_inserted.id,
+                    "stage_item_input2_id": stage_item_input2_inserted.id,
+                    "court_id": None,
+                }
+            )
+        ) as match_inserted,
+        inserted_season(
+            SeasonInsertable(
+                tournament_id=auth_context.tournament.id,
+                name="Season 1",
+                created=DUMMY_MOCK_TIME,
+                is_active=True,
+            )
+        ) as season_inserted,
+        inserted_deck(
+            DeckInsertable(
+                season_id=season_inserted.id,
+                user_id=auth_context.user.id,
+                tournament_id=auth_context.tournament.id,
+                name="Player 1 Deck",
+                leader="Leader A",
+                base="Base A",
+                mainboard={},
+                sideboard={},
+                created=DUMMY_MOCK_TIME,
+                updated=DUMMY_MOCK_TIME,
+            )
+        ) as deck_inserted,
+    ):
+        response = await send_tournament_request(
+            HTTPMethod.PUT,
+            f"matches/{match_inserted.id}/decks",
+            auth_context,
+            json={
+                "stage_item_input1_deck_id": deck_inserted.id,
+                "stage_item_input2_deck_id": None,
+            },
+        )
+        assert response == SUCCESS_RESPONSE
+
+        updated_match = await fetch_one_parsed_certain(
+            database,
+            Match,
+            query=matches.select().where(matches.c.id == match_inserted.id),
+        )
+        assert updated_match.stage_item_input1_deck_id == deck_inserted.id
+        assert updated_match.stage_item_input2_deck_id is None
+
+        assert await send_tournament_request(
+            HTTPMethod.PUT,
+            f"matches/{match_inserted.id}/decks",
+            auth_context,
+            json={
+                "stage_item_input1_deck_id": deck_inserted.id,
+                "stage_item_input2_deck_id": deck_inserted.id,
+            },
+        ) == {
+            "detail": "You can only edit deck selection for matches you are playing in",
+        }
 
         await assert_row_count_and_clear(matches, 1)
 

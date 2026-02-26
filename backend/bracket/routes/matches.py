@@ -26,6 +26,7 @@ from bracket.logic.scheduling.upcoming_matches import (
 from bracket.models.db.match import (
     Match,
     MatchBody,
+    MatchDeckSelectionBody,
     MatchKarabastBundle,
     MatchKarabastDeckExport,
     MatchKarabastGameNameBody,
@@ -60,6 +61,7 @@ from bracket.sql.league import (
 from bracket.sql.matches import (
     sql_create_match,
     sql_delete_match,
+    sql_update_match_deck_ids,
     sql_update_karabast_game_name,
     sql_update_match,
 )
@@ -69,7 +71,7 @@ from bracket.sql.stage_items import get_stage_item, sql_clear_stage_item_winner_
 from bracket.sql.stages import get_full_tournament_details
 from bracket.sql.tournaments import sql_get_tournament
 from bracket.sql.validation import check_foreign_keys_belong_to_tournament
-from bracket.utils.id_types import MatchId, StageItemId, TournamentId
+from bracket.utils.id_types import DeckId, MatchId, StageItemId, TournamentId
 from bracket.utils.swudb import build_swudb_deck_export
 from bracket.utils.types import assert_some
 
@@ -147,6 +149,88 @@ async def user_is_participant_in_match(
 
 def normalize_person_name(value: str | None) -> str:
     return str(value or "").strip().lower()
+
+
+def get_stage_input_participant_names(stage_input: Any) -> set[str]:
+    names: set[str] = set()
+    if stage_input is None:
+        return names
+
+    team = getattr(stage_input, "team", None)
+    team_name = normalize_person_name(getattr(team, "name", None))
+    if team_name != "":
+        names.add(team_name)
+
+    players = getattr(team, "players", None)
+    if isinstance(players, list):
+        for player in players:
+            player_name = normalize_person_name(getattr(player, "name", None))
+            if player_name != "":
+                names.add(player_name)
+    return names
+
+
+async def user_is_participant_in_stage_input(
+    tournament_id: TournamentId,
+    user: UserPublic,
+    stage_input: Any,
+) -> bool:
+    target_name = normalize_person_name(user.name)
+    if target_name == "":
+        return False
+
+    participant_names = get_stage_input_participant_names(stage_input)
+    if target_name in participant_names:
+        return True
+
+    team_id = getattr(stage_input, "team_id", None)
+    if team_id is None:
+        return False
+
+    row = await database.fetch_one(
+        """
+        SELECT 1
+        FROM players p
+        JOIN players_x_teams pxt ON pxt.player_id = p.id
+        WHERE p.tournament_id = :tournament_id
+          AND lower(trim(p.name)) = lower(trim(:user_name))
+          AND pxt.team_id = :team_id
+        LIMIT 1
+        """,
+        values={
+            "tournament_id": int(tournament_id),
+            "user_name": user.name,
+            "team_id": int(team_id),
+        },
+    )
+    return row is not None
+
+
+async def validate_deck_selection_for_stage_input(
+    deck_id: DeckId,
+    stage_input: Any,
+    side_label: str,
+) -> Any:
+    deck = await get_deck_by_id(deck_id)
+    if deck is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Could not find deck with id {int(deck_id)}",
+        )
+
+    participant_names = get_stage_input_participant_names(stage_input)
+    if len(participant_names) < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Cannot assign a deck to {side_label} before that side has a resolved player",
+        )
+
+    if normalize_person_name(deck.user_name) not in participant_names:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Selected deck does not belong to {side_label}",
+        )
+    return deck
 
 
 def normalize_karabast_game_name(value: str | None) -> str | None:
@@ -390,6 +474,73 @@ async def put_karabast_game_name(
     return SuccessResponse()
 
 
+@router.put(
+    "/tournaments/{tournament_id}/matches/{match_id}/decks",
+    response_model=SuccessResponse,
+)
+async def put_match_decks(
+    tournament_id: TournamentId,
+    match_id: MatchId,
+    body: MatchDeckSelectionBody,
+    user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
+    _: Tournament = Depends(disallow_archived_tournament),
+) -> SuccessResponse:
+    match = await get_match_with_details_for_tournament(tournament_id, match_id)
+
+    current_deck_1_id = (
+        int(match.stage_item_input1_deck_id) if match.stage_item_input1_deck_id is not None else None
+    )
+    current_deck_2_id = (
+        int(match.stage_item_input2_deck_id) if match.stage_item_input2_deck_id is not None else None
+    )
+    requested_deck_1_id = (
+        int(body.stage_item_input1_deck_id) if body.stage_item_input1_deck_id is not None else None
+    )
+    requested_deck_2_id = (
+        int(body.stage_item_input2_deck_id) if body.stage_item_input2_deck_id is not None else None
+    )
+
+    changed_deck_1 = requested_deck_1_id != current_deck_1_id
+    changed_deck_2 = requested_deck_2_id != current_deck_2_id
+
+    if not is_admin_user(user_public):
+        can_edit_side_1 = await user_is_participant_in_stage_input(
+            tournament_id,
+            user_public,
+            match.stage_item_input1,
+        )
+        can_edit_side_2 = await user_is_participant_in_stage_input(
+            tournament_id,
+            user_public,
+            match.stage_item_input2,
+        )
+        if (changed_deck_1 and not can_edit_side_1) or (changed_deck_2 and not can_edit_side_2):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="You can only edit deck selection for matches you are playing in",
+            )
+
+    if requested_deck_1_id is not None:
+        await validate_deck_selection_for_stage_input(
+            DeckId(requested_deck_1_id),
+            match.stage_item_input1,
+            "player 1",
+        )
+    if requested_deck_2_id is not None:
+        await validate_deck_selection_for_stage_input(
+            DeckId(requested_deck_2_id),
+            match.stage_item_input2,
+            "player 2",
+        )
+
+    await sql_update_match_deck_ids(
+        match_id,
+        DeckId(requested_deck_1_id) if requested_deck_1_id is not None else None,
+        DeckId(requested_deck_2_id) if requested_deck_2_id is not None else None,
+    )
+    return SuccessResponse()
+
+
 @router.get(
     "/tournaments/{tournament_id}/matches/{match_id}/karabast_bundle",
     response_model=MatchKarabastBundleResponse,
@@ -433,6 +584,7 @@ async def get_karabast_bundle(
 
     players: list[MatchKarabastDeckExport] = []
     stage_inputs = [match.stage_item_input1, match.stage_item_input2]
+    selected_match_deck_ids = [match.stage_item_input1_deck_id, match.stage_item_input2_deck_id]
     for slot, stage_input in enumerate(stage_inputs, start=1):
         team_name = str(getattr(getattr(stage_input, "team", None), "name", "")).strip() or None
         team_name_key = normalize_person_name(team_name)
@@ -441,14 +593,24 @@ async def get_karabast_bundle(
         )
         selected_user_id = application.user_id if application is not None else None
         selected_user_name = application.user_name if application is not None else None
-        selected_deck_id = int(application.deck_id) if application is not None and application.deck_id is not None else None
+        selected_deck_id = (
+            int(application.deck_id)
+            if application is not None and application.deck_id is not None
+            else None
+        )
         deck_export: dict | None = None
         deck_name: str | None = None
         selected_deck: Any | None = None
 
+        forced_match_deck_id = selected_match_deck_ids[slot - 1]
+        if forced_match_deck_id is not None:
+            selected_deck_id = int(forced_match_deck_id)
         if selected_deck_id is not None:
             selected_deck = await get_deck_by_id(selected_deck_id)
-        if selected_deck is None and team_name_key != "":
+            if selected_deck is not None:
+                selected_user_id = getattr(selected_deck, "user_id", selected_user_id)
+                selected_user_name = getattr(selected_deck, "user_name", selected_user_name)
+        if selected_deck is None and forced_match_deck_id is None and team_name_key != "":
             fallback_deck = fallback_deck_by_user_name.get(team_name_key)
             if fallback_deck is not None:
                 selected_deck = fallback_deck

@@ -133,6 +133,30 @@ async def sql_update_karabast_game_name(match_id: MatchId, karabast_game_name: s
     )
 
 
+async def sql_update_match_deck_ids(
+    match_id: MatchId,
+    stage_item_input1_deck_id: DeckId | None,
+    stage_item_input2_deck_id: DeckId | None,
+) -> None:
+    await database.execute(
+        """
+        UPDATE matches
+        SET stage_item_input1_deck_id = :stage_item_input1_deck_id,
+            stage_item_input2_deck_id = :stage_item_input2_deck_id
+        WHERE id = :match_id
+        """,
+        values={
+            "match_id": int(match_id),
+            "stage_item_input1_deck_id": (
+                int(stage_item_input1_deck_id) if stage_item_input1_deck_id is not None else None
+            ),
+            "stage_item_input2_deck_id": (
+                int(stage_item_input2_deck_id) if stage_item_input2_deck_id is not None else None
+            ),
+        },
+    )
+
+
 async def sql_set_input_ids_for_match(
     round_id: RoundId, match_id: MatchId, input_ids: list[StageItemInputId | None]
 ) -> None:

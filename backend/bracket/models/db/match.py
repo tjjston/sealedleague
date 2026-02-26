@@ -10,6 +10,12 @@ from bracket.utils.id_types import CourtId, DeckId, MatchId, RoundId, StageItemI
 from bracket.utils.types import assert_some
 
 
+class MatchDeckSelection(BaseModelORM):
+    id: DeckId
+    name: str
+    user_id: UserId | None = None
+
+
 class MatchBaseInsertable(BaseModelORM):
     created: datetime_utc
     start_time: datetime_utc | None = None
@@ -35,6 +41,8 @@ class MatchBaseInsertable(BaseModelORM):
 class MatchInsertable(MatchBaseInsertable):
     stage_item_input1_id: StageItemInputId | None = None
     stage_item_input2_id: StageItemInputId | None = None
+    stage_item_input1_deck_id: DeckId | None = None
+    stage_item_input2_deck_id: DeckId | None = None
     stage_item_input1_winner_from_match_id: MatchId | None = None
     stage_item_input2_winner_from_match_id: MatchId | None = None
     stage_item_input1_loser_from_match_id: MatchId | None = None
@@ -45,6 +53,8 @@ class Match(MatchInsertable):
     id: MatchId
     stage_item_input1: StageItemInput | None = None
     stage_item_input2: StageItemInput | None = None
+    stage_item_input1_deck: MatchDeckSelection | None = None
+    stage_item_input2_deck: MatchDeckSelection | None = None
 
     def get_winner(self) -> StageItemInput | None:
         if self.stage_item_input1_score > self.stage_item_input2_score:
@@ -104,6 +114,11 @@ class MatchBody(BaseModelORM):
     court_id: CourtId | None = None
     custom_duration_minutes: int | None = None
     custom_margin_minutes: int | None = None
+
+
+class MatchDeckSelectionBody(BaseModelORM):
+    stage_item_input1_deck_id: DeckId | None = None
+    stage_item_input2_deck_id: DeckId | None = None
 
 
 class MatchCreateBodyFrontend(BaseModelORM):

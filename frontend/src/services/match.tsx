@@ -42,6 +42,20 @@ export async function updateKarabastGameName(
     });
 }
 
+export async function updateMatchDecks(
+  tournament_id: number,
+  match_id: number,
+  stage_item_input1_deck_id: number | null,
+  stage_item_input2_deck_id: number | null
+) {
+  return createAxios()
+    .put(`tournaments/${tournament_id}/matches/${match_id}/decks`, {
+      stage_item_input1_deck_id,
+      stage_item_input2_deck_id,
+    })
+    .catch((response: any) => handleRequestError(response));
+}
+
 export async function getKarabastMatchBundle(tournament_id: number, match_id: number) {
   return createAxios()
     .get(`tournaments/${tournament_id}/matches/${match_id}/karabast_bundle`)

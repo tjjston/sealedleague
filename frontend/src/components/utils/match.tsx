@@ -34,6 +34,17 @@ export function isMatchInTheFuture(match: MatchWithDetails) {
   return getMatchStartTime(match) > dayjs();
 }
 
+export function getMatchDeckName(match: MatchWithDetails, slot: 1 | 2): string | null {
+  const key = slot === 1 ? 'stage_item_input1_deck' : 'stage_item_input2_deck';
+  const deckName = String((match as any)?.[key]?.name ?? '').trim();
+  return deckName === '' ? null : deckName;
+}
+
+export function formatMatchLabelWithDeck(teamLabel: string, deckName: string | null): string {
+  if (deckName == null || deckName.trim() === '') return teamLabel;
+  return `${teamLabel} (${deckName})`;
+}
+
 export function formatMatchInput1(
   t: Translator,
   stageItemsLookup: any,
