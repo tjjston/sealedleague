@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException
 from heliclockter import datetime_utc
 from starlette import status
 
@@ -26,10 +26,12 @@ from bracket.models.db.round import RoundInsertable
 from bracket.models.db.stage_item import (
     StageItemActivateNextBody,
     StageItemCreateBody,
+    StageItemExpandRoundRobinBody,
     StageItemUpdateBody,
     StageItemWinnerConfirmationBody,
     StageType,
 )
+from bracket.models.db.stage_item_inputs import StageItemInputCreateBodyEmpty
 from bracket.models.db.tournament import Tournament
 from bracket.models.db.user import UserPublic
 from bracket.models.db.util import StageItemWithRounds
@@ -57,6 +59,7 @@ from bracket.sql.stage_items import (
     sql_confirm_stage_item_winner,
     sql_create_stage_item_with_empty_inputs,
 )
+from bracket.sql.stage_item_inputs import sql_create_stage_item_input
 from bracket.sql.stages import get_full_tournament_details
 from bracket.sql.tournaments import sql_get_tournament
 from bracket.sql.validation import check_foreign_keys_belong_to_tournament
@@ -185,6 +188,97 @@ async def update_stage_item(
     await recalculate_ranking_for_stage_item(tournament_id, stage_item)
     if stage_item.type in {StageType.SINGLE_ELIMINATION, StageType.DOUBLE_ELIMINATION}:
         await update_inputs_in_complete_elimination_stage_item(tournament_id, stage_item.id)
+    return SuccessResponse()
+
+
+@router.post(
+    "/tournaments/{tournament_id}/stage_items/{stage_item_id}/expand_round_robin",
+    response_model=SuccessResponse,
+)
+async def expand_round_robin_stage_item(
+    tournament_id: TournamentId,
+    stage_item_id: StageItemId,
+    body: StageItemExpandRoundRobinBody | None = Body(default=None),
+    user: UserPublic = Depends(user_authenticated_for_tournament),
+    _: Tournament = Depends(disallow_archived_tournament),
+    stage_item: StageItemWithRounds = Depends(stage_item_dependency),
+) -> SuccessResponse:
+    if stage_item.type not in {StageType.ROUND_ROBIN, StageType.REGULAR_SEASON_MATCHUP}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Round robin expansion is only supported for Round Robin "
+                "and Regular Season Matchup stage items"
+            ),
+        )
+
+    additional_team_count = max(1, int((body.additional_team_count if body else 1)))
+    current_input_count = len(stage_item.inputs)
+    rounds_to_add = sum(current_input_count + offset for offset in range(additional_team_count))
+    if rounds_to_add > 0:
+        stages = await get_full_tournament_details(tournament_id)
+        existing_rounds = [
+            round_
+            for stage in stages
+            for stage_item_row in stage.stage_items
+            for round_ in stage_item_row.rounds
+        ]
+        check_requirement(existing_rounds, user, "max_rounds", additions=rounds_to_add)
+
+    tournament = await sql_get_tournament(tournament_id)
+
+    async with database.transaction():
+        for _ in range(additional_team_count):
+            refreshed_stage_item = await get_stage_item(tournament_id, stage_item_id)
+            existing_inputs = sorted(refreshed_stage_item.inputs, key=lambda input_: input_.slot)
+            next_slot = (max((input_.slot for input_ in existing_inputs), default=0)) + 1
+            new_input = await sql_create_stage_item_input(
+                tournament_id,
+                stage_item_id,
+                StageItemInputCreateBodyEmpty(slot=next_slot),
+            )
+
+            for existing_input in existing_inputs:
+                if existing_input.id is None:
+                    continue
+                round_name = await get_next_round_name(tournament_id, stage_item_id)
+                round_id = await sql_create_round(
+                    RoundInsertable(
+                        created=datetime_utc.now(),
+                        is_draft=False,
+                        stage_item_id=stage_item_id,
+                        name=round_name,
+                    )
+                )
+                await sql_create_match(
+                    MatchCreateBody(
+                        round_id=round_id,
+                        stage_item_input1_id=new_input.id,
+                        stage_item_input1_winner_from_match_id=None,
+                        stage_item_input2_id=existing_input.id,
+                        stage_item_input2_winner_from_match_id=None,
+                        court_id=None,
+                        duration_minutes=tournament.duration_minutes,
+                        margin_minutes=tournament.margin_minutes,
+                        custom_duration_minutes=None,
+                        custom_margin_minutes=None,
+                    )
+                )
+
+            await database.execute(
+                """
+                UPDATE stage_items
+                SET team_count = team_count + 1
+                WHERE id = :stage_item_id
+                """,
+                values={"stage_item_id": int(stage_item_id)},
+            )
+
+        await sql_clear_stage_item_winner_confirmation(stage_item_id)
+
+    refreshed_stage_item = await get_stage_item(tournament_id, stage_item_id)
+    await recalculate_ranking_for_stage_item(tournament_id, refreshed_stage_item)
+    await update_start_times_of_matches(tournament_id)
     return SuccessResponse()
 
 

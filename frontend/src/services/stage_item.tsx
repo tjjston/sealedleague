@@ -45,3 +45,15 @@ export async function endStageItemEarly(tournament_id: number, stage_item_id: nu
     .post(`tournaments/${tournament_id}/stage_items/${stage_item_id}/end_early`)
     .catch((response: any) => handleRequestError(response));
 }
+
+export async function expandRoundRobinStageItem(
+  tournament_id: number,
+  stage_item_id: number,
+  additional_team_count = 1
+) {
+  return createAxios()
+    .post(`tournaments/${tournament_id}/stage_items/${stage_item_id}/expand_round_robin`, {
+      additional_team_count,
+    })
+    .catch((response: any) => handleRequestError(response));
+}

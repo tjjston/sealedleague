@@ -16,7 +16,7 @@ import {
 import { useColorScheme } from '@mantine/hooks';
 import { AiFillWarning } from '@react-icons/all-files/ai/AiFillWarning';
 import { BiCheck } from '@react-icons/all-files/bi/BiCheck';
-import { IconDots, IconPencil, IconTrash } from '@tabler/icons-react';
+import { IconDots, IconPencil, IconPlus, IconTrash } from '@tabler/icons-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BiSolidWrench } from 'react-icons/bi';
@@ -46,7 +46,7 @@ import {
 } from '@openapi';
 import { getStageItemLookup, getTeamsLookup } from '@services/lookups';
 import { deleteStage } from '@services/stage';
-import { deleteStageItem } from '@services/stage_item';
+import { deleteStageItem, expandRoundRobinStageItem } from '@services/stage_item';
 import { updateStageItemInput } from '@services/stage_item_input';
 
 function StageItemInputComboBox({
@@ -262,6 +262,8 @@ function StageItemRow({
     stageItem.type === 'SWISS' ||
     stageItem.type === 'SINGLE_ELIMINATION' ||
     stageItem.type === 'DOUBLE_ELIMINATION';
+  const canExpandRoundRobin =
+    stageItem.type === 'ROUND_ROBIN' || stageItem.type === 'REGULAR_SEASON_MATCHUP';
 
   const inputs = stageItem.inputs
     .sort((i1, i2) => (i1.slot > i2.slot ? 1 : -1))
@@ -337,6 +339,25 @@ function StageItemRow({
                     href={`/tournaments/${tournament.id}/stages/swiss/${stageItem.id}`}
                   >
                     View Bracket
+                  </Menu.Item>
+                ) : null}
+                {canExpandRoundRobin ? (
+                  <Menu.Item
+                    leftSection={<IconPlus size="1.25rem" />}
+                    onClick={async () => {
+                      const confirmed = window.confirm(
+                        `Expand "${stageItem.name}" by 1 slot?\n\n` +
+                          'This safely appends new rounds and matchups for the new slot ' +
+                          'without changing existing results.'
+                      );
+                      if (!confirmed) return;
+                      await expandRoundRobinStageItem(tournament.id, stageItem.id, 1);
+                      await swrStagesResponse.mutate();
+                      await swrAvailableInputsResponse.mutate();
+                      await swrRankingsPerStageItemResponse.mutate();
+                    }}
+                  >
+                    Expand Round Robin (+1)
                   </Menu.Item>
                 ) : null}
                 <Menu.Item

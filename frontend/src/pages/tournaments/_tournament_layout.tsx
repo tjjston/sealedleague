@@ -1,5 +1,6 @@
 import { Card, Group, Stack, Text, ThemeIcon, Title, Tooltip } from '@mantine/core';
 import { HiArchiveBoxArrowDown } from 'react-icons/hi2';
+import { useMemo } from 'react';
 
 import { TournamentLinks, getTournamentHeaderLinks } from '@components/navbar/_main_links';
 import { responseIsValid } from '@components/utils/util';
@@ -7,6 +8,7 @@ import Layout from '@pages/_layout';
 import {
   checkForAuthError,
   getBaseApiUrl,
+  getLeagueProjectedSchedule,
   getStages,
   getTournamentById,
   getUserDirectory,
@@ -52,12 +54,54 @@ function getWinnerNameForCompletedStageItem(stageItem: any): string | null {
 export default function TournamentLayout({ children, tournament_id }: any) {
   const tournamentResponse = getTournamentById(tournament_id);
   const stagesResponse = getStages(tournament_id, true, false);
+  const projectedScheduleResponse = getLeagueProjectedSchedule(tournament_id);
   const userDirectoryResponse = getUserDirectory();
   checkForAuthError(tournamentResponse);
   checkForAuthError(stagesResponse);
 
   const tournamentLinks = <TournamentLinks tournament_id={tournament_id} />;
-  const tournamentHeaderLinks = getTournamentHeaderLinks(tournament_id);
+  const currentEventTournamentId = useMemo(() => {
+    const rows = projectedScheduleResponse.data?.data ?? [];
+    const linkedRows = (rows as any[])
+      .map((row: any) => {
+        const linkedTournamentId = Number(row?.linked_tournament_id ?? 0);
+        if (!Number.isInteger(linkedTournamentId) || linkedTournamentId <= 0) return null;
+        const startsAtRaw = String(row?.starts_at ?? '').trim();
+        const startsAtMs = startsAtRaw === '' ? Number.NaN : new Date(startsAtRaw).getTime();
+        return {
+          linkedTournamentId,
+          linkedTournamentStatus: String(row?.linked_tournament_status ?? '').trim().toUpperCase(),
+          startsAtMs,
+          id: Number(row?.id ?? 0),
+        };
+      })
+      .filter((row: any) => row != null);
+    if (linkedRows.length < 1) return null;
+
+    const byRecentStartOrId = (left: any, right: any) => {
+      const leftStart = Number.isFinite(left.startsAtMs) ? left.startsAtMs : Number.NEGATIVE_INFINITY;
+      const rightStart = Number.isFinite(right.startsAtMs) ? right.startsAtMs : Number.NEGATIVE_INFINITY;
+      if (leftStart !== rightStart) return rightStart - leftStart;
+      return Number(right.id ?? 0) - Number(left.id ?? 0);
+    };
+    const nowMs = Date.now();
+    const inProgress = linkedRows
+      .filter((row: any) => row.linkedTournamentStatus === 'IN_PROGRESS')
+      .sort(byRecentStartOrId);
+    const started = linkedRows
+      .filter((row: any) => Number.isFinite(row.startsAtMs) && row.startsAtMs <= nowMs)
+      .sort(byRecentStartOrId);
+    const open = linkedRows
+      .filter((row: any) => row.linkedTournamentStatus === 'OPEN')
+      .sort(byRecentStartOrId);
+
+    const preferred = inProgress[0] ?? started[0] ?? open[0] ?? null;
+    const resolvedTournamentId = Number(preferred?.linkedTournamentId ?? 0);
+    if (!Number.isInteger(resolvedTournamentId) || resolvedTournamentId <= 0) return null;
+    if (resolvedTournamentId === Number(tournament_id)) return null;
+    return resolvedTournamentId;
+  }, [projectedScheduleResponse.data?.data, tournament_id]);
+  const tournamentHeaderLinks = getTournamentHeaderLinks(tournament_id, currentEventTournamentId);
   const breadcrumbs = responseIsValid(tournamentResponse) ? (
     <Group gap="xs" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
       <Title order={3} maw="20rem" style={{ whiteSpace: 'nowrap' }}>

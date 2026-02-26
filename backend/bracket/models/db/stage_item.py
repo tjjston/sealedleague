@@ -55,6 +55,10 @@ class StageItemWinnerConfirmationBody(BaseModelORM):
     confirmed: bool = True
 
 
+class StageItemExpandRoundRobinBody(BaseModelORM):
+    additional_team_count: int = Field(default=1, ge=1, le=16)
+
+
 class StageItemCreateBody(BaseModelORM):
     stage_id: StageId
     name: str | None = None

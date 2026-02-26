@@ -7,12 +7,13 @@ import {
   Group,
   Modal,
   NumberInput,
+  Select,
   Text,
   TextInput,
 } from '@mantine/core';
 import { useForm } from '@mantine/form';
 import { showNotification } from '@mantine/notifications';
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SWRResponse } from 'swr';
 
@@ -20,8 +21,30 @@ import DeleteButton from '@components/buttons/delete';
 import { formatMatchInput1, formatMatchInput2 } from '@components/utils/match';
 import { TournamentMinimal } from '@components/utils/tournament';
 import { MatchWithDetails, RoundWithMatches, StagesWithStageItemsResponse } from '@openapi';
+import { getLeagueDecks } from '@services/adapter';
 import { getMatchLookup, getStageItemLookup } from '@services/lookups';
-import { deleteMatch, updateKarabastGameName, updateMatch } from '@services/match';
+import {
+  deleteMatch,
+  updateKarabastGameName,
+  updateMatch,
+  updateMatchDecks,
+} from '@services/match';
+
+function normalizePersonName(value: string | null | undefined) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function getStageInputParticipantNames(stageInput: any): Set<string> {
+  const names = new Set<string>();
+  const teamName = normalizePersonName(stageInput?.team?.name);
+  if (teamName !== '') names.add(teamName);
+  const players = Array.isArray(stageInput?.team?.players) ? stageInput.team.players : [];
+  players.forEach((player: any) => {
+    const playerName = normalizePersonName(player?.name);
+    if (playerName !== '') names.add(playerName);
+  });
+  return names;
+}
 
 function MatchDeleteButton({
   tournamentData,
@@ -103,6 +126,72 @@ function MatchModalForm({
   const [karabastLobbyUrlInput, setKarabastLobbyUrlInput] = useState(
     String((match as any)?.karabast_game_name ?? '')
   );
+  const [selectedDeck1Id, setSelectedDeck1Id] = useState<number | null>(
+    (match as any)?.stage_item_input1_deck?.id != null
+      ? Number((match as any).stage_item_input1_deck.id)
+      : null
+  );
+  const [selectedDeck2Id, setSelectedDeck2Id] = useState<number | null>(
+    (match as any)?.stage_item_input2_deck?.id != null
+      ? Number((match as any).stage_item_input2_deck.id)
+      : null
+  );
+  const swrLeagueDecksResponse = getLeagueDecks(tournamentData.id);
+  const allDecks = swrLeagueDecksResponse.data?.data ?? [];
+
+  useEffect(() => {
+    setSelectedDeck1Id(
+      (match as any)?.stage_item_input1_deck?.id != null
+        ? Number((match as any).stage_item_input1_deck.id)
+        : null
+    );
+    setSelectedDeck2Id(
+      (match as any)?.stage_item_input2_deck?.id != null
+        ? Number((match as any).stage_item_input2_deck.id)
+        : null
+    );
+  }, [match?.id]);
+
+  const player1Names = useMemo(
+    () => getStageInputParticipantNames((match as any)?.stage_item_input1),
+    [match]
+  );
+  const player2Names = useMemo(
+    () => getStageInputParticipantNames((match as any)?.stage_item_input2),
+    [match]
+  );
+  const buildDeckOptions = (participantNames: Set<string>, selectedDeck: any | null) => {
+    const options = (allDecks as any[])
+      .filter((deck: any) => participantNames.has(normalizePersonName(deck?.user_name)))
+      .map((deck: any) => {
+        const deckId = Number(deck?.id ?? 0);
+        return {
+          value: String(deckId),
+          label: `${String(deck?.name ?? `Deck ${deckId}`)} (${String(deck?.user_name ?? 'Unknown')})`,
+        };
+      });
+
+    const selectedDeckId = Number(selectedDeck?.id ?? 0);
+    if (
+      Number.isInteger(selectedDeckId) &&
+      selectedDeckId > 0 &&
+      !options.some((option) => Number(option.value) === selectedDeckId)
+    ) {
+      options.unshift({
+        value: String(selectedDeckId),
+        label: `${String(selectedDeck?.name ?? `Deck ${selectedDeckId}`)} (Current)`,
+      });
+    }
+    return options;
+  };
+  const side1DeckOptions = useMemo(
+    () => buildDeckOptions(player1Names, (match as any)?.stage_item_input1_deck ?? null),
+    [allDecks, match, player1Names]
+  );
+  const side2DeckOptions = useMemo(
+    () => buildDeckOptions(player2Names, (match as any)?.stage_item_input2_deck ?? null),
+    [allDecks, match, player2Names]
+  );
   const normalizeKarabastLobbyUrl = (rawValue: string | null | undefined) => {
     const normalized = String(rawValue ?? '').trim();
     if (normalized === '') return null;
@@ -156,6 +245,59 @@ function MatchModalForm({
           placeholder={`${t('score_of_label')} ${team2Name}`}
           {...form.getInputProps('stage_item_input2_score')}
         />
+        <Divider mt="lg" />
+        <Text size="sm" mt="lg">
+          Match Deck Selection
+        </Text>
+        <Text size="xs" c="dimmed" mb="xs">
+          Pick the deck used by each player in this game.
+        </Text>
+        <Select
+          label={`${team1Name} deck`}
+          searchable
+          clearable
+          value={selectedDeck1Id != null ? String(selectedDeck1Id) : null}
+          data={side1DeckOptions}
+          onChange={(value) => {
+            const parsed = Number(value ?? 0);
+            setSelectedDeck1Id(Number.isInteger(parsed) && parsed > 0 ? parsed : null);
+          }}
+        />
+        <Select
+          mt="sm"
+          label={`${team2Name} deck`}
+          searchable
+          clearable
+          value={selectedDeck2Id != null ? String(selectedDeck2Id) : null}
+          data={side2DeckOptions}
+          onChange={(value) => {
+            const parsed = Number(value ?? 0);
+            setSelectedDeck2Id(Number.isInteger(parsed) && parsed > 0 ? parsed : null);
+          }}
+        />
+        <Button
+          mt="sm"
+          type="button"
+          variant="light"
+          onClick={async () => {
+            const response = await updateMatchDecks(
+              tournamentData.id,
+              match.id,
+              selectedDeck1Id,
+              selectedDeck2Id
+            );
+            if (response == null || Number((response as any)?.status ?? 500) >= 400) return;
+            await swrStagesResponse.mutate();
+            if (swrUpcomingMatchesResponse != null) await swrUpcomingMatchesResponse.mutate();
+            showNotification({
+              color: 'green',
+              title: 'Match deck selections updated',
+              message: '',
+            });
+          }}
+        >
+          Save Deck Selections
+        </Button>
         {karabastEnabled ? (
           <>
             <Divider mt="lg" />

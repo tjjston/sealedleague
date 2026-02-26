@@ -344,19 +344,33 @@ function ScheduleRow({
     team1Name !== '' ? team1Name : formatMatchInput1(t, stageItemsLookup, matchesLookup, match);
   const team2Label =
     team2Name !== '' ? team2Name : formatMatchInput2(t, stageItemsLookup, matchesLookup, match);
+  const team1DeckName = String(match?.stage_item_input1_deck?.name ?? '').trim();
+  const team2DeckName = String(match?.stage_item_input2_deck?.name ?? '').trim();
   const karabastHref = karabastLobbyUrl ?? 'https://karabast.net/';
 
-  const renderTeamLabel = (teamLabel: string, teamNameForLookup: string) => {
+  const renderTeamLabel = (
+    teamLabel: string,
+    teamNameForLookup: string,
+    selectedDeckName: string
+  ) => {
+    const teamLabelContent = (
+      <Stack gap={2}>
+        <Text fw={500}>{teamLabel}</Text>
+        <Text size="xs" c="dimmed">
+          {selectedDeckName !== '' ? `Deck: ${selectedDeckName}` : 'Deck: Not set'}
+        </Text>
+      </Stack>
+    );
     const preview = resolveDeckPreviewForTeam(teamNameForLookup);
     if (preview == null) {
-      return <Text fw={500}>{teamLabel}</Text>;
+      return teamLabelContent;
     }
     return (
       <HoverCard width={280} shadow="md" position="right">
         <HoverCard.Target>
-          <Text fw={500} td="underline" style={{ textDecorationStyle: 'dotted' }}>
-            {teamLabel}
-          </Text>
+          <div style={{ textDecoration: 'underline', textDecorationStyle: 'dotted' }}>
+            {teamLabelContent}
+          </div>
         </HoverCard.Target>
         <HoverCard.Dropdown>
           <Stack gap="xs">
@@ -453,6 +467,20 @@ function ScheduleRow({
           >
             Copy {team2Label} Deck
           </Button>
+          {editable ? (
+            <Button
+              size="xs"
+              variant="light"
+              color="indigo"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openMatchModal(data.match);
+              }}
+            >
+              Set Decks / Score
+            </Button>
+          ) : null}
         </Group>
         <Button
           component={PreloadLink}
@@ -523,7 +551,7 @@ function ScheduleRow({
           <Stack pt="sm">
             <Grid>
               <Grid.Col span="auto" pb="0rem">
-                {renderTeamLabel(team1Label, team1Name)}
+                {renderTeamLabel(team1Label, team1Name, team1DeckName)}
               </Grid.Col>
               <Grid.Col span="content" pb="0rem">
                 <div
@@ -542,7 +570,7 @@ function ScheduleRow({
             </Grid>
             <Grid mb="0rem">
               <Grid.Col span="auto" pb="0rem">
-                {renderTeamLabel(team2Label, team2Name)}
+                {renderTeamLabel(team2Label, team2Name, team2DeckName)}
               </Grid.Col>
               <Grid.Col span="content" pb="0rem">
                 <div
@@ -890,51 +918,316 @@ export default function ResultsPage() {
     [stageItemOutcomeSummaries]
   );
   const eventStandings = useMemo(() => {
-    const statsByTeamName = new Map<
-      string,
-      { name: string; swiss_points: number; wins: number; draws: number; losses: number }
-    >();
+    type TeamStandingStats = {
+      key: string;
+      name: string;
+      swiss_points: number;
+      wins: number;
+      draws: number;
+      losses: number;
+    };
+    type PendingStandingMatch = {
+      team1Key: string;
+      team2Key: string;
+      stageType: string;
+      winPoints: number;
+      drawPoints: number;
+      lossPoints: number;
+    };
+    const toStageTypeKey = (value: unknown) => String(value ?? '').trim().toUpperCase();
+    const clamp = (value: number, min: number, max: number) =>
+      Math.min(max, Math.max(min, value));
+    const sigmoid = (value: number) => 1 / (1 + Math.exp(-value));
+    const hasReportedResult = (match: any) =>
+      Number(match?.stage_item_input1_score ?? 0) !== 0 ||
+      Number(match?.stage_item_input2_score ?? 0) !== 0;
+    const sortByStandings = (left: TeamStandingStats, right: TeamStandingStats) => {
+      const pointsDiff = Number(right.swiss_points ?? 0) - Number(left.swiss_points ?? 0);
+      if (pointsDiff !== 0) return pointsDiff;
+      const winsDiff = Number(right.wins ?? 0) - Number(left.wins ?? 0);
+      if (winsDiff !== 0) return winsDiff;
+      const drawsDiff = Number(right.draws ?? 0) - Number(left.draws ?? 0);
+      if (drawsDiff !== 0) return drawsDiff;
+      const lossesDiff = Number(left.losses ?? 0) - Number(right.losses ?? 0);
+      if (lossesDiff !== 0) return lossesDiff;
+      return String(left.name ?? '').localeCompare(String(right.name ?? ''));
+    };
+    const drawRateDefaultByStage: Record<string, number> = {
+      ROUND_ROBIN: 0.08,
+      REGULAR_SEASON_MATCHUP: 0.08,
+      SWISS: 0.05,
+      SINGLE_ELIMINATION: 0,
+      DOUBLE_ELIMINATION: 0,
+    };
+    const defaultPointsByStageType = (stageTypeRaw: unknown) => {
+      const stageType = toStageTypeKey(stageTypeRaw);
+      if (stageType === 'SINGLE_ELIMINATION' || stageType === 'DOUBLE_ELIMINATION') {
+        return { winPoints: 1, drawPoints: 0, lossPoints: 0 };
+      }
+      return { winPoints: 3, drawPoints: 1, lossPoints: 0 };
+    };
+    const inferPointsByStageItem = (stageItem: any) => {
+      const defaults = defaultPointsByStageType(stageItem?.type);
+      let sww = 0;
+      let swd = 0;
+      let sdd = 0;
+      let spw = 0;
+      let spd = 0;
+      let samples = 0;
+      (stageItem?.inputs ?? []).forEach((input: any) => {
+        const wins = Number(input?.wins ?? 0);
+        const draws = Number(input?.draws ?? 0);
+        const points = Number(input?.points ?? 0);
+        if (!Number.isFinite(wins) || !Number.isFinite(draws) || !Number.isFinite(points)) return;
+        if (wins === 0 && draws === 0) return;
+        samples += 1;
+        sww += wins * wins;
+        swd += wins * draws;
+        sdd += draws * draws;
+        spw += points * wins;
+        spd += points * draws;
+      });
+      if (samples < 2) return defaults;
+      const determinant = sww * sdd - swd * swd;
+      if (!Number.isFinite(determinant) || Math.abs(determinant) < 1e-9) return defaults;
+      const winPoints = (spw * sdd - spd * swd) / determinant;
+      const drawPoints = (spd * sww - spw * swd) / determinant;
+      if (!Number.isFinite(winPoints) || !Number.isFinite(drawPoints)) return defaults;
+      const normalizedWinPoints = clamp(winPoints, 0, 12);
+      const normalizedDrawPoints = clamp(drawPoints, 0, normalizedWinPoints);
+      if (normalizedWinPoints === 0 && normalizedDrawPoints === 0) return defaults;
+      return {
+        winPoints: normalizedWinPoints,
+        drawPoints: normalizedDrawPoints,
+        lossPoints: defaults.lossPoints,
+      };
+    };
+    const statsByTeam = new Map<string, TeamStandingStats>();
+    const playedOpponentsByTeam = new Map<string, string[]>();
+    const pendingMatches: PendingStandingMatch[] = [];
+    const stageDrawHistory = new Map<string, { played: number; draws: number }>();
+    const pendingOpponentsByTeam = new Map<string, string[]>();
+
+    const ensureTeam = (teamNameRaw: string) => {
+      const teamName = String(teamNameRaw ?? '').trim();
+      if (teamName === '') return null;
+      const key = teamName.toLowerCase();
+      if (!statsByTeam.has(key)) {
+        statsByTeam.set(key, {
+          key,
+          name: teamName,
+          swiss_points: 0,
+          wins: 0,
+          draws: 0,
+          losses: 0,
+        });
+      }
+      return key;
+    };
+
     stages.forEach((stage: any) => {
       (stage.stage_items ?? []).forEach((stageItem: any) => {
         const hasNonDraftRounds = (stageItem.rounds ?? []).some((round: any) => !round?.is_draft);
         if (!hasNonDraftRounds) return;
+
+        const inferredPoints = inferPointsByStageItem(stageItem);
+        const stageType = toStageTypeKey(stageItem?.type);
+
         (stageItem.inputs ?? []).forEach((input: any) => {
           const teamName = String(input?.team?.name ?? '').trim();
-          if (teamName === '') return;
-          const key = teamName.toLowerCase();
-          const current = statsByTeamName.get(key) ?? {
-            name: teamName,
-            swiss_points: 0,
-            wins: 0,
-            draws: 0,
-            losses: 0,
-          };
+          const key = ensureTeam(teamName);
+          if (key == null) return;
+          const current = statsByTeam.get(key);
+          if (current == null) return;
           current.swiss_points += Number(input?.points ?? 0);
           current.wins += Number(input?.wins ?? 0);
           current.draws += Number(input?.draws ?? 0);
           current.losses += Number(input?.losses ?? 0);
-          statsByTeamName.set(key, current);
+        });
+
+        (stageItem.rounds ?? []).forEach((round: any) => {
+          if (round?.is_draft) return;
+          (round?.matches ?? []).forEach((match: any) => {
+            const team1Key = ensureTeam(String(match?.stage_item_input1?.team?.name ?? '').trim());
+            const team2Key = ensureTeam(String(match?.stage_item_input2?.team?.name ?? '').trim());
+            if (team1Key == null || team2Key == null || team1Key === team2Key) return;
+
+            if (hasReportedResult(match)) {
+              const team1Opponents = playedOpponentsByTeam.get(team1Key) ?? [];
+              team1Opponents.push(team2Key);
+              playedOpponentsByTeam.set(team1Key, team1Opponents);
+              const team2Opponents = playedOpponentsByTeam.get(team2Key) ?? [];
+              team2Opponents.push(team1Key);
+              playedOpponentsByTeam.set(team2Key, team2Opponents);
+
+              const stageHistory = stageDrawHistory.get(stageType) ?? { played: 0, draws: 0 };
+              stageHistory.played += 1;
+              if (Number(match?.stage_item_input1_score ?? 0) === Number(match?.stage_item_input2_score ?? 0)) {
+                stageHistory.draws += 1;
+              }
+              stageDrawHistory.set(stageType, stageHistory);
+              return;
+            }
+
+            pendingMatches.push({
+              team1Key,
+              team2Key,
+              stageType,
+              winPoints: inferredPoints.winPoints,
+              drawPoints: inferredPoints.drawPoints,
+              lossPoints: inferredPoints.lossPoints,
+            });
+            const team1Pending = pendingOpponentsByTeam.get(team1Key) ?? [];
+            team1Pending.push(team2Key);
+            pendingOpponentsByTeam.set(team1Key, team1Pending);
+            const team2Pending = pendingOpponentsByTeam.get(team2Key) ?? [];
+            team2Pending.push(team1Key);
+            pendingOpponentsByTeam.set(team2Key, team2Pending);
+          });
         });
       });
     });
 
-    const sorted = [...statsByTeamName.values()].sort((left, right) => {
-      const leftPoints = Number(left?.swiss_points ?? 0);
-      const rightPoints = Number(right?.swiss_points ?? 0);
-      if (rightPoints !== leftPoints) return rightPoints - leftPoints;
-      const winsDiff = Number(right?.wins ?? 0) - Number(left?.wins ?? 0);
-      if (winsDiff !== 0) return winsDiff;
-      const drawsDiff = Number(right?.draws ?? 0) - Number(left?.draws ?? 0);
-      if (drawsDiff !== 0) return drawsDiff;
-      const lossesDiff = Number(left?.losses ?? 0) - Number(right?.losses ?? 0);
-      if (lossesDiff !== 0) return lossesDiff;
-      return String(left?.name ?? '').localeCompare(String(right?.name ?? ''));
+    const sortedCurrent = [...statsByTeam.values()].sort(sortByStandings);
+    if (sortedCurrent.length < 1) return [];
+
+    const rateByTeam = new Map<string, { winRate: number; pointsPerMatch: number; drawRate: number }>();
+    sortedCurrent.forEach((team) => {
+      const matchesPlayed = Number(team.wins ?? 0) + Number(team.draws ?? 0) + Number(team.losses ?? 0);
+      const winRate = matchesPlayed > 0 ? (team.wins + team.draws * 0.5) / matchesPlayed : 0.5;
+      const pointsPerMatch = matchesPlayed > 0 ? team.swiss_points / matchesPlayed : 0;
+      const drawRate = matchesPlayed > 0 ? team.draws / matchesPlayed : 0.08;
+      rateByTeam.set(team.key, { winRate, pointsPerMatch, drawRate });
     });
-    return sorted.map((team: any, index: number) => {
+    const avgWinRate =
+      sortedCurrent.reduce((sum, team) => sum + (rateByTeam.get(team.key)?.winRate ?? 0.5), 0) /
+      sortedCurrent.length;
+    const avgPointsPerMatch =
+      sortedCurrent.reduce((sum, team) => sum + (rateByTeam.get(team.key)?.pointsPerMatch ?? 0), 0) /
+      sortedCurrent.length;
+    const avgDrawRate =
+      sortedCurrent.reduce((sum, team) => sum + (rateByTeam.get(team.key)?.drawRate ?? 0), 0) /
+      sortedCurrent.length;
+
+    const strengthByTeam = new Map<string, number>();
+    sortedCurrent.forEach((team) => {
+      const teamRates = rateByTeam.get(team.key) ?? {
+        winRate: 0.5,
+        pointsPerMatch: avgPointsPerMatch,
+        drawRate: avgDrawRate,
+      };
+      const playedOpponents = playedOpponentsByTeam.get(team.key) ?? [];
+      const playedOppWinRate =
+        playedOpponents.length > 0
+          ? playedOpponents.reduce(
+              (sum, opponentKey) => sum + (rateByTeam.get(opponentKey)?.winRate ?? avgWinRate),
+              0
+            ) / playedOpponents.length
+          : avgWinRate;
+      const pendingOpponents = pendingOpponentsByTeam.get(team.key) ?? [];
+      const pendingOppWinRate =
+        pendingOpponents.length > 0
+          ? pendingOpponents.reduce(
+              (sum, opponentKey) => sum + (rateByTeam.get(opponentKey)?.winRate ?? avgWinRate),
+              0
+            ) / pendingOpponents.length
+          : avgWinRate;
+      const matchesPlayed = Number(team.wins ?? 0) + Number(team.draws ?? 0) + Number(team.losses ?? 0);
+      const confidence = clamp(matchesPlayed / 8, 0.2, 1);
+      const strength =
+        (teamRates.winRate - 0.5) * (1.2 + confidence) +
+        (teamRates.pointsPerMatch - avgPointsPerMatch) * 0.6 +
+        (playedOppWinRate - avgWinRate) * 0.55 +
+        (pendingOppWinRate - avgWinRate) * 0.35;
+      strengthByTeam.set(team.key, strength);
+    });
+
+    const winnerCredits = new Map<string, number>(sortedCurrent.map((team) => [team.key, 0]));
+    const simulationCount =
+      pendingMatches.length < 1
+        ? 1
+        : Math.max(1200, Math.min(4000, pendingMatches.length * 160));
+
+    const isTiedForFirst = (left: TeamStandingStats, right: TeamStandingStats) =>
+      Math.abs(Number(left.swiss_points) - Number(right.swiss_points)) < 1e-9 &&
+      Number(left.wins) === Number(right.wins) &&
+      Number(left.draws) === Number(right.draws) &&
+      Number(left.losses) === Number(right.losses);
+
+    for (let iteration = 0; iteration < simulationCount; iteration += 1) {
+      const simulatedStats = new Map<string, TeamStandingStats>(
+        sortedCurrent.map((team) => [
+          team.key,
+          {
+            key: team.key,
+            name: team.name,
+            swiss_points: Number(team.swiss_points ?? 0),
+            wins: Number(team.wins ?? 0),
+            draws: Number(team.draws ?? 0),
+            losses: Number(team.losses ?? 0),
+          },
+        ])
+      );
+
+      pendingMatches.forEach((match) => {
+        const team1 = simulatedStats.get(match.team1Key);
+        const team2 = simulatedStats.get(match.team2Key);
+        if (team1 == null || team2 == null) return;
+
+        const team1Strength = strengthByTeam.get(match.team1Key) ?? 0;
+        const team2Strength = strengthByTeam.get(match.team2Key) ?? 0;
+        const team1WinExpectation = sigmoid((team1Strength - team2Strength) * 2.35);
+        const stageHistory = stageDrawHistory.get(match.stageType);
+        const stageDrawRate =
+          stageHistory != null && stageHistory.played > 0
+            ? stageHistory.draws / stageHistory.played
+            : drawRateDefaultByStage[match.stageType] ?? 0.05;
+        const teamDrawRate =
+          ((rateByTeam.get(match.team1Key)?.drawRate ?? avgDrawRate) +
+            (rateByTeam.get(match.team2Key)?.drawRate ?? avgDrawRate)) /
+          2;
+        const drawProbability = clamp((stageDrawRate + teamDrawRate) / 2, 0, 0.3);
+        const team1WinProbability = clamp(team1WinExpectation * (1 - drawProbability), 0, 1);
+        const team2WinProbability = clamp((1 - team1WinExpectation) * (1 - drawProbability), 0, 1);
+        const roll = Math.random();
+
+        if (roll < team1WinProbability) {
+          team1.wins += 1;
+          team1.swiss_points += match.winPoints;
+          team2.losses += 1;
+          team2.swiss_points += match.lossPoints;
+          return;
+        }
+        if (roll < team1WinProbability + team2WinProbability) {
+          team2.wins += 1;
+          team2.swiss_points += match.winPoints;
+          team1.losses += 1;
+          team1.swiss_points += match.lossPoints;
+          return;
+        }
+
+        team1.draws += 1;
+        team2.draws += 1;
+        team1.swiss_points += match.drawPoints;
+        team2.swiss_points += match.drawPoints;
+      });
+
+      const ranked = [...simulatedStats.values()].sort(sortByStandings);
+      const top = ranked[0];
+      if (top == null) continue;
+      const coLeaders = ranked.filter((team) => isTiedForFirst(team, top));
+      const credit = coLeaders.length > 0 ? 1 / coLeaders.length : 1;
+      coLeaders.forEach((team) => {
+        winnerCredits.set(team.key, (winnerCredits.get(team.key) ?? 0) + credit);
+      });
+    }
+
+    return sortedCurrent.map((team, index) => {
       const wins = Number(team?.wins ?? 0);
       const draws = Number(team?.draws ?? 0);
       const losses = Number(team?.losses ?? 0);
       const matches = wins + draws + losses;
+      const probability = ((winnerCredits.get(team.key) ?? 0) / simulationCount) * 100;
       return {
         rank: index + 1,
         name: String(team?.name ?? ''),
@@ -943,6 +1236,7 @@ export default function ResultsPage() {
         draws,
         losses,
         win_rate: matches > 0 ? ((wins / matches) * 100).toFixed(2) : '0.00',
+        stage_win_probability: Number.isFinite(probability) ? probability : 0,
       };
     });
   }, [stages]);
@@ -1798,6 +2092,7 @@ export default function ResultsPage() {
                   <Table.Th>Draws</Table.Th>
                   <Table.Th>Losses</Table.Th>
                   <Table.Th>Win %</Table.Th>
+                  <Table.Th>Stage Win Prob</Table.Th>
                 </Table.Tr>
               </Table.Thead>
               <Table.Tbody>
@@ -1849,6 +2144,7 @@ export default function ResultsPage() {
                       <Table.Td>{row.draws}</Table.Td>
                       <Table.Td>{row.losses}</Table.Td>
                       <Table.Td>{row.win_rate}</Table.Td>
+                      <Table.Td>{row.stage_win_probability.toFixed(1)}%</Table.Td>
                     </Table.Tr>
                   );
                 })}

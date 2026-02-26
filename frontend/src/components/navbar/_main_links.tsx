@@ -185,9 +185,23 @@ export function TournamentLinks({ tournament_id }: any) {
   );
 }
 
-export function getTournamentHeaderLinks(tournament_id: number) {
+export function getTournamentHeaderLinks(
+  tournament_id: number,
+  currentEventTournamentId: number | null = null
+) {
   const tm_prefix = `/tournaments/${tournament_id}`;
-  return [
+  const links = [
+    ...(currentEventTournamentId != null && currentEventTournamentId > 0
+      ? [
+          {
+            link: `/tournaments/${currentEventTournamentId}/results`,
+            label: 'Current Event',
+            links: [],
+            icon: IconBrackets,
+          },
+        ]
+      : []),
     { link: `${tm_prefix}/admin`, label: 'League Admin', links: [], icon: IconAdjustments },
   ];
+  return links;
 }
