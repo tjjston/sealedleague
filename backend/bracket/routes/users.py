@@ -848,7 +848,12 @@ async def put_user_password(
 ) -> SuccessResponse:
     if user_public.id != user_id and not is_admin_user(user_public):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Can't change details of this user")
-    await update_user_password(user_id, hash_password(user_to_update.password))
+    password_reset_by_admin = is_admin_user(user_public) and user_public.id != user_id
+    await update_user_password(
+        user_id,
+        hash_password(user_to_update.password),
+        must_update_password=password_reset_by_admin,
+    )
     return SuccessResponse()
 
 

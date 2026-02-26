@@ -49,6 +49,7 @@ class Token(BaseModel):
     access_token: str
     token_type: str
     user_id: UserId
+    must_update_password: bool = False
 
 
 class TokenData(BaseModel):
@@ -221,7 +222,12 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
     access_token = create_access_token(
         data={"user": user.email}, expires_delta=access_token_expires
     )
-    return Token(access_token=access_token, token_type="bearer", user_id=user.id)
+    return Token(
+        access_token=access_token,
+        token_type="bearer",
+        user_id=user.id,
+        must_update_password=bool(getattr(user, "must_update_password", False)),
+    )
 
 
 # @router.get("/login", summary='SSO login')

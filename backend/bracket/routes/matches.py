@@ -289,6 +289,72 @@ async def ensure_regular_season_match_has_submitted_decks(
     )
 
 
+def has_reported_result(input1_score: int, input2_score: int) -> bool:
+    return int(input1_score) != 0 or int(input2_score) != 0
+
+
+async def maybe_snapshot_match_decks_on_score_submission(
+    tournament_id: TournamentId,
+    match: MatchWithDetails,
+    match_body: MatchBody,
+    scores_changed: bool,
+) -> None:
+    if not scores_changed:
+        return
+    if not has_reported_result(
+        int(match_body.stage_item_input1_score), int(match_body.stage_item_input2_score)
+    ):
+        return
+
+    current_deck_1_id = (
+        int(match.stage_item_input1_deck_id) if match.stage_item_input1_deck_id is not None else None
+    )
+    current_deck_2_id = (
+        int(match.stage_item_input2_deck_id) if match.stage_item_input2_deck_id is not None else None
+    )
+    if current_deck_1_id is not None and current_deck_2_id is not None:
+        return
+
+    applications = await get_tournament_applications(tournament_id)
+    applications_by_name = {
+        normalize_person_name(application.user_name): application for application in applications
+    }
+    next_deck_ids = [current_deck_1_id, current_deck_2_id]
+    stage_inputs = [match.stage_item_input1, match.stage_item_input2]
+
+    for index, stage_input in enumerate(stage_inputs):
+        if next_deck_ids[index] is not None:
+            continue
+
+        team_name = str(getattr(getattr(stage_input, "team", None), "name", "")).strip()
+        if team_name == "":
+            continue
+
+        application = applications_by_name.get(normalize_person_name(team_name))
+        if application is None or application.deck_id is None:
+            continue
+
+        selected_deck = await get_deck_by_id(DeckId(int(application.deck_id)))
+        if selected_deck is None:
+            continue
+
+        participant_names = get_stage_input_participant_names(stage_input)
+        selected_deck_owner = normalize_person_name(getattr(selected_deck, "user_name", None))
+        if selected_deck_owner == "" or selected_deck_owner not in participant_names:
+            continue
+
+        next_deck_ids[index] = int(selected_deck.id)
+
+    if next_deck_ids[0] == current_deck_1_id and next_deck_ids[1] == current_deck_2_id:
+        return
+
+    await sql_update_match_deck_ids(
+        match.id,
+        DeckId(next_deck_ids[0]) if next_deck_ids[0] is not None else None,
+        DeckId(next_deck_ids[1]) if next_deck_ids[1] is not None else None,
+    )
+
+
 async def maybe_auto_complete_double_elimination_reset(
     tournament_id: TournamentId,
     stage_item: Any,
@@ -689,6 +755,9 @@ async def update_match_by_id(
     )
 
     await sql_update_match(match_id, match_body, tournament)
+    await maybe_snapshot_match_decks_on_score_submission(
+        tournament_id, match_with_details, match_body, scores_changed
+    )
 
     if scores_changed:
         await sql_clear_stage_item_winner_confirmation(stage_item.id)

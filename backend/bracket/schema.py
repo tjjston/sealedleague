@@ -379,6 +379,7 @@ users = Table(
     Column("email", String, nullable=False, index=True, unique=True),
     Column("name", String, nullable=False),
     Column("password_hash", String, nullable=False),
+    Column("must_update_password", Boolean, nullable=False, server_default="f"),
     Column("created", DateTimeTZ, nullable=False, server_default=func.now()),
     Column("avatar_url", String, nullable=True),
     Column("avatar_fit_mode", String, nullable=True),

@@ -88,6 +88,25 @@ async def temporary_user() -> AsyncIterator[tuple[User, dict[str, str]]]:
             await delete_user(user_created.id)
 
 
+@asynccontextmanager
+async def temporary_admin_user() -> AsyncIterator[tuple[User, dict[str, str]]]:
+    user_created = None
+    try:
+        new_user = UserInsertable(
+            email="admin_email123@example.org",
+            password_hash=hash_password("some password"),
+            name="admin-name",
+            created=datetime_utc.now(),
+            account_type=UserAccountType.ADMIN,
+        )
+        user_created = await create_user(new_user)
+        headers = {"Authorization": f"Bearer {get_mock_token(user_created.email)}"}
+        yield user_created, headers
+    finally:
+        if user_created is not None:
+            await delete_user(user_created.id)
+
+
 @pytest.mark.asyncio(loop_scope="session")
 async def test_update_user(
     startup_and_shutdown_uvicorn_server: None, auth_context: AuthContext
@@ -123,4 +142,26 @@ async def test_update_user_password(
 
         assert response.get("success") is True, response
         assert updated_user.password_hash and len(updated_user.password_hash) == 60
+        assert updated_user.must_update_password is False
         assert auth_context.user != updated_user.password_hash
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_admin_reset_password_requires_update_on_next_login(
+    startup_and_shutdown_uvicorn_server: None, auth_context: AuthContext
+) -> None:
+    async with temporary_admin_user() as (admin_user, admin_headers):
+        async with temporary_user() as (regular_user, _):
+            body = {"password": "somepassword"}
+            response = await send_auth_request(
+                HTTPMethod.PUT,
+                f"users/{regular_user.id}/password",
+                auth_context.model_copy(update={"user": admin_user, "headers": admin_headers}),
+                json=body,
+            )
+            updated_user = await fetch_one_parsed_certain(
+                database, User, query=users.select().where(users.c.id == regular_user.id)
+            )
+
+            assert response.get("success") is True, response
+            assert updated_user.must_update_password is True

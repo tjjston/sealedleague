@@ -6,7 +6,9 @@ import jwt
 import pytest
 
 from bracket.config import config
+from bracket.database import database
 from bracket.models.db.account import UserAccountType
+from bracket.schema import users
 from bracket.utils.dummy_records import DUMMY_CLUB, DUMMY_TOURNAMENT
 from bracket.utils.http import HTTPMethod
 from bracket.utils.types import JsonDict
@@ -52,6 +54,27 @@ async def test_get_token_invalid_credentials(startup_and_shutdown_uvicorn_server
             response = JsonDict(await send_request(HTTPMethod.POST, "token", body))
 
     assert response == {"detail": "Incorrect email or password"}
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_get_token_password_update_required_flag(
+    startup_and_shutdown_uvicorn_server: None,
+) -> None:
+    mock_user = get_mock_user()
+    body = {
+        "username": mock_user.email,
+        "password": "mypassword",
+    }
+    with mock_auth_time():
+        async with inserted_user(mock_user) as user_inserted:
+            await database.execute(
+                query=users.update()
+                .where(users.c.id == user_inserted.id)
+                .values(must_update_password=True)
+            )
+            response = JsonDict(await send_request(HTTPMethod.POST, "token", body))
+
+    assert response.get("must_update_password") is True
 
 
 @pytest.mark.asyncio(loop_scope="session")

@@ -15,7 +15,7 @@ import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router';
 
-import { tokenPresent } from '@services/local_storage';
+import { getLogin, tokenPresent } from '@services/local_storage';
 import { performLogin } from '@services/user';
 
 export default function LoginPage() {
@@ -30,6 +30,16 @@ export default function LoginPage() {
   async function attemptLogin(email: string, password: string) {
     const success = await performLogin(email, password);
     if (success) {
+      const login = getLogin();
+      if (Boolean(login?.must_update_password)) {
+        showNotification({
+          color: 'yellow',
+          title: 'Password update required',
+          message: 'Set a new password before continuing.',
+        });
+        await navigate('/password-reset');
+        return;
+      }
       showNotification({
         color: 'green',
         title: t('login_success_title'),

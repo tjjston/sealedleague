@@ -263,13 +263,23 @@ async def update_user_account_type(user_id: UserId, account_type: UserAccountTyp
     )
 
 
-async def update_user_password(user_id: UserId, password_hash: str) -> None:
+async def update_user_password(
+    user_id: UserId, password_hash: str, must_update_password: bool
+) -> None:
     query = """
         UPDATE users
-        SET password_hash = :password_hash
+        SET password_hash = :password_hash,
+            must_update_password = :must_update_password
         WHERE id = :user_id
         """
-    await database.execute(query=query, values={"user_id": user_id, "password_hash": password_hash})
+    await database.execute(
+        query=query,
+        values={
+            "user_id": user_id,
+            "password_hash": password_hash,
+            "must_update_password": must_update_password,
+        },
+    )
 
 
 async def get_user_by_id(user_id: UserId) -> UserPublic | None:

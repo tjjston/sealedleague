@@ -17,7 +17,7 @@ import {
 import { useDisclosure, useMediaQuery } from '@mantine/hooks';
 import { Icon, IconMoonStars, IconPhoto, IconSun, IconUser } from '@tabler/icons-react';
 import { ReactNode, useEffect, useMemo, useState } from 'react';
-import { useLocation } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 
 import { Brand } from '@components/navbar/_brand';
 import {
@@ -33,6 +33,7 @@ import {
 import { getBaseLinks, getBaseLinksDict } from '@components/navbar/_main_links';
 import PreloadLink from '@components/utils/link';
 import { getUser, getUserCardCatalog } from '@services/adapter';
+import { getLogin } from '@services/local_storage';
 import classes from './_layout.module.css';
 
 interface HeaderActionLink {
@@ -481,6 +482,7 @@ function NavBar({ links }: any) {
 }
 
 export default function Layout({ children, additionalNavbarLinks, breadcrumbs }: any) {
+  const navigate = useNavigate();
   const navbarState = useDisclosure();
   const [opened] = navbarState;
   const isMobileViewport = useMediaQuery('(max-width: 48em)');
@@ -503,6 +505,12 @@ export default function Layout({ children, additionalNavbarLinks, breadcrumbs }:
   const [fixedBackgroundImage, setFixedBackgroundImage] = useState<string | null>(null);
   const [clock, setClock] = useState<number>(() => Date.now());
   const computedColorScheme = useComputedColorScheme('light', { getInitialValueInEffect: true });
+
+  useEffect(() => {
+    if (Boolean(getLogin()?.must_update_password)) {
+      navigate('/password-reset', { replace: true });
+    }
+  }, [navigate]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClock(Date.now()), 60_000);

@@ -177,7 +177,7 @@ export default function AdminUsersPage() {
           />
           <PasswordInput
             label="Reset Password"
-            description="Leave empty to keep current password."
+            description="When an admin resets a user's password, they must set a new one at next login."
             value={newPassword}
             onChange={(event) => setNewPassword(event.currentTarget.value)}
           />

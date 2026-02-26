@@ -44,6 +44,7 @@ class UserInsertable(UserBase):
 class User(UserBase):
     id: UserId
     password_hash: str | None = None
+    must_update_password: bool = False
 
 
 class UserPublic(UserBase):
@@ -94,6 +95,7 @@ class AdminUserToCreate(BaseModelORM):
 class UserInDB(UserBase):
     id: UserId
     password_hash: str
+    must_update_password: bool = False
 
 
 class CardCatalogEntry(BaseModelORM):

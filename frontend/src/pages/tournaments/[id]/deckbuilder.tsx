@@ -45,6 +45,7 @@ import {
   getLeagueDecks,
   getLeagueMetaAnalysis,
   getLeagueSeasons,
+  getTournamentApplications,
   getTournaments,
   getUser,
 } from '@services/adapter';
@@ -54,6 +55,7 @@ import {
   renameDeck,
   saveDeck,
   submitLeagueEntry,
+  submitTournamentApplication,
   upsertCardPoolEntry,
 } from '@services/league';
 
@@ -697,6 +699,10 @@ export default function DeckbuilderPage({
     targetUserId,
     selectedSeasonNumber
   );
+  const swrApplicationsResponse = getTournamentApplications(
+    hasTournament ? activeTournamentId : null,
+    isAdmin ? 'admin' : 'me'
+  );
   const swrMetaAnalysisResponse = getLeagueMetaAnalysis(
     hasTournament ? activeTournamentId : null,
     seasonForMetaAnalysis != null ? Number(seasonForMetaAnalysis) : null
@@ -704,8 +710,43 @@ export default function DeckbuilderPage({
 
   const allCards: CardItem[] = swrCatalogResponse.data?.data?.cards ?? [];
   const decks = swrDecksResponse.data?.data ?? [];
+  const tournamentApplications = swrApplicationsResponse.data?.data ?? [];
   const cardPoolEntries = swrCardPoolResponse.data?.data ?? [];
   const metaAnalysis = swrMetaAnalysisResponse.data?.data ?? null;
+
+  const currentDeckIdByUserId = useMemo(() => {
+    return (tournamentApplications as any[]).reduce((result: Record<number, number>, application: any) => {
+      const userId = Number(application?.user_id ?? 0);
+      const deckId = Number(application?.deck_id ?? 0);
+      if (!Number.isFinite(userId) || userId <= 0) return result;
+      if (!Number.isFinite(deckId) || deckId <= 0) return result;
+      result[userId] = deckId;
+      return result;
+    }, {});
+  }, [tournamentApplications]);
+  const applicationByUserId = useMemo(() => {
+    return (tournamentApplications as any[]).reduce((result: Record<number, any>, application: any) => {
+      const userId = Number(application?.user_id ?? 0);
+      if (!Number.isFinite(userId) || userId <= 0 || result[userId] != null) return result;
+      result[userId] = application;
+      return result;
+    }, {});
+  }, [tournamentApplications]);
+  const managedUserId =
+    isAdmin
+      ? targetUserId
+      : Number.isFinite(currentUserId) && currentUserId > 0
+        ? currentUserId
+        : null;
+  const managedUserApplication =
+    managedUserId != null ? (applicationByUserId[managedUserId] ?? null) : null;
+  const managedUserCurrentDeckId =
+    managedUserId != null ? (currentDeckIdByUserId[managedUserId] ?? null) : null;
+  const managedUserCurrentDeck =
+    managedUserCurrentDeckId != null
+      ? ((decks as any[]).find((deck: any) => Number(deck?.id ?? 0) === Number(managedUserCurrentDeckId)) ??
+        null)
+      : null;
 
   const cardsById = useMemo(() => {
     return (allCards as CardItem[]).reduce((result: Record<string, CardItem>, card: CardItem) => {
@@ -1499,6 +1540,51 @@ export default function DeckbuilderPage({
     });
   }
 
+  function loadDeckIntoEditor(deck: any) {
+    setDeckName(deck.name);
+    setMainboard(normalizeBoardEntries(deck.mainboard ?? {}, resolveCatalogCardId));
+    setSideboard(normalizeBoardEntries(deck.sideboard ?? {}, resolveCatalogCardId));
+
+    const leaderDeckValue = String(deck.leader ?? '');
+    const baseDeckValue = String(deck.base ?? '');
+    const leaderResolvedId = resolveCatalogCardId(leaderDeckValue);
+    const baseResolvedId = resolveCatalogCardId(baseDeckValue);
+    const leader = allCards.find(
+      (card: CardItem) =>
+        card.type.toLowerCase() === 'leader' &&
+        (card.name === leaderDeckValue || card.card_id === leaderResolvedId)
+    );
+    const base = allCards.find(
+      (card: CardItem) =>
+        card.type.toLowerCase() === 'base' &&
+        (card.name === baseDeckValue || card.card_id === baseResolvedId)
+    );
+    setLeaderCardId(leader?.card_id ?? null);
+    setBaseCardId(base?.card_id ?? null);
+  }
+
+  async function onSetCurrentDeck(deck: any) {
+    if (!hasTournament) return;
+    const deckId = Number(deck?.id ?? 0);
+    if (!Number.isFinite(deckId) || deckId <= 0) return;
+    const ownerUserId = Number(deck?.user_id ?? 0);
+
+    await submitTournamentApplication(activeTournamentId, {
+      deck_id: deckId,
+      season_id: selectedSeasonNumber ?? undefined,
+      user_id:
+        isAdmin && Number.isFinite(ownerUserId) && ownerUserId > 0
+          ? ownerUserId
+          : undefined,
+    });
+    await swrApplicationsResponse.mutate();
+    showNotification({
+      color: 'green',
+      title: 'Current deck updated',
+      message: '',
+    });
+  }
+
   function onClearCurrentDeck() {
     const hasDeckState =
       leaderCardId != null ||
@@ -2051,7 +2137,7 @@ export default function DeckbuilderPage({
       mainboard,
       sideboard,
     });
-    await swrDecksResponse.mutate();
+    await Promise.all([swrDecksResponse.mutate(), swrApplicationsResponse.mutate()]);
     showNotification({
       color: 'green',
       title: 'Tournament entry submitted',
@@ -3152,6 +3238,26 @@ export default function DeckbuilderPage({
             <Card mt="md" withBorder>
               <Stack>
                 <Title order={5}>Saved Decks</Title>
+                {!isAdminAllOwnersView ? (
+                  <Group justify="space-between" align="end">
+                    <Text size="sm" c="dimmed">
+                      {managedUserApplication == null
+                        ? 'Current Deck: Not set'
+                        : managedUserCurrentDeck != null
+                          ? `Current Deck: ${managedUserCurrentDeck.name}`
+                          : `Current Deck: ${managedUserApplication.deck_name ?? `Deck #${managedUserCurrentDeckId ?? '-'}`}`}
+                    </Text>
+                    {managedUserCurrentDeck != null ? (
+                      <Button size="xs" variant="light" onClick={() => loadDeckIntoEditor(managedUserCurrentDeck)}>
+                        Load Current Deck
+                      </Button>
+                    ) : null}
+                  </Group>
+                ) : (
+                  <Text size="sm" c="dimmed">
+                    Current deck badges are shown per user in the list below.
+                  </Text>
+                )}
                 <Textarea
                   label="Import SWUDB JSON"
                   placeholder='Paste JSON, then click "Import JSON"'
@@ -3173,6 +3279,11 @@ export default function DeckbuilderPage({
                         <Group justify="space-between" align="start">
                           <Stack gap={0}>
                             <Text fw={600}>{deck.name}</Text>
+                            {currentDeckIdByUserId[Number(deck.user_id ?? 0)] === Number(deck.id) ? (
+                              <Badge color="green" variant="light" mt={4}>
+                                Current Deck
+                              </Badge>
+                            ) : null}
                             <Text size="xs" c="dimmed">
                               {leaderLabel} / {baseLabel}
                             </Text>
@@ -3216,30 +3327,28 @@ export default function DeckbuilderPage({
                             <Button
                               size="xs"
                               variant="light"
-                              onClick={() => {
-                                setDeckName(deck.name);
-                                setMainboard(normalizeBoardEntries(deck.mainboard ?? {}, resolveCatalogCardId));
-                                setSideboard(normalizeBoardEntries(deck.sideboard ?? {}, resolveCatalogCardId));
-
-                                const leaderDeckValue = String(deck.leader ?? '');
-                                const baseDeckValue = String(deck.base ?? '');
-                                const leaderResolvedId = resolveCatalogCardId(leaderDeckValue);
-                                const baseResolvedId = resolveCatalogCardId(baseDeckValue);
-                                const leader = allCards.find(
-                                  (card: CardItem) =>
-                                    card.type.toLowerCase() === 'leader' &&
-                                    (card.name === leaderDeckValue || card.card_id === leaderResolvedId)
-                                );
-                                const base = allCards.find(
-                                  (card: CardItem) =>
-                                    card.type.toLowerCase() === 'base' &&
-                                    (card.name === baseDeckValue || card.card_id === baseResolvedId)
-                                );
-                                setLeaderCardId(leader?.card_id ?? null);
-                                setBaseCardId(base?.card_id ?? null);
-                              }}
+                              onClick={() => loadDeckIntoEditor(deck)}
                             >
                               Load
+                            </Button>
+                            <Button
+                              size="xs"
+                              variant={
+                                currentDeckIdByUserId[Number(deck.user_id ?? 0)] === Number(deck.id)
+                                  ? 'filled'
+                                  : 'outline'
+                              }
+                              color={
+                                currentDeckIdByUserId[Number(deck.user_id ?? 0)] === Number(deck.id)
+                                  ? 'green'
+                                  : undefined
+                              }
+                              onClick={async () => onSetCurrentDeck(deck)}
+                              disabled={!hasTournament}
+                            >
+                              {currentDeckIdByUserId[Number(deck.user_id ?? 0)] === Number(deck.id)
+                                ? 'Current Deck'
+                                : 'Set Current'}
                             </Button>
                             <Button
                               size="xs"
@@ -3257,7 +3366,10 @@ export default function DeckbuilderPage({
                               onClick={async () => {
                                 const response = await deleteDeck(activeTournamentId, deck.id);
                                 if (response == null) return;
-                                await swrDecksResponse.mutate();
+                                await Promise.all([
+                                  swrDecksResponse.mutate(),
+                                  swrApplicationsResponse.mutate(),
+                                ]);
                                 showNotification({
                                   color: 'green',
                                   title: 'Deck deleted',
