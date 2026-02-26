@@ -50,7 +50,6 @@ import {
 } from '@services/adapter';
 import {
   deleteDeck,
-  exportDeckSwuDb,
   importDeckSwuDb,
   renameDeck,
   saveDeck,
@@ -103,6 +102,7 @@ type CardSortKey =
 type SortDirection = 'asc' | 'desc';
 type AnalyticsSortBy = 'label' | 'value';
 type RandomBaseAspect = 'aggression' | 'command' | 'cunning' | 'vigilance';
+type LeaderBaseViewMode = 'main' | 'leaders_bases';
 
 const HEROIC_ASPECT_VALUES = new Set(['heroic', 'heroism']);
 const VILLAINY_ASPECT_VALUES = new Set(['villainy']);
@@ -496,6 +496,32 @@ function buildSwudbCardPoolEntries(
     .map(([id, count]) => ({ id, count }));
 }
 
+function buildSwudbDeckClipboardPayload(params: {
+  name: string;
+  author?: string | null;
+  leaderCardId: string;
+  baseCardId: string;
+  mainboard: Record<string, number>;
+  sideboard: Record<string, number>;
+}) {
+  const metadata: Record<string, string> = { name: params.name };
+  const author = String(params.author ?? '').trim();
+  if (author !== '') {
+    metadata.author = author;
+  }
+  return {
+    metadata,
+    leader: { id: toSwudbCardId(params.leaderCardId), count: 1 as const },
+    base: { id: toSwudbCardId(params.baseCardId), count: 1 as const },
+    deck: buildSwudbCardPoolEntries(
+      Object.entries(params.mainboard).map(([card_id, quantity]) => ({ card_id, quantity }))
+    ),
+    sideboard: buildSwudbCardPoolEntries(
+      Object.entries(params.sideboard).map(([card_id, quantity]) => ({ card_id, quantity }))
+    ),
+  };
+}
+
 export default function DeckbuilderPage({
   standalone = false,
 }: {
@@ -761,6 +787,7 @@ export default function DeckbuilderPage({
   const [selectedRarities, setSelectedRarities] = useState<string[]>([]);
   const [selectedSets, setSelectedSets] = useState<string[]>([]);
   const [arenaFilter, setArenaFilter] = useState<string | null>(null);
+  const [leaderBaseViewMode, setLeaderBaseViewMode] = useState<LeaderBaseViewMode>('main');
 
   const [showCardImage, setShowCardImage] = useState(false);
   const [onlyLegalCards, setOnlyLegalCards] = useState(false);
@@ -1003,6 +1030,11 @@ export default function DeckbuilderPage({
         const keywords = (card.keywords ?? []).map((value) => value.toLowerCase());
         const arenas = (card.arenas ?? []).map((value) => value.toLowerCase());
         const rarity = (card.rarity ?? '').toLowerCase();
+        const isLeaderCard = type === 'leader';
+        const isBaseCard = type === 'base';
+
+        if (leaderBaseViewMode === 'main' && (isLeaderCard || isBaseCard)) return false;
+        if (leaderBaseViewMode === 'leaders_bases' && !isLeaderCard && !isBaseCard) return false;
 
         if (normalizedQuery !== '') {
           const haystack = `${name} ${variant} ${rules} ${type} ${rarity} ${aspects.join(' ')} ${traits.join(' ')} ${keywords.join(' ')} ${arenas.join(' ')} ${card.card_id.toLowerCase()}`;
@@ -1046,7 +1078,7 @@ export default function DeckbuilderPage({
         if (selectedCostSet.size > 0 && (card.cost == null || !selectedCostSet.has(card.cost))) {
           return false;
         }
-        if (selectedTypeSet.size > 0 && !selectedTypeSet.has(card.type)) return false;
+        if (leaderBaseViewMode === 'main' && selectedTypeSet.size > 0 && !selectedTypeSet.has(card.type)) return false;
         if (selectedRaritySet.size > 0 && !selectedRaritySet.has(card.rarity)) return false;
         if (selectedSetSet.size > 0 && !selectedSetSet.has(card.set_code)) return false;
         if (arenaFilter != null && !(card.arenas ?? []).includes(arenaFilter)) return false;
@@ -1074,6 +1106,7 @@ export default function DeckbuilderPage({
     selectedRarities,
     selectedSets,
     arenaFilter,
+    leaderBaseViewMode,
     onlyCardsInPool,
     cardPoolMap,
     onlyLegalCards,
@@ -1151,8 +1184,17 @@ export default function DeckbuilderPage({
       }),
     [effectiveCardListVisibleLines, cardListVisibleLinesMode]
   );
+  const showLeaderBaseTiles = leaderBaseViewMode === 'leaders_bases';
   const cardListStart = cappedFilteredCards.length < 1 ? 0 : (cardListPage - 1) * cardListRowsPerPage + 1;
   const cardListEnd = Math.min(cardListPage * cardListRowsPerPage, cappedFilteredCards.length);
+  const visibleLeaderCards = useMemo(
+    () => visibleFilteredCards.filter((card: CardItem) => card.type.toLowerCase() === 'leader'),
+    [visibleFilteredCards]
+  );
+  const visibleBaseCards = useMemo(
+    () => visibleFilteredCards.filter((card: CardItem) => card.type.toLowerCase() === 'base'),
+    [visibleFilteredCards]
+  );
 
   useEffect(() => {
     setCardListPage(1);
@@ -1178,6 +1220,13 @@ export default function DeckbuilderPage({
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(CARD_LIST_VISIBLE_LINES_MODE_STORAGE_KEY, cardListVisibleLinesMode);
   }, [cardListVisibleLinesMode]);
+
+  useEffect(() => {
+    const hasLeader = String(leaderCardId ?? '').trim() !== '';
+    const hasBase = String(baseCardId ?? '').trim() !== '';
+    const nextMode: LeaderBaseViewMode = hasLeader && hasBase ? 'main' : 'leaders_bases';
+    setLeaderBaseViewMode((prev) => (prev === nextMode ? prev : nextMode));
+  }, [leaderCardId, baseCardId]);
 
   const deckUsageByCard = useMemo(() => {
     const usage: Record<string, { main: number; side: number; total: number }> = {};
@@ -1393,12 +1442,17 @@ export default function DeckbuilderPage({
     });
   }
 
-  async function onExportSwuDb(deckId: number) {
-    if (!hasTournament) return;
-    const response = await exportDeckSwuDb(activeTournamentId, deckId);
-    // @ts-ignore
-    const payload = response?.data?.data ?? response?.data;
-    if (payload == null) return;
+  async function onExportSwuDb(deck: any) {
+    if (!hasTournament || deck == null) return;
+    const deckName = String(deck?.name ?? '').trim() || 'Deck';
+    const payload = buildSwudbDeckClipboardPayload({
+      name: deckName,
+      author: String(deck?.user_name ?? '').trim(),
+      leaderCardId: String(deck?.leader ?? ''),
+      baseCardId: String(deck?.base ?? ''),
+      mainboard: deck?.mainboard ?? {},
+      sideboard: deck?.sideboard ?? {},
+    });
     const json = JSON.stringify(payload, null, 2);
     const copied = await copyTextToClipboard(json);
     if (!copied) {
@@ -1962,23 +2016,14 @@ export default function DeckbuilderPage({
 
     const normalizedDeckName = deckName.trim() === '' ? 'League Deck' : deckName.trim();
     const authorName = String(swrCurrentUserResponse.data?.data?.name ?? '').trim();
-    const deckEntries = buildSwudbCardPoolEntries(
-      Object.entries(mainboard).map(([card_id, quantity]) => ({ card_id, quantity }))
-    );
-    const sideboardEntries = buildSwudbCardPoolEntries(
-      Object.entries(sideboard).map(([card_id, quantity]) => ({ card_id, quantity }))
-    );
-    const payload: Record<string, unknown> = {
-      metadata: {
-        name: normalizedDeckName,
-        ...(authorName === '' ? {} : { author: authorName }),
-      },
+    const payload = buildSwudbDeckClipboardPayload({
       name: normalizedDeckName,
-      leader: { id: toSwudbCardId(leaderCardId), count: 1 },
-      base: { id: toSwudbCardId(baseCardId), count: 1 },
-      deck: deckEntries,
-      sideboard: sideboardEntries,
-    };
+      author: authorName,
+      leaderCardId,
+      baseCardId,
+      mainboard,
+      sideboard,
+    });
     const copied = await copyTextToClipboard(JSON.stringify(payload, null, 2));
     if (!copied) {
       showNotification({
@@ -2501,6 +2546,23 @@ export default function DeckbuilderPage({
                   </Stack>
                 </Group>
                 <Group>
+                  <Stack gap={4} style={{ minWidth: '22rem' }}>
+                    <Text size="sm" fw={600}>
+                      Leader/Base View
+                    </Text>
+                    <SegmentedControl
+                      value={leaderBaseViewMode}
+                      onChange={(value) =>
+                        setLeaderBaseViewMode(
+                          value === 'leaders_bases' ? value : 'main'
+                        )
+                      }
+                      data={[
+                        { value: 'main', label: 'Main Cards' },
+                        { value: 'leaders_bases', label: 'Leader & Base Tiles' },
+                      ]}
+                    />
+                  </Stack>
                   <Switch
                     label="Only legal cards (leader/base aspects)"
                     checked={onlyLegalCards}
@@ -2537,183 +2599,374 @@ export default function DeckbuilderPage({
                       size="sm"
                     />
                   </Group>
-                  <Table highlightOnHover stickyHeader>
-                    <Table.Thead>
-                      <Table.Tr>
-                        {showCardImage && <Table.Th>Image</Table.Th>}
-                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('name')}>
-                          <Group gap={4} wrap="nowrap">
-                            <Text size="sm" fw={600}>Name</Text>
-                            {sortIndicatorFor('name')}
-                          </Group>
-                        </Table.Th>
-                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('type')}>
-                          <Group gap={4} wrap="nowrap">
-                            <Text size="sm" fw={600}>Type</Text>
-                            {sortIndicatorFor('type')}
-                          </Group>
-                        </Table.Th>
-                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('rarity')}>
-                          <Group gap={4} wrap="nowrap">
-                            <Text size="sm" fw={600}>Rarity</Text>
-                            {sortIndicatorFor('rarity')}
-                          </Group>
-                        </Table.Th>
-                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('cost')}>
-                          <Group gap={4} wrap="nowrap">
-                            <Text size="sm" fw={600}>Cost</Text>
-                            {sortIndicatorFor('cost')}
-                          </Group>
-                        </Table.Th>
-                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('power')}>
-                          <Group gap={4} wrap="nowrap">
-                            <Text size="sm" fw={600}>Power</Text>
-                            {sortIndicatorFor('power')}
-                          </Group>
-                        </Table.Th>
-                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('hp')}>
-                          <Group gap={4} wrap="nowrap">
-                            <Text size="sm" fw={600}>HP</Text>
-                            {sortIndicatorFor('hp')}
-                          </Group>
-                        </Table.Th>
-                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('aspects')}>
-                          <Group gap={4} wrap="nowrap">
-                            <Text size="sm" fw={600}>Aspects</Text>
-                            {sortIndicatorFor('aspects')}
-                          </Group>
-                        </Table.Th>
-                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('arena')}>
-                          <Group gap={4} wrap="nowrap">
-                            <Text size="sm" fw={600}>Arena</Text>
-                            {sortIndicatorFor('arena')}
-                          </Group>
-                        </Table.Th>
-                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('set')}>
-                          <Group gap={4} wrap="nowrap">
-                            <Text size="sm" fw={600}>Set</Text>
-                            {sortIndicatorFor('set')}
-                          </Group>
-                        </Table.Th>
-                        <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('pool')}>
-                          <Group gap={4} wrap="nowrap">
-                            <Text size="sm" fw={600}>Pool</Text>
-                            {sortIndicatorFor('pool')}
-                          </Group>
-                        </Table.Th>
-                        <Table.Th>Main</Table.Th>
-                        <Table.Th>Side</Table.Th>
-                        <Table.Th></Table.Th>
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {visibleFilteredCards.map((card: CardItem) => {
-                        const currentQty = getPoolQuantity(card.card_id);
-                        const mainQty = mainboard[card.card_id] ?? 0;
-                        const sideQty = sideboard[card.card_id] ?? 0;
-                        const totalQty = mainQty + sideQty;
-                        const cardIsLeaderOrBase = isLeaderOrBase(card);
-                        const rowHighlightColor =
-                          showPoolWarnings && totalQty > 0
-                            ? currentQty <= 0
-                              ? 'rgba(255, 0, 0, 0.12)'
-                              : totalQty > currentQty
-                                ? 'rgba(255, 215, 0, 0.20)'
-                                : undefined
-                            : undefined;
-                        return (
-                          <Table.Tr key={card.card_id} style={rowHighlightColor ? { backgroundColor: rowHighlightColor } : undefined}>
-                            {showCardImage && (
+                  {showLeaderBaseTiles ? (
+                    <Stack gap="md">
+                      <Group justify="space-between" align="center">
+                        <Text size="sm" c="dimmed">
+                          Leader tiles are shown first, then base tiles. Use the button on a tile to assign it to your current deck.
+                        </Text>
+                        <Button
+                          size="xs"
+                          variant="light"
+                          onClick={() => setLeaderBaseViewMode('main')}
+                        >
+                          Hide Leader/Base Tiles
+                        </Button>
+                      </Group>
+
+                      <Stack gap="xs">
+                        <Group justify="space-between" align="end">
+                          <Text fw={700}>Leaders</Text>
+                          <Text size="xs" c="dimmed">
+                            {visibleLeaderCards.length} shown
+                          </Text>
+                        </Group>
+                        {visibleLeaderCards.length < 1 ? (
+                          <Text size="sm" c="dimmed">
+                            No leaders match the current filters.
+                          </Text>
+                        ) : (
+                          <Grid>
+                            {visibleLeaderCards.map((card: CardItem) => {
+                              const currentQty = getPoolQuantity(card.card_id);
+                              const isSelectedCard = leaderCardId === card.card_id;
+                              return (
+                                <Grid.Col key={card.card_id} span={{ base: 12, sm: 6, xl: 4 }}>
+                                  <Card
+                                    withBorder
+                                    radius="md"
+                                    style={
+                                      isSelectedCard
+                                        ? { borderColor: 'var(--mantine-color-green-6)', borderWidth: 2 }
+                                        : undefined
+                                    }
+                                  >
+                                    <Stack gap="sm">
+                                      {card.image_url != null ? (
+                                        <Image
+                                          src={card.image_url}
+                                          h={220}
+                                          fit="cover"
+                                          radius="sm"
+                                          style={{ cursor: 'zoom-in' }}
+                                          onClick={() => {
+                                            setPreviewImageLabel(
+                                              `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''}`
+                                            );
+                                            setPreviewImageUrl(card.image_url ?? null);
+                                          }}
+                                        />
+                                      ) : (
+                                        <Text size="sm" c="dimmed">
+                                          No image
+                                        </Text>
+                                      )}
+                                      <Stack gap={2}>
+                                        <Text fw={700}>
+                                          {card.name}
+                                          {card.character_variant ? ` - ${card.character_variant}` : ''}
+                                        </Text>
+                                        <Text size="xs" c="dimmed">
+                                          {card.set_code.toUpperCase()} • {card.rarity || '-'} • {card.card_id}
+                                        </Text>
+                                        <AspectIcons aspects={card.aspects ?? []} />
+                                      </Stack>
+                                      <Group justify="space-between" wrap="nowrap">
+                                        <Text size="sm">Pool</Text>
+                                        <NumberInput
+                                          value={currentQty}
+                                          min={0}
+                                          max={99}
+                                          w={96}
+                                          disabled={isAdminAllOwnersView}
+                                          onChange={(value) => {
+                                            const numeric = Number(value ?? 0);
+                                            addToPool(card.card_id, Number.isNaN(numeric) ? 0 : numeric);
+                                          }}
+                                        />
+                                      </Group>
+                                      <Button
+                                        variant={isSelectedCard ? 'filled' : 'light'}
+                                        color="green"
+                                        onClick={() => setLeaderCardId(card.card_id)}
+                                      >
+                                        {isSelectedCard ? 'Leader Selected' : 'Set as Leader'}
+                                      </Button>
+                                    </Stack>
+                                  </Card>
+                                </Grid.Col>
+                              );
+                            })}
+                          </Grid>
+                        )}
+                      </Stack>
+
+                      <Stack gap="xs">
+                        <Group justify="space-between" align="end">
+                          <Text fw={700}>Bases</Text>
+                          <Text size="xs" c="dimmed">
+                            {visibleBaseCards.length} shown
+                          </Text>
+                        </Group>
+                        {visibleBaseCards.length < 1 ? (
+                          <Text size="sm" c="dimmed">
+                            No bases match the current filters.
+                          </Text>
+                        ) : (
+                          <Grid>
+                            {visibleBaseCards.map((card: CardItem) => {
+                              const currentQty = getPoolQuantity(card.card_id);
+                              const isSelectedCard = baseCardId === card.card_id;
+                              return (
+                                <Grid.Col key={card.card_id} span={{ base: 12, sm: 6, xl: 4 }}>
+                                  <Card
+                                    withBorder
+                                    radius="md"
+                                    style={
+                                      isSelectedCard
+                                        ? { borderColor: 'var(--mantine-color-green-6)', borderWidth: 2 }
+                                        : undefined
+                                    }
+                                  >
+                                    <Stack gap="sm">
+                                      {card.image_url != null ? (
+                                        <Image
+                                          src={card.image_url}
+                                          h={220}
+                                          fit="cover"
+                                          radius="sm"
+                                          style={{ cursor: 'zoom-in' }}
+                                          onClick={() => {
+                                            setPreviewImageLabel(
+                                              `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''}`
+                                            );
+                                            setPreviewImageUrl(card.image_url ?? null);
+                                          }}
+                                        />
+                                      ) : (
+                                        <Text size="sm" c="dimmed">
+                                          No image
+                                        </Text>
+                                      )}
+                                      <Stack gap={2}>
+                                        <Text fw={700}>
+                                          {card.name}
+                                          {card.character_variant ? ` - ${card.character_variant}` : ''}
+                                        </Text>
+                                        <Text size="xs" c="dimmed">
+                                          {card.set_code.toUpperCase()} • {card.rarity || '-'} • {card.card_id}
+                                        </Text>
+                                        <AspectIcons aspects={card.aspects ?? []} />
+                                      </Stack>
+                                      <Group justify="space-between" wrap="nowrap">
+                                        <Text size="sm">Pool</Text>
+                                        <NumberInput
+                                          value={currentQty}
+                                          min={0}
+                                          max={99}
+                                          w={96}
+                                          disabled={isAdminAllOwnersView}
+                                          onChange={(value) => {
+                                            const numeric = Number(value ?? 0);
+                                            addToPool(card.card_id, Number.isNaN(numeric) ? 0 : numeric);
+                                          }}
+                                        />
+                                      </Group>
+                                      <Button
+                                        variant={isSelectedCard ? 'filled' : 'light'}
+                                        color="green"
+                                        onClick={() => setBaseCardId(card.card_id)}
+                                      >
+                                        {isSelectedCard ? 'Base Selected' : 'Set as Base'}
+                                      </Button>
+                                    </Stack>
+                                  </Card>
+                                </Grid.Col>
+                              );
+                            })}
+                          </Grid>
+                        )}
+                      </Stack>
+                    </Stack>
+                  ) : (
+                    <Table highlightOnHover stickyHeader>
+                      <Table.Thead>
+                        <Table.Tr>
+                          {showCardImage && <Table.Th>Image</Table.Th>}
+                          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('name')}>
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600}>Name</Text>
+                              {sortIndicatorFor('name')}
+                            </Group>
+                          </Table.Th>
+                          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('type')}>
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600}>Type</Text>
+                              {sortIndicatorFor('type')}
+                            </Group>
+                          </Table.Th>
+                          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('rarity')}>
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600}>Rarity</Text>
+                              {sortIndicatorFor('rarity')}
+                            </Group>
+                          </Table.Th>
+                          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('cost')}>
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600}>Cost</Text>
+                              {sortIndicatorFor('cost')}
+                            </Group>
+                          </Table.Th>
+                          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('power')}>
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600}>Power</Text>
+                              {sortIndicatorFor('power')}
+                            </Group>
+                          </Table.Th>
+                          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('hp')}>
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600}>HP</Text>
+                              {sortIndicatorFor('hp')}
+                            </Group>
+                          </Table.Th>
+                          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('aspects')}>
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600}>Aspects</Text>
+                              {sortIndicatorFor('aspects')}
+                            </Group>
+                          </Table.Th>
+                          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('arena')}>
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600}>Arena</Text>
+                              {sortIndicatorFor('arena')}
+                            </Group>
+                          </Table.Th>
+                          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('set')}>
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600}>Set</Text>
+                              {sortIndicatorFor('set')}
+                            </Group>
+                          </Table.Th>
+                          <Table.Th style={{ cursor: 'pointer' }} onClick={() => toggleCardSort('pool')}>
+                            <Group gap={4} wrap="nowrap">
+                              <Text size="sm" fw={600}>Pool</Text>
+                              {sortIndicatorFor('pool')}
+                            </Group>
+                          </Table.Th>
+                          <Table.Th>Main</Table.Th>
+                          <Table.Th>Side</Table.Th>
+                          <Table.Th></Table.Th>
+                        </Table.Tr>
+                      </Table.Thead>
+                      <Table.Tbody>
+                        {visibleFilteredCards.map((card: CardItem) => {
+                          const currentQty = getPoolQuantity(card.card_id);
+                          const mainQty = mainboard[card.card_id] ?? 0;
+                          const sideQty = sideboard[card.card_id] ?? 0;
+                          const totalQty = mainQty + sideQty;
+                          const cardIsLeaderOrBase = isLeaderOrBase(card);
+                          const rowHighlightColor =
+                            showPoolWarnings && totalQty > 0
+                              ? currentQty <= 0
+                                ? 'rgba(255, 0, 0, 0.12)'
+                                : totalQty > currentQty
+                                  ? 'rgba(255, 215, 0, 0.20)'
+                                  : undefined
+                              : undefined;
+                          return (
+                            <Table.Tr key={card.card_id} style={rowHighlightColor ? { backgroundColor: rowHighlightColor } : undefined}>
+                              {showCardImage && (
+                                <Table.Td>
+                                  {card.image_url != null ? (
+                                    <Image
+                                      src={card.image_url}
+                                      w={64}
+                                      h={90}
+                                      radius="sm"
+                                      style={{ cursor: 'zoom-in' }}
+                                      onClick={() => {
+                                        setPreviewImageLabel(
+                                          `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''}`
+                                        );
+                                        setPreviewImageUrl(card.image_url ?? null);
+                                      }}
+                                    />
+                                  ) : (
+                                    <Text size="xs" c="dimmed">
+                                      No image
+                                    </Text>
+                                  )}
+                                </Table.Td>
+                              )}
                               <Table.Td>
-                                {card.image_url != null ? (
-                                  <Image
-                                    src={card.image_url}
-                                    w={64}
-                                    h={90}
-                                    radius="sm"
-                                    style={{ cursor: 'zoom-in' }}
-                                    onClick={() => {
-                                      setPreviewImageLabel(
-                                        `${card.name}${card.character_variant ? ` - ${card.character_variant}` : ''}`
-                                      );
-                                      setPreviewImageUrl(card.image_url ?? null);
+                                <Stack gap={0}>
+                                  <Text fw={600}>{card.name}</Text>
+                                  {card.character_variant != null && card.character_variant !== '' && (
+                                    <Text size="xs" c="dimmed">
+                                      {card.character_variant}
+                                    </Text>
+                                  )}
+                                  <Group gap={6}>
+                                    <Text size="xs" c="dimmed">
+                                      {card.card_id}
+                                    </Text>
+                                  </Group>
+                                </Stack>
+                              </Table.Td>
+                              <Table.Td>{card.type}</Table.Td>
+                              <Table.Td>{card.rarity || '-'}</Table.Td>
+                              <Table.Td>{card.cost ?? '-'}</Table.Td>
+                              <Table.Td>{card.power ?? '-'}</Table.Td>
+                              <Table.Td>{card.hp ?? '-'}</Table.Td>
+                              <Table.Td>
+                                <AspectIcons aspects={card.aspects ?? []} />
+                              </Table.Td>
+                              <Table.Td>{(card.arenas ?? []).join(', ') || '-'}</Table.Td>
+                              <Table.Td>{card.set_code.toUpperCase()}</Table.Td>
+                              <Table.Td>
+                                <Group gap={4} wrap="nowrap">
+                                  <NumberInput
+                                    value={currentQty}
+                                    min={0}
+                                    max={99}
+                                    w={86}
+                                    disabled={isAdminAllOwnersView}
+                                    onChange={(value) => {
+                                      const numeric = Number(value ?? 0);
+                                      addToPool(card.card_id, Number.isNaN(numeric) ? 0 : numeric);
                                     }}
                                   />
-                                ) : (
-                                  <Text size="xs" c="dimmed">
-                                    No image
-                                  </Text>
-                                )}
-                              </Table.Td>
-                            )}
-                            <Table.Td>
-                              <Stack gap={0}>
-                                <Text fw={600}>{card.name}</Text>
-                                {card.character_variant != null && card.character_variant !== '' && (
-                                  <Text size="xs" c="dimmed">
-                                    {card.character_variant}
-                                  </Text>
-                                )}
-                                <Group gap={6}>
-                                  <Text size="xs" c="dimmed">
-                                    {card.card_id}
-                                  </Text>
                                 </Group>
-                              </Stack>
-                            </Table.Td>
-                            <Table.Td>{card.type}</Table.Td>
-                            <Table.Td>{card.rarity || '-'}</Table.Td>
-                            <Table.Td>{card.cost ?? '-'}</Table.Td>
-                            <Table.Td>{card.power ?? '-'}</Table.Td>
-                            <Table.Td>{card.hp ?? '-'}</Table.Td>
-                            <Table.Td>
-                              <AspectIcons aspects={card.aspects ?? []} />
-                            </Table.Td>
-                            <Table.Td>{(card.arenas ?? []).join(', ') || '-'}</Table.Td>
-                            <Table.Td>{card.set_code.toUpperCase()}</Table.Td>
-                            <Table.Td>
-                              <Group gap={4} wrap="nowrap">
-                                <NumberInput
-                                  value={currentQty}
-                                  min={0}
-                                  max={99}
-                                  w={86}
-                                  disabled={isAdminAllOwnersView}
-                                  onChange={(value) => {
-                                    const numeric = Number(value ?? 0);
-                                    addToPool(card.card_id, Number.isNaN(numeric) ? 0 : numeric);
-                                  }}
-                                />
-                              </Group>
-                            </Table.Td>
-                            <Table.Td>{mainQty}</Table.Td>
-                            <Table.Td>{sideQty}</Table.Td>
-                            <Table.Td>
-                              <Group gap={4} justify="flex-end">
-                                <ActionIcon
-                                  variant="light"
-                                  color="green"
-                                  disabled={cardIsLeaderOrBase}
-                                  onClick={() => addCardToDeck(card.card_id, 'main')}
-                                  title={cardIsLeaderOrBase ? 'Leader/Base cannot be in main deck' : 'Add to mainboard'}
-                                >
-                                  <IconPlus size={14} />
-                                </ActionIcon>
-                                <ActionIcon
-                                  variant="light"
-                                  color="blue"
-                                  onClick={() => addCardToDeck(card.card_id, 'side')}
-                                  title="Add to sideboard"
-                                >
-                                  <IconPlus size={14} />
-                                </ActionIcon>
-                              </Group>
-                            </Table.Td>
-                          </Table.Tr>
-                        );
-                      })}
-                    </Table.Tbody>
-                  </Table>
+                              </Table.Td>
+                              <Table.Td>{mainQty}</Table.Td>
+                              <Table.Td>{sideQty}</Table.Td>
+                              <Table.Td>
+                                <Group gap={4} justify="flex-end">
+                                  <ActionIcon
+                                    variant="light"
+                                    color="green"
+                                    disabled={cardIsLeaderOrBase}
+                                    onClick={() => addCardToDeck(card.card_id, 'main')}
+                                    title={cardIsLeaderOrBase ? 'Leader/Base cannot be in main deck' : 'Add to mainboard'}
+                                  >
+                                    <IconPlus size={14} />
+                                  </ActionIcon>
+                                  <ActionIcon
+                                    variant="light"
+                                    color="blue"
+                                    onClick={() => addCardToDeck(card.card_id, 'side')}
+                                    title="Add to sideboard"
+                                  >
+                                    <IconPlus size={14} />
+                                  </ActionIcon>
+                                </Group>
+                              </Table.Td>
+                            </Table.Tr>
+                          );
+                        })}
+                      </Table.Tbody>
+                    </Table>
+                  )}
                 </ScrollArea>
                 <Group grow>
                   <Select
@@ -2995,7 +3248,7 @@ export default function DeckbuilderPage({
                             >
                               Rename
                             </Button>
-                            <Button size="xs" variant="subtle" onClick={() => onExportSwuDb(deck.id)}>
+                            <Button size="xs" variant="subtle" onClick={() => onExportSwuDb(deck)}>
                               Copy JSON
                             </Button>
                             <ActionIcon
