@@ -129,6 +129,10 @@ function normalizeRoundName(value: unknown): string {
     .replace(/\s+/g, ' ');
 }
 
+function normalizeNameLookupKey(value: string | null | undefined): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
 function normalizeCardIdLookupKey(value: string | null | undefined) {
   return String(value ?? '')
     .trim()
@@ -295,6 +299,7 @@ function ScheduleRow({
   submittableByUser,
   winnerByStageItemId,
   resolveDeckPreviewForTeam,
+  resolveSubmittedDeckNameForTeam,
   baseTrackerHref,
   karabastLobbyUrl,
   onCopyKarabastLobbyUrl,
@@ -309,6 +314,7 @@ function ScheduleRow({
   submittableByUser: boolean;
   winnerByStageItemId: Record<number, string>;
   resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
+  resolveSubmittedDeckNameForTeam: (teamName: string | null | undefined) => string;
   baseTrackerHref: string;
   karabastLobbyUrl: string | null;
   onCopyKarabastLobbyUrl: () => Promise<void>;
@@ -346,6 +352,14 @@ function ScheduleRow({
     team2Name !== '' ? team2Name : formatMatchInput2(t, stageItemsLookup, matchesLookup, match);
   const team1DeckName = String(match?.stage_item_input1_deck?.name ?? '').trim();
   const team2DeckName = String(match?.stage_item_input2_deck?.name ?? '').trim();
+  const team1DeckNameForDisplay =
+    team1DeckName !== ''
+      ? team1DeckName
+      : resolveSubmittedDeckNameForTeam(team1Name !== '' ? team1Name : team1Label);
+  const team2DeckNameForDisplay =
+    team2DeckName !== ''
+      ? team2DeckName
+      : resolveSubmittedDeckNameForTeam(team2Name !== '' ? team2Name : team2Label);
   const karabastHref = karabastLobbyUrl ?? 'https://karabast.net/';
 
   const renderTeamLabel = (
@@ -551,7 +565,7 @@ function ScheduleRow({
           <Stack pt="sm">
             <Grid>
               <Grid.Col span="auto" pb="0rem">
-                {renderTeamLabel(team1Label, team1Name, team1DeckName)}
+                {renderTeamLabel(team1Label, team1Name, team1DeckNameForDisplay)}
               </Grid.Col>
               <Grid.Col span="content" pb="0rem">
                 <div
@@ -570,7 +584,7 @@ function ScheduleRow({
             </Grid>
             <Grid mb="0rem">
               <Grid.Col span="auto" pb="0rem">
-                {renderTeamLabel(team2Label, team2Name, team2DeckName)}
+                {renderTeamLabel(team2Label, team2Name, team2DeckNameForDisplay)}
               </Grid.Col>
               <Grid.Col span="content" pb="0rem">
                 <div
@@ -632,6 +646,7 @@ function Schedule({
   isSubmittableByUser,
   winnerByStageItemId,
   resolveDeckPreviewForTeam,
+  resolveSubmittedDeckNameForTeam,
   buildBaseTrackerHref,
   getKarabastLobbyUrl,
   copyKarabastLobbyUrl,
@@ -646,6 +661,7 @@ function Schedule({
   isSubmittableByUser: (match: any) => boolean;
   winnerByStageItemId: Record<number, string>;
   resolveDeckPreviewForTeam: (teamName: string | null | undefined) => TeamDeckPreview | null;
+  resolveSubmittedDeckNameForTeam: (teamName: string | null | undefined) => string;
   buildBaseTrackerHref: (match: any) => string;
   getKarabastLobbyUrl: (match: any) => string | null;
   copyKarabastLobbyUrl: (match: any) => Promise<void>;
@@ -697,6 +713,7 @@ function Schedule({
         submittableByUser={isSubmittableByUser(data.match)}
         winnerByStageItemId={winnerByStageItemId}
         resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
+        resolveSubmittedDeckNameForTeam={resolveSubmittedDeckNameForTeam}
         baseTrackerHref={buildBaseTrackerHref(data.match)}
         karabastLobbyUrl={getKarabastLobbyUrl(data.match)}
         onCopyKarabastLobbyUrl={async () => copyKarabastLobbyUrl(data.match)}
@@ -1260,15 +1277,22 @@ export default function ResultsPage() {
   const applicationByUserName = useMemo(() => {
     const applications = swrApplicationsResponse.data?.data ?? [];
     return applications.reduce((result: Record<string, any>, row: any) => {
-      const key = String(row?.user_name ?? '').trim().toLowerCase();
-      if (key === '' || result[key] != null) return result;
-      result[key] = row;
+      [
+        row?.user_name,
+        row?.participant_name,
+        row?.team_name,
+        row?.name,
+      ].forEach((nameCandidate) => {
+        const key = normalizeNameLookupKey(nameCandidate);
+        if (key === '' || result[key] != null) return;
+        result[key] = row;
+      });
       return result;
     }, {});
   }, [swrApplicationsResponse.data?.data]);
 
   const resolveDeckPreviewForTeam = (teamName: string | null | undefined): TeamDeckPreview | null => {
-    const key = String(teamName ?? '').trim().toLowerCase();
+    const key = normalizeNameLookupKey(teamName);
     if (key === '') return null;
     const application = applicationByUserName[key];
     if (application == null) return null;
@@ -1283,6 +1307,11 @@ export default function ResultsPage() {
       leaderImageUrl: cardLookupById[leaderLookupKey]?.image_url ?? null,
       baseImageUrl: cardLookupById[baseLookupKey]?.image_url ?? null,
     };
+  };
+  const resolveSubmittedDeckNameForTeam = (teamName: string | null | undefined): string => {
+    const key = normalizeNameLookupKey(teamName);
+    if (key === '') return '';
+    return String(applicationByUserName[key]?.deck_name ?? '').trim();
   };
   const winnerByStageItemId = useMemo(
     () =>
@@ -2262,6 +2291,7 @@ export default function ResultsPage() {
             isSubmittableByUser={(matchToCheck: any) => !isAdmin && userIsInMatch(matchToCheck)}
             winnerByStageItemId={winnerByStageItemId}
             resolveDeckPreviewForTeam={resolveDeckPreviewForTeam}
+            resolveSubmittedDeckNameForTeam={resolveSubmittedDeckNameForTeam}
             buildBaseTrackerHref={buildBaseTrackerHref}
             getKarabastLobbyUrl={getKarabastLobbyUrl}
             copyKarabastLobbyUrl={copyKarabastLobbyUrl}
