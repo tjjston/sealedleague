@@ -42,8 +42,10 @@ import {
   getLeagueCardsGlobal,
   getLeagueCards,
   getLeagueAdminUsers,
+  getLeagueDashboardBackground,
   getLeagueDecks,
   getLeagueMetaAnalysis,
+  getLeagueSeasonStandings,
   getLeagueSeasons,
   getTournamentApplications,
   getTournaments,
@@ -562,6 +564,8 @@ export default function DeckbuilderPage({
     true
   );
   const adminUsers = swrAdminUsersResponse.data?.data ?? [];
+  const swrSeasonStandingsResponse = getLeagueSeasonStandings(hasTournament ? activeTournamentId : null);
+  const seasonStandingsRows = swrSeasonStandingsResponse.data?.data?.standings ?? [];
   const targetUserId =
     isAdmin &&
     selectedTargetUserId != null &&
@@ -571,6 +575,67 @@ export default function DeckbuilderPage({
       : null;
   const isAdminAllOwnersView = isAdmin && targetUserId == null;
   const currentUserId = Number(swrCurrentUserResponse.data?.data?.id ?? 0);
+  const swrLeagueDashboardBackgroundResponse = getLeagueDashboardBackground(
+    hasTournament ? activeTournamentId : null
+  );
+  const allowPlayerCrossUserViews = Boolean(
+    swrLeagueDashboardBackgroundResponse.data?.data?.allow_player_cross_user_views ?? true
+  );
+  const viewableUsers = useMemo(() => {
+    if (isAdmin) {
+      return adminUsers.map((row: any) => ({
+        user_id: Number(row.user_id),
+        user_name: String(row.user_name ?? '').trim(),
+        user_email: String(row.user_email ?? '').trim(),
+      }));
+    }
+
+    const byId = new Map<number, { user_id: number; user_name: string; user_email: string }>();
+    for (const row of seasonStandingsRows as any[]) {
+      const userId = Number(row?.user_id ?? 0);
+      if (!Number.isFinite(userId) || userId <= 0) continue;
+      if (!allowPlayerCrossUserViews && userId !== currentUserId) continue;
+      if (!byId.has(userId)) {
+        byId.set(userId, {
+          user_id: userId,
+          user_name: String(row?.user_name ?? '').trim(),
+          user_email: String(row?.user_email ?? '').trim(),
+        });
+      }
+    }
+
+    if (Number.isFinite(currentUserId) && currentUserId > 0 && !byId.has(currentUserId)) {
+      byId.set(currentUserId, {
+        user_id: currentUserId,
+        user_name: String(swrCurrentUserResponse.data?.data?.name ?? '').trim(),
+        user_email: String(swrCurrentUserResponse.data?.data?.email ?? '').trim(),
+      });
+    }
+
+    return [...byId.values()];
+  }, [
+    adminUsers,
+    allowPlayerCrossUserViews,
+    currentUserId,
+    isAdmin,
+    seasonStandingsRows,
+    swrCurrentUserResponse.data?.data?.email,
+    swrCurrentUserResponse.data?.data?.name,
+  ]);
+  const selectedCardPoolUserId =
+    selectedTargetUserId != null &&
+    selectedTargetUserId !== '' &&
+    selectedTargetUserId !== ALL_DECK_OWNERS_VALUE
+      ? Number(selectedTargetUserId)
+      : null;
+  const cardPoolUserId =
+    isAdmin
+      ? targetUserId
+      : allowPlayerCrossUserViews && selectedCardPoolUserId != null
+        ? selectedCardPoolUserId
+        : Number.isFinite(currentUserId) && currentUserId > 0
+          ? currentUserId
+          : null;
   const swrSeasonsResponse = getLeagueSeasons(hasTournament ? activeTournamentId : null);
   const seasons = swrSeasonsResponse.data?.data ?? [];
   const seasonOptions = useMemo(() => {
@@ -609,9 +674,20 @@ export default function DeckbuilderPage({
   }, [seasonOptions]);
 
   useEffect(() => {
-    setSelectedSeasonId(ALL_SEASONS_VALUE);
+    if (!isAdmin) {
+      const activeSeason = seasonOptions.find((season: any) => Boolean(season?.is_active));
+      if (activeSeason != null) {
+        setSelectedSeasonId(String(activeSeason.season_id));
+      } else if (seasonOptions.length > 0) {
+        setSelectedSeasonId(String(seasonOptions[0].season_id));
+      } else {
+        setSelectedSeasonId(ALL_SEASONS_VALUE);
+      }
+    } else {
+      setSelectedSeasonId(ALL_SEASONS_VALUE);
+    }
     setSelectedTargetUserId(null);
-  }, [activeTournamentId, isAdmin]);
+  }, [activeTournamentId, isAdmin, seasonOptions]);
 
   useEffect(() => {
     if (!hasTournament || seasonOptions.length < 1) return;
@@ -620,8 +696,13 @@ export default function DeckbuilderPage({
       (season: any) => String(season.season_id) === selectedSeasonId
     );
     if (selectedExists) return;
+    if (!isAdmin) {
+      const activeSeason = seasonOptions.find((season: any) => Boolean(season?.is_active));
+      setSelectedSeasonId(String(activeSeason?.season_id ?? seasonOptions[0]?.season_id));
+      return;
+    }
     setSelectedSeasonId(ALL_SEASONS_VALUE);
-  }, [hasTournament, seasonOptions, selectedSeasonId]);
+  }, [hasTournament, isAdmin, seasonOptions, selectedSeasonId]);
 
   const selectedSeasonNumber =
     selectedSeasonId != null &&
@@ -634,51 +715,55 @@ export default function DeckbuilderPage({
   const seasonForMetaAnalysis = selectedSeasonNumber ?? activeSeasonNumber;
 
   useEffect(() => {
-    if (!isAdmin || !hasTournament || adminUsers.length < 1) return;
-    if (selectedTargetUserId === ALL_DECK_OWNERS_VALUE) return;
-    const searchParams = new URLSearchParams(window.location.search);
-    const queryTarget = searchParams.get('user_id');
-    const queryTeamName = searchParams.get('team_name')?.trim().toLowerCase();
-    const hasCurrentSelection = adminUsers.some(
+    if (!hasTournament || viewableUsers.length < 1) return;
+    if (isAdmin && selectedTargetUserId === ALL_DECK_OWNERS_VALUE) return;
+
+    const hasCurrentSelection = viewableUsers.some(
       (row: any) => String(row.user_id) === String(selectedTargetUserId)
     );
     if (hasCurrentSelection) return;
-    const selectedFromQuery =
-      queryTarget != null
-        ? adminUsers.find((row: any) => String(row.user_id) === queryTarget)
-        : null;
-    const selectedFromTeamName =
-      queryTeamName != null && queryTeamName !== ''
-        ? adminUsers.find((row: any) => String(row.user_name ?? '').trim().toLowerCase() === queryTeamName)
-        : null;
-    const fallback = selectedFromQuery ?? selectedFromTeamName;
-    if (fallback != null) {
-      setSelectedTargetUserId(String(fallback.user_id));
-      return;
+
+    if (isAdmin) {
+      const searchParams = new URLSearchParams(window.location.search);
+      const queryTarget = searchParams.get('user_id');
+      const queryTeamName = searchParams.get('team_name')?.trim().toLowerCase();
+      const selectedFromQuery =
+        queryTarget != null
+          ? viewableUsers.find((row: any) => String(row.user_id) === queryTarget)
+          : null;
+      const selectedFromTeamName =
+        queryTeamName != null && queryTeamName !== ''
+          ? viewableUsers.find(
+              (row: any) => String(row.user_name ?? '').trim().toLowerCase() === queryTeamName
+            )
+          : null;
+      const fallback = selectedFromQuery ?? selectedFromTeamName;
+      if (fallback != null) {
+        setSelectedTargetUserId(String(fallback.user_id));
+        return;
+      }
+
+      if (Number.isFinite(currentUserId) && currentUserId > 0) {
+        const selectedAdminSelf = viewableUsers.find(
+          (row: any) => Number(row.user_id) === Number(currentUserId)
+        );
+        if (selectedAdminSelf != null) {
+          setSelectedTargetUserId(String(selectedAdminSelf.user_id));
+          return;
+        }
+      }
+    } else if (Number.isFinite(currentUserId) && currentUserId > 0) {
+      const selectedSelf = viewableUsers.find(
+        (row: any) => Number(row.user_id) === Number(currentUserId)
+      );
+      if (selectedSelf != null) {
+        setSelectedTargetUserId(String(selectedSelf.user_id));
+        return;
+      }
     }
-    if (!Number.isFinite(currentUserId) || currentUserId <= 0) return;
-    const selectedAdminSelf = adminUsers.find(
-      (row: any) => Number(row.user_id) === Number(currentUserId)
-    );
-    if (selectedAdminSelf != null) {
-      setSelectedTargetUserId(String(selectedAdminSelf.user_id));
-      return;
-    }
-    const firstPlayer = adminUsers.find(
-      (row: any) => String(row.account_type ?? '').toUpperCase() !== 'ADMIN'
-    );
-    if (firstPlayer != null) {
-      setSelectedTargetUserId(String(firstPlayer.user_id));
-      return;
-    }
-    setSelectedTargetUserId(String(adminUsers[0].user_id));
-  }, [
-    adminUsers,
-    currentUserId,
-    hasTournament,
-    isAdmin,
-    selectedTargetUserId,
-  ]);
+
+    setSelectedTargetUserId(String(viewableUsers[0].user_id));
+  }, [currentUserId, hasTournament, isAdmin, selectedTargetUserId, viewableUsers]);
 
   const swrCatalogResponse = hasTournament
     ? getLeagueCards(activeTournamentId, {
@@ -691,12 +776,12 @@ export default function DeckbuilderPage({
       });
   const swrCardPoolResponse = getLeagueCardPool(
     hasTournament ? activeTournamentId : null,
-    targetUserId,
+    cardPoolUserId,
     selectedSeasonNumber
   );
   const swrDecksResponse = getLeagueDecks(
     hasTournament ? activeTournamentId : null,
-    targetUserId,
+    isAdmin ? targetUserId : allowPlayerCrossUserViews ? cardPoolUserId : undefined,
     selectedSeasonNumber
   );
   const swrApplicationsResponse = getTournamentApplications(
@@ -1855,12 +1940,20 @@ export default function DeckbuilderPage({
   );
   const selectedOwnerLabel = useMemo(() => {
     if (isAdmin && isAdminAllOwnersView) return 'All Users';
-    if (isAdmin && targetUserId != null) {
-      const owner = adminUsers.find((row: any) => Number(row.user_id) === Number(targetUserId));
-      if (owner != null) return String(owner.user_name ?? '').trim() || `User ${targetUserId}`;
+    const resolvedSelectedUserId = isAdmin ? targetUserId : cardPoolUserId;
+    if (resolvedSelectedUserId != null) {
+      const owner = viewableUsers.find((row: any) => Number(row.user_id) === Number(resolvedSelectedUserId));
+      if (owner != null) return String(owner.user_name ?? '').trim() || `User ${resolvedSelectedUserId}`;
     }
     return String(swrCurrentUserResponse.data?.data?.name ?? 'Current User').trim() || 'Current User';
-  }, [adminUsers, isAdmin, isAdminAllOwnersView, swrCurrentUserResponse.data?.data?.name, targetUserId]);
+  }, [
+    cardPoolUserId,
+    isAdmin,
+    isAdminAllOwnersView,
+    swrCurrentUserResponse.data?.data?.name,
+    targetUserId,
+    viewableUsers,
+  ]);
   const selectedSeasonLabel = useMemo(() => {
     if (selectedSeasonNumber != null) {
       const season = seasonOptions.find((row: any) => Number(row?.season_id) === Number(selectedSeasonNumber));
@@ -2374,19 +2467,24 @@ export default function DeckbuilderPage({
                   data={tournaments.map((t: any) => ({ value: String(t.id), label: t.name }))}
                 />
               )}
-              {isAdmin && hasTournament && (
+              {hasTournament && viewableUsers.length > 0 && (isAdmin || allowPlayerCrossUserViews) && (
                 <Select
                   label="Deck/Card Pool Owner"
                   value={selectedTargetUserId}
-                  onChange={(value) => setSelectedTargetUserId(value ?? ALL_DECK_OWNERS_VALUE)}
+                  onChange={(value) =>
+                    setSelectedTargetUserId(value ?? (isAdmin ? ALL_DECK_OWNERS_VALUE : null))
+                  }
                   allowDeselect
                   clearable
                   searchable
                   data={[
-                    { value: ALL_DECK_OWNERS_VALUE, label: 'All users (admin view)' },
-                    ...adminUsers.map((row: any) => ({
+                    ...(isAdmin ? [{ value: ALL_DECK_OWNERS_VALUE, label: 'All users (admin view)' }] : []),
+                    ...viewableUsers.map((row: any) => ({
                       value: String(row.user_id),
-                      label: `${row.user_name} (${row.user_email})`,
+                      label:
+                        isAdmin && String(row.user_email ?? '').trim() !== ''
+                          ? `${row.user_name} (${row.user_email})`
+                          : row.user_name || `User ${row.user_id}`,
                     })),
                   ]}
                 />
@@ -2396,11 +2494,29 @@ export default function DeckbuilderPage({
                   Card pool quantity edits are disabled while viewing all users. Select one owner to edit pool values.
                 </Text>
               )}
+              {!isAdmin && !allowPlayerCrossUserViews && (
+                <Text size="xs" c="dimmed">
+                  Player cross-view is disabled by league admin. You can only view your own decks and card pool.
+                </Text>
+              )}
               {seasonOptions.length > 0 && (
                 <Select
                   label="Season"
                   value={selectedSeasonId}
-                  onChange={(value) => setSelectedSeasonId(value ?? ALL_SEASONS_VALUE)}
+                  onChange={(value) => {
+                    if (value != null) {
+                      setSelectedSeasonId(value);
+                      return;
+                    }
+                    if (!isAdmin) {
+                      const activeSeason = seasonOptions.find((season: any) => Boolean(season?.is_active));
+                      setSelectedSeasonId(
+                        String(activeSeason?.season_id ?? seasonOptions[0]?.season_id ?? ALL_SEASONS_VALUE)
+                      );
+                      return;
+                    }
+                    setSelectedSeasonId(ALL_SEASONS_VALUE);
+                  }}
                   allowDeselect
                   clearable
                   data={[
@@ -3275,6 +3391,8 @@ export default function DeckbuilderPage({
                         {(() => {
                           const leaderLabel = resolveCardDisplayName(deck.leader);
                           const baseLabel = resolveCardDisplayName(deck.base);
+                          const canManageDeck =
+                            isAdmin || Number(deck.user_id ?? 0) === Number(currentUserId);
                           return (
                         <Group justify="space-between" align="start">
                           <Stack gap={0}>
@@ -3344,7 +3462,7 @@ export default function DeckbuilderPage({
                                   : undefined
                               }
                               onClick={async () => onSetCurrentDeck(deck)}
-                              disabled={!hasTournament}
+                              disabled={!hasTournament || !canManageDeck}
                             >
                               {currentDeckIdByUserId[Number(deck.user_id ?? 0)] === Number(deck.id)
                                 ? 'Current Deck'
@@ -3354,6 +3472,7 @@ export default function DeckbuilderPage({
                               size="xs"
                               variant="subtle"
                               onClick={() => onRenameSavedDeck(deck)}
+                              disabled={!canManageDeck}
                             >
                               Rename
                             </Button>
@@ -3363,6 +3482,7 @@ export default function DeckbuilderPage({
                             <ActionIcon
                               variant="subtle"
                               color="red"
+                              disabled={!canManageDeck}
                               onClick={async () => {
                                 const response = await deleteDeck(activeTournamentId, deck.id);
                                 if (response == null) return;

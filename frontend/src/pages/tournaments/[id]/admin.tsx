@@ -18,7 +18,13 @@ import { showNotification } from '@mantine/notifications';
 
 import { getTournamentIdFromRouter } from '@components/utils/util';
 import TournamentLayout from '@pages/tournaments/_tournament_layout';
-import { getLeagueAdminSeasons, getLeagueAdminUsers, getLeagueDecks, getTournaments } from '@services/adapter';
+import {
+  getLeagueAdminSeasons,
+  getLeagueAdminUsers,
+  getLeagueDashboardBackground,
+  getLeagueDecks,
+  getTournaments,
+} from '@services/adapter';
 import { updateUserAccountType } from '@services/user';
 import {
   adjustSeasonUserPoints,
@@ -30,6 +36,7 @@ import {
   exportTournamentFormatTemplate,
   importStandingsTemplate,
   importTournamentFormatTemplate,
+  updateLeagueDashboardBackground,
   updateLeagueSeason,
   updateSeasonPrivileges,
 } from '@services/league';
@@ -45,10 +52,12 @@ export default function LeagueAdminPage() {
   const swrSeasonsResponse = getLeagueAdminSeasons(tournamentData.id);
   const swrTournamentsResponse = getTournaments('OPEN');
   const swrDecksResponse = getLeagueDecks(tournamentData.id);
+  const swrLeagueDashboardBackgroundResponse = getLeagueDashboardBackground(tournamentData.id);
   const users = swrUsersResponse.data?.data ?? [];
   const seasons = swrSeasonsResponse.data?.data ?? [];
   const tournaments = swrTournamentsResponse.data?.data ?? [];
   const decks = swrDecksResponse.data?.data ?? [];
+  const leagueDashboardSettings = swrLeagueDashboardBackgroundResponse.data?.data ?? null;
 
   const [accolades, setAccolades] = useState<Record<string, string>>({});
   const [standingsTemplateJson, setStandingsTemplateJson] = useState('');
@@ -57,6 +66,7 @@ export default function LeagueAdminPage() {
   const [seasonTournamentIds, setSeasonTournamentIds] = useState<string[]>([]);
   const [pointsDeltaByUser, setPointsDeltaByUser] = useState<Record<string, string>>({});
   const [pointsReasonByUser, setPointsReasonByUser] = useState<Record<string, string>>({});
+  const [allowPlayerCrossUserViews, setAllowPlayerCrossUserViews] = useState<boolean>(true);
 
   useEffect(() => {
     if (seasons.length < 1) {
@@ -73,10 +83,47 @@ export default function LeagueAdminPage() {
     setSeasonForPoints(String(activeSeason?.season_id ?? seasons[0]?.season_id));
   }, [seasons, seasonForPoints]);
 
+  useEffect(() => {
+    if (leagueDashboardSettings == null) return;
+    setAllowPlayerCrossUserViews(Boolean(leagueDashboardSettings.allow_player_cross_user_views ?? true));
+  }, [leagueDashboardSettings]);
+
   return (
     <TournamentLayout tournament_id={tournamentData.id}>
       <Stack>
         <Title>League Admin</Title>
+
+        <Card withBorder>
+          <Title order={4} mb="sm">
+            League Visibility
+          </Title>
+          <Stack>
+            <Checkbox
+              label="Allow players to view other players' decks and card pools in League"
+              checked={allowPlayerCrossUserViews}
+              onChange={(event) => setAllowPlayerCrossUserViews(event.currentTarget.checked)}
+            />
+            <Group>
+              <Button
+                onClick={async () => {
+                  await updateLeagueDashboardBackground(tournamentData.id, {
+                    mode: (leagueDashboardSettings?.mode ?? 'ROTATE') as 'ROTATE' | 'FIXED',
+                    image_path: leagueDashboardSettings?.image_path ?? null,
+                    allow_player_cross_user_views: allowPlayerCrossUserViews,
+                  });
+                  await swrLeagueDashboardBackgroundResponse.mutate();
+                  showNotification({
+                    color: 'green',
+                    title: 'League visibility updated',
+                    message: '',
+                  });
+                }}
+              >
+                Save Visibility Settings
+              </Button>
+            </Group>
+          </Stack>
+        </Card>
 
         <Card withBorder>
           <Title order={4} mb="sm">

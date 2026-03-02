@@ -3265,7 +3265,7 @@ def _normalize_dashboard_background_path(value: object) -> str | None:
     return normalized
 
 
-def _parse_dashboard_background_payload(value: object) -> tuple[str, str | None]:
+def _parse_dashboard_background_payload(value: object) -> tuple[str, str | None, bool]:
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -3275,9 +3275,10 @@ def _parse_dashboard_background_payload(value: object) -> tuple[str, str | None]
         value = {}
     mode = _normalize_dashboard_background_mode(value.get("mode"))
     image_path = _normalize_dashboard_background_path(value.get("image_path"))
+    allow_player_cross_user_views = bool(value.get("allow_player_cross_user_views", True))
     if mode != "FIXED":
         image_path = None
-    return mode, image_path
+    return mode, image_path, allow_player_cross_user_views
 
 
 async def get_dashboard_background_settings(
@@ -3300,13 +3301,17 @@ async def get_dashboard_background_settings(
             tournament_id=tournament_id,
             mode="ROTATE",
             image_path=None,
+            allow_player_cross_user_views=True,
             updated=None,
         )
-    mode, image_path = _parse_dashboard_background_payload(row._mapping["body"])
+    mode, image_path, allow_player_cross_user_views = _parse_dashboard_background_payload(
+        row._mapping["body"]
+    )
     return LeagueDashboardBackgroundSettingsView(
         tournament_id=tournament_id,
         mode=mode,
         image_path=image_path,
+        allow_player_cross_user_views=allow_player_cross_user_views,
         updated=row._mapping["updated"],
     )
 
@@ -3325,6 +3330,7 @@ async def upsert_dashboard_background_settings(
         {
             "mode": mode,
             "image_path": image_path,
+            "allow_player_cross_user_views": bool(body.allow_player_cross_user_views),
         }
     )
     rows = await database.fetch_all(

@@ -218,6 +218,7 @@ export async function updateLeagueDashboardBackground(
   body: {
     mode: 'ROTATE' | 'FIXED';
     image_path?: string | null;
+    allow_player_cross_user_views?: boolean;
   }
 ) {
   return createAxios()

@@ -416,12 +416,14 @@ class LeagueDashboardBackgroundSettingsView(BaseModel):
     tournament_id: TournamentId
     mode: Literal["ROTATE", "FIXED"] = "ROTATE"
     image_path: str | None = None
+    allow_player_cross_user_views: bool = True
     updated: datetime_utc | None = None
 
 
 class LeagueDashboardBackgroundSettingsUpdateBody(BaseModel):
     mode: Literal["ROTATE", "FIXED"] = "ROTATE"
     image_path: str | None = Field(default=None, max_length=512)
+    allow_player_cross_user_views: bool = True
 
 
 class LeagueProjectedScheduleItemView(BaseModel):

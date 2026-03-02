@@ -148,6 +148,15 @@ def can_manage_other_users(current_user: UserPublic, target_user_id: UserId | No
     return target_user_id is not None and target_user_id != current_user.id
 
 
+async def can_player_view_cross_user_decks(
+    tournament_id: TournamentId, user_public: UserPublic
+) -> bool:
+    if is_admin_user(user_public):
+        return True
+    settings = await get_dashboard_background_settings(tournament_id)
+    return bool(settings.allow_player_cross_user_views)
+
+
 def sanitize_standings_for_non_admin(rows: list[LeagueStandingsRow]) -> list[LeagueStandingsRow]:
     return [
         row.model_copy(
@@ -758,7 +767,8 @@ async def get_card_pool(
     user_public: UserPublic = Depends(user_authenticated_for_tournament_member),
 ) -> LeagueCardPoolEntriesResponse:
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
-    if can_manage_other_users(user_public, user_id) and not has_admin_access:
+    can_view_cross_user = await can_player_view_cross_user_decks(tournament_id, user_public)
+    if can_manage_other_users(user_public, user_id) and not has_admin_access and not can_view_cross_user:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
     if season_id is None:
@@ -766,7 +776,7 @@ async def get_card_pool(
             return LeagueCardPoolEntriesResponse(
                 data=await get_card_pool_entries_for_tournament_scope(tournament_id, None)
             )
-        target_user_id = user_id if user_id is not None and has_admin_access else user_public.id
+        target_user_id = user_id if user_id is not None else user_public.id
         return LeagueCardPoolEntriesResponse(
             data=await get_card_pool_entries_for_tournament_scope(tournament_id, target_user_id)
         )
@@ -775,7 +785,7 @@ async def get_card_pool(
     if has_admin_access and user_id is None:
         return LeagueCardPoolEntriesResponse(data=await get_card_pool_entries(season.id, None))
 
-    target_user_id = user_id if user_id is not None and has_admin_access else user_public.id
+    target_user_id = user_id if user_id is not None else user_public.id
     return LeagueCardPoolEntriesResponse(data=await get_card_pool_entries(season.id, target_user_id))
 
 
@@ -810,6 +820,7 @@ async def list_decks(
 ) -> LeagueDecksResponse:
     await ensure_tournament_records_fresh(tournament_id)
     has_admin_access = await user_is_league_admin_for_tournament(tournament_id, user_public)
+    can_view_cross_user = await can_player_view_cross_user_decks(tournament_id, user_public)
     if season_id is None:
         if user_id is None:
             if has_admin_access:
@@ -822,7 +833,7 @@ async def list_decks(
                 decks = await get_decks_for_tournament_club_users(tournament_id, user_public.id)
             return LeagueDecksResponse(data=decks)
 
-        if can_manage_other_users(user_public, user_id) and not has_admin_access:
+        if can_manage_other_users(user_public, user_id) and not has_admin_access and not can_view_cross_user:
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
         decks = await get_decks_for_tournament_scope(tournament_id, user_id)
         if len(decks) < 1:
@@ -835,7 +846,7 @@ async def list_decks(
             return LeagueDecksResponse(data=await get_decks(season.id))
         return LeagueDecksResponse(data=await get_decks(season.id, user_public.id))
 
-    if can_manage_other_users(user_public, user_id) and not has_admin_access:
+    if can_manage_other_users(user_public, user_id) and not has_admin_access and not can_view_cross_user:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Admin access required")
 
     return LeagueDecksResponse(data=await get_decks(season.id, user_id))
